@@ -14,6 +14,7 @@ mod naming;
 #[cfg(not(target_os = "linux"))]
 mod native;
 mod overlay;
+mod plan;
 mod scan;
 mod sigs;
 mod snap;
