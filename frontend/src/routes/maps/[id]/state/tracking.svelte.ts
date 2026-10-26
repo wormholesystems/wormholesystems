@@ -34,6 +34,7 @@ export interface JumpPrompt {
 	targetName: string;
 	targetClassId: number | null;
 	targetSecurity: number;
+	targetRegion: string;
 	/** The placement the target already has on the map, if it was reached another way. */
 	existing: MappedSystem | null;
 	groups: SignatureGroups;
@@ -207,6 +208,7 @@ export class JumpTracker {
 			targetName: target.name,
 			targetClassId: target.classId,
 			targetSecurity: target.security,
+			targetRegion: target.region,
 			existing,
 			groups,
 			catalog,
@@ -223,11 +225,17 @@ export class JumpTracker {
 				name: existing.name,
 				classId: existing.wormhole_class_id,
 				security: existing.security_status,
+				region: existing.region,
 			};
 		}
 		const hit = await this.map.resolveSystem(id);
 		if (!hit) return null;
-		return { name: hit.name, classId: hit.wormhole_class_id, security: hit.security };
+		return {
+			name: hit.name,
+			classId: hit.wormhole_class_id,
+			security: hit.security,
+			region: hit.region,
+		};
 	}
 
 	private suggestAliasFor(

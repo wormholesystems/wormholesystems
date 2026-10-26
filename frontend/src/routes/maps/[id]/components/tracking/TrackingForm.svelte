@@ -134,7 +134,7 @@
 			{
 				alias: chosenAlias,
 				name: prompt.targetName,
-				region: prompt.existing?.region ?? null,
+				region: prompt.targetRegion,
 				wormholeClassId: prompt.targetClassId,
 				security: prompt.targetSecurity,
 				occupier: prompt.existing?.occupying_group ?? null,
