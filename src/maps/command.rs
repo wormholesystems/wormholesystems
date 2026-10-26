@@ -171,7 +171,7 @@ map_commands! {
     UnlinkSignature(Signature) => signatures::apply_unlink_signature,
     AddConnectionJump(jumps::ConnectionJump) => jumps::apply_add_jump,
     UpdateConnectionJump(jumps::ConnectionJump) => jumps::apply_update_jump,
-    RemoveConnectionJump(u64) => jumps::apply_remove_jump,
+    RemoveConnectionJump(Option<i64>) => jumps::apply_remove_jump,
     RestoreConnectionJump => jumps::apply_restore_jump,
     AddWatchlistEntry(watchlist::WatchlistEntry) => watchlist::apply_add_entry,
     SetWatchlistPinned(watchlist::WatchlistEntry) => watchlist::apply_set_pinned,
@@ -211,6 +211,8 @@ pub(super) async fn run_as<C: Command>(
 pub enum CommandOutput {
     None,
     Count(u64),
+    /// The connection a removed thing belonged to, if any.
+    ConnectionId(Option<i64>),
     System(Box<MapSolarSystem>),
     Connection(Box<MapConnection>),
     Signature(Box<Signature>),
@@ -268,6 +270,15 @@ impl FromOutput for u64 {
     fn from_output(output: CommandOutput) -> Result<Self> {
         match output {
             CommandOutput::Count(n) => Ok(n),
+            other => Err(wrong_output(other)),
+        }
+    }
+}
+
+impl FromOutput for Option<i64> {
+    fn from_output(output: CommandOutput) -> Result<Self> {
+        match output {
+            CommandOutput::ConnectionId(id) => Ok(id),
             other => Err(wrong_output(other)),
         }
     }

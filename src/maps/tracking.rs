@@ -168,11 +168,13 @@ pub(super) async fn apply_track_jump(tx: &mut Tx<'_>, cmd: TrackJump) -> Result<
         )));
     }
 
-    // A system reached by another route is linked to, not duplicated.
+    // A system reached by another route is linked to, not duplicated. Renaming it on the
+    // way is part of the jump, so undoing the jump puts the old name back.
+    let mut alias_undo = None;
     let (to_placement, added) = match placed {
         Some(id) => {
             if let Some(alias) = cmd.alias.clone() {
-                super::solar_system::apply_set_alias(
+                let renamed = super::solar_system::apply_set_alias(
                     tx,
                     SetAlias {
                         map_id: cmd.map_id,
@@ -181,6 +183,7 @@ pub(super) async fn apply_track_jump(tx: &mut Tx<'_>, cmd: TrackJump) -> Result<
                     },
                 )
                 .await?;
+                alias_undo = renamed.inverse;
             }
             (id, None)
         }
@@ -236,7 +239,8 @@ pub(super) async fn apply_track_jump(tx: &mut Tx<'_>, cmd: TrackJump) -> Result<
     }
 
     // Undo walks it back: the signature first, so clearing the link does not fight the
-    // connection's own delete, then the edge and the system it brought with it.
+    // connection's own delete, then the edge and the system it brought with it, then the
+    // name it gave a system that was already there.
     let mut steps = undo_signature(cmd.map_id, before.as_ref());
     steps.push(MapCommand::RemoveRestored(RemoveRestored {
         map_id: cmd.map_id,
@@ -244,6 +248,7 @@ pub(super) async fn apply_track_jump(tx: &mut Tx<'_>, cmd: TrackJump) -> Result<
         connection_ids: vec![connection_id],
         signature_ids: Vec::new(),
     }));
+    steps.extend(alias_undo);
     let inverse = MapCommand::Sequence(Sequence {
         map_id: cmd.map_id,
         steps,
