@@ -1,6 +1,7 @@
 //! A pilot is on the map only while their user has the app open: once the poller stops
 //! asking about a character (user idle, token refused), it is marked offline and leaves
-//! the map instead of lingering where it last was.
+//! the map instead of lingering where it last was. Whatever moves a pilot list, its map
+//! hears once per tick.
 
 mod common;
 
@@ -8,11 +9,14 @@ use std::time::{Duration, SystemTime};
 
 use common::{SYS_A, add_character, member_with_role, world};
 use sqlx::PgPool;
+use wormholesystems::allowlist::AffiliationAllowlist;
 use wormholesystems::db::PgTokenStore;
 use wormholesystems::esi::{Token, TokenStore};
+use wormholesystems::maps::map::{CreateMap, create_map};
 use wormholesystems::maps::presence::characters_on;
 use wormholesystems::maps::{Actor, Role};
-use wormholesystems::pilots::poller::{Due, mark_unpolled_offline};
+use wormholesystems::pilots::poller::{Due, announce_presence, mark_unpolled_offline};
+use wormholesystems::realtime::{MapEvent, MapHub};
 
 /// The character is online in SYS_A with a working token, tracked on the map.
 async fn flying(pool: &PgPool, map_id: i64, actor: Actor) {
@@ -141,4 +145,52 @@ async fn a_refused_token_takes_the_pilot_off_the_map(pool: PgPool) {
         }]
     );
     assert_eq!(on_map(&pool, w.map_id, w.owner).await, vec![1003]);
+}
+
+/// A tick in which several pilots changed tells each of their maps once: ten fleet members
+/// jumping together is one refetch for every viewer, not ten.
+#[sqlx::test]
+async fn each_map_hears_once_per_tick(pool: PgPool) {
+    let w = world(&pool).await;
+    let wing = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Member).await;
+    flying(&pool, w.map_id, w.owner).await;
+    flying(&pool, w.map_id, wing).await;
+    let other = create_map(
+        &pool,
+        w.owner,
+        &AffiliationAllowlist::default(),
+        CreateMap {
+            name: "Other".into(),
+            description: None,
+        },
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into map_user_settings (map_id, user_id, tracking_allowed) values ($1, $2, true)",
+    )
+    .bind(other.id)
+    .bind(w.owner.user_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let hub = MapHub::new();
+    let mut events = hub.subscribe_all();
+
+    announce_presence(&pool, &hub, &[w.owner.user_id, wing.user_id])
+        .await
+        .unwrap();
+
+    let mut seen = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        seen.push(event);
+    }
+    seen.sort_by_key(MapEvent::map_id);
+    assert_eq!(
+        seen,
+        vec![
+            MapEvent::CharactersChanged { map_id: w.map_id },
+            MapEvent::CharactersChanged { map_id: other.id },
+        ]
+    );
 }

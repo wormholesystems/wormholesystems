@@ -1,6 +1,6 @@
 //! EVE SSO (OAuth 2.0 Authorization Code flow). The web layer generates and stores the
 //! CSRF `state`, redirects to [`Sso::authorize_url`], then calls [`Sso::exchange_code`].
-//! [`Sso::access_token`] resolves a usable token through a [`TokenStore`] with refresh.
+//! [`Sso::stored_token`] resolves a usable token through a [`TokenStore`] with refresh.
 
 use std::time::{Duration, Instant, SystemTime};
 
@@ -147,22 +147,9 @@ impl Sso {
         self.build_token(resp).await
     }
 
-    /// Load `character_id`'s token, refresh + save it if it's expiring, and require
-    /// `scope` before returning the access token.
-    pub async fn access_token<S: TokenStore>(
-        &self,
-        store: &S,
-        character_id: i64,
-        scope: Scope,
-    ) -> Result<String> {
-        let token = self.stored_token(store, character_id).await?;
-        if !token.has_scope(scope) {
-            return Err(EsiError::MissingScope(scope.as_str().to_string()));
-        }
-        Ok(token.access_token)
-    }
-
     /// Load `character_id`'s token, refreshing and saving it first if it is expiring.
+    /// Everything else gets its tokens through [`TokenCache`](super::TokenCache), which
+    /// calls this with the character's slot locked.
     ///
     /// A refresh EVE refuses marks the token in the store, so it is not tried again until
     /// the character logs in afresh. Said once, at warn: it is the pilot's to fix, and the

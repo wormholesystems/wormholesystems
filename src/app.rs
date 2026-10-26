@@ -11,7 +11,7 @@ use axum::routing::{get, post};
 use sqlx::PgPool;
 
 use crate::config::{Config, ConfigError};
-use crate::esi::{EsiClient, Sso};
+use crate::esi::{EsiClient, Sso, TokenCache};
 
 /// What every handler can reach. Cheap to clone: everything in it is a handle.
 ///
@@ -22,6 +22,9 @@ use crate::esi::{EsiClient, Sso};
 #[derive(Clone)]
 pub struct AppState {
     pub sso: Arc<Sso>,
+    /// Every character's access token, shared by everything that acts as one, so no two of
+    /// them refresh the same token at once.
+    pub tokens: Arc<TokenCache>,
     pub esi: EsiClient,
     pub db: PgPool,
     pub user_hub: crate::realtime::UserHub,
@@ -128,10 +131,12 @@ pub async fn serve(config: Config) {
         crate::telemetry::metrics::serve(addr, db.clone()).await;
     }
     let user_hub = crate::realtime::UserHub::new();
-    let server = start_background(&config, &db, &sso, &esi, &user_hub).await;
+    let tokens = Arc::new(TokenCache::new());
+    let server = start_background(&config, &db, &sso, &tokens, &esi, &user_hub).await;
 
     let state = AppState {
         sso,
+        tokens,
         esi,
         db,
         user_hub,
@@ -184,6 +189,7 @@ async fn start_background(
     config: &Config,
     db: &PgPool,
     sso: &Arc<Sso>,
+    tokens: &Arc<TokenCache>,
     esi: &EsiClient,
     user_hub: &crate::realtime::UserHub,
 ) -> crate::server_status::ServerWatch {
@@ -201,6 +207,7 @@ async fn start_background(
     crate::pilots::poller::start(
         db.clone(),
         sso.clone(),
+        tokens.clone(),
         esi.clone(),
         user_hub.clone(),
         server.clone(),
@@ -214,7 +221,13 @@ async fn start_background(
     crate::sovereignty::start(db.clone(), esi.clone(), server.clone());
 
     // Name every public structure, so docked pilots read as more than "a structure".
-    crate::structures::start(db.clone(), sso.clone(), esi.clone(), server.clone());
+    crate::structures::start(
+        db.clone(),
+        sso.clone(),
+        tokens.clone(),
+        esi.clone(),
+        server.clone(),
+    );
 
     // Mirror the raidable skyhooks CCP is currently advertising.
     crate::skyhooks::start(

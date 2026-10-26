@@ -35,6 +35,7 @@ pub fn state(pool: &PgPool) -> AppState {
     );
     AppState {
         sso: Arc::new(sso),
+        tokens: Arc::new(wormholesystems::esi::TokenCache::new()),
         esi: wormholesystems::esi::EsiClient::new(),
         db: pool.clone(),
         user_hub: wormholesystems::realtime::UserHub::new(),

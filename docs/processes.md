@@ -98,7 +98,11 @@ structure that has no fresh name is named with their own token, if it carries th
   rather than re-requesting inside a cached window (see [ESI](./esi/README.md)).
 - A poll loads the character's token once for all its fields, from an in-memory cache
   that goes back to the database only to refresh it (or, once a minute at most, to look
-  for a scope it lacks). Refreshes of one character's token never run side by side.
+  for a scope it lacks). Waypoints and the structure sync use the same cache, so
+  refreshes of one character's token never run side by side.
+- Tier 2 asks for location and ship side by side.
+- A change pings its user at once. Their maps hear once the tick is over, one event per
+  map however many of its pilots changed.
 - A refresh EVE answers with `invalid_grant` marks the token rejected, logged once at
   warn. The character drops out of both tiers until it logs in again, and the characters
   page asks it to.

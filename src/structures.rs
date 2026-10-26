@@ -14,7 +14,7 @@ use sqlx::PgPool;
 
 use crate::db::PgTokenStore;
 use crate::esi::entities::Structure;
-use crate::esi::{EsiClient, EsiError, Scope, Sso};
+use crate::esi::{EsiClient, EsiError, Scope, Sso, TokenCache};
 use crate::pilots::poller::run_bounded;
 use crate::server_status::ServerWatch;
 
@@ -29,19 +29,26 @@ const BATCH: i64 = 1000;
 const CONCURRENCY: usize = 8;
 
 /// Spawn the sync loop. Returns immediately; the loop runs for the process lifetime.
-pub fn start(pool: PgPool, sso: Arc<Sso>, esi: EsiClient, server: ServerWatch) {
+pub fn start(
+    pool: PgPool,
+    sso: Arc<Sso>,
+    tokens: Arc<TokenCache>,
+    esi: EsiClient,
+    server: ServerWatch,
+) {
     crate::background::spawn_every("structure sync", INTERVAL, move || {
-        let (pool, sso, esi, server) = (pool.clone(), sso.clone(), esi.clone(), server.clone());
+        let (pool, sso, tokens) = (pool.clone(), sso.clone(), tokens.clone());
+        let (esi, server) = (esi.clone(), server.clone());
         async move {
             if server.should_poll() {
-                sync_once(&pool, &sso, &esi).await;
+                sync_once(&pool, &sso, &tokens, &esi).await;
             }
             Ok::<_, std::convert::Infallible>(())
         }
     });
 }
 
-async fn sync_once(pool: &PgPool, sso: &Sso, esi: &EsiClient) {
+async fn sync_once(pool: &PgPool, sso: &Sso, tokens: &TokenCache, esi: &EsiClient) {
     let ids = match esi.public_structures().await {
         Ok(ids) => ids,
         Err(err) => {
@@ -57,7 +64,7 @@ async fn sync_once(pool: &PgPool, sso: &Sso, esi: &EsiClient) {
             return;
         }
     };
-    let Some(token) = borrow_token(pool, sso).await else {
+    let Some(token) = borrow_token(pool, sso, tokens).await else {
         // Nobody has granted the permission yet. Nothing to do until someone does.
         return;
     };
@@ -115,9 +122,9 @@ async fn sync_once(pool: &PgPool, sso: &Sso, esi: &EsiClient) {
 }
 
 /// An access token from a random character who granted the permission. One whose stored
-/// token is still valid is preferred, so borrowing it rarely means refreshing it under the
-/// poller's feet.
-async fn borrow_token(pool: &PgPool, sso: &Sso) -> Option<String> {
+/// token is still valid is preferred, so borrowing it rarely costs a refresh. It goes
+/// through the same [`TokenCache`] as the poller, so a refresh never runs beside theirs.
+async fn borrow_token(pool: &PgPool, sso: &Sso, tokens: &TokenCache) -> Option<String> {
     let candidates = sqlx::query_scalar!(
         "select t.character_id
          from esi_tokens t
@@ -135,11 +142,14 @@ async fn borrow_token(pool: &PgPool, sso: &Sso) -> Option<String> {
     let store = PgTokenStore::new(pool.clone());
     // A token EVE refused is marked on the way and the next candidate tried.
     for character_id in candidates {
-        match sso
-            .access_token(&store, character_id, Scope::ReadStructures)
+        match tokens
+            .token(sso, &store, character_id, &[Scope::ReadStructures])
             .await
         {
-            Ok(token) => return Some(token),
+            Ok(token) if token.has_scope(Scope::ReadStructures) => return Some(token.access_token),
+            Ok(_) => {
+                tracing::debug!("structure sync: token for {character_id} lacks the scope")
+            }
             Err(err) => {
                 tracing::debug!("structure sync: token for {character_id} unusable: {err}")
             }

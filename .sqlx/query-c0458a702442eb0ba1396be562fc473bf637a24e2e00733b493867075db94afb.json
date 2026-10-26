@@ -1,21 +1,10 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, access_token, token_expires_at, refresh_token, rejected_at\n             FROM esi_tokens WHERE character_id = $1\n             ORDER BY updated_at DESC LIMIT 1",
+  "query": "SELECT t.access_token, t.token_expires_at, t.refresh_token, t.rejected_at,\n                      array(SELECT s.name FROM esi_token_scopes ts\n                            JOIN esi_scopes s ON s.id = ts.scope_id\n                            WHERE ts.token_id = t.id) AS \"scopes!\"\n               FROM esi_tokens t WHERE t.character_id = $1\n               ORDER BY t.updated_at DESC LIMIT 1",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id",
-        "type_info": "Int8",
-        "origin": {
-          "Table": {
-            "table": "esi_tokens",
-            "name": "id"
-          }
-        }
-      },
-      {
-        "ordinal": 1,
         "name": "access_token",
         "type_info": "Text",
         "origin": {
@@ -26,7 +15,7 @@
         }
       },
       {
-        "ordinal": 2,
+        "ordinal": 1,
         "name": "token_expires_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -37,7 +26,7 @@
         }
       },
       {
-        "ordinal": 3,
+        "ordinal": 2,
         "name": "refresh_token",
         "type_info": "Text",
         "origin": {
@@ -48,7 +37,7 @@
         }
       },
       {
-        "ordinal": 4,
+        "ordinal": 3,
         "name": "rejected_at",
         "type_info": "Timestamptz",
         "origin": {
@@ -57,6 +46,12 @@
             "name": "rejected_at"
           }
         }
+      },
+      {
+        "ordinal": 4,
+        "name": "scopes!",
+        "type_info": "TextArray",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -65,12 +60,12 @@
       ]
     },
     "nullable": [
-      false,
       true,
       true,
       false,
-      true
+      true,
+      null
     ]
   },
-  "hash": "5ed36a43f91beae4c6d1ebbb58b6a9428e3af74df2115d43b2308097bb3eaa32"
+  "hash": "c0458a702442eb0ba1396be562fc473bf637a24e2e00733b493867075db94afb"
 }

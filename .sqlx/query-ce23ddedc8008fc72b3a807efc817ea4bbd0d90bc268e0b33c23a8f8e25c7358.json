@@ -1,11 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select map_id from map_user_settings where user_id = $1 and tracking_allowed",
+  "query": "select distinct map_id as \"map_id!\" from map_user_settings\n           where user_id = any($1) and tracking_allowed",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "map_id",
+        "name": "map_id!",
         "type_info": "Int8",
         "origin": {
           "Table": {
@@ -17,12 +17,12 @@
     ],
     "parameters": {
       "Left": [
-        "Int8"
+        "Int8Array"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "e281818cf3f903acc50c6127906873304b42848bc32685da4e9adb4c6fd36e22"
+  "hash": "ce23ddedc8008fc72b3a807efc817ea4bbd0d90bc268e0b33c23a8f8e25c7358"
 }
