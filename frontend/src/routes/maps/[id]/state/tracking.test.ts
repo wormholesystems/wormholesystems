@@ -204,6 +204,13 @@ describe('JumpTracker', () => {
 		expect(tracker.prompt).toBeNull();
 	});
 
+	it('knows the region of a system not on the map yet, for the bookmark', async () => {
+		const { host, setPilots } = fakeHost({ sigs: () => [scanned] });
+		const tracker = new JumpTracker(host);
+		await fly(tracker, setPilots, 100, 200);
+		expect(tracker.prompt).toMatchObject({ existing: null, targetRegion: 'D-R00018' });
+	});
+
 	it('maps a jump left without a signature, unlinked', async () => {
 		const { host, trackJump, setPilots } = fakeHost({ sigs: () => [scanned] });
 		const tracker = new JumpTracker(host);
