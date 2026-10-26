@@ -2,7 +2,8 @@
 //! personal access token, so on Unix the file is readable by its owner only.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
@@ -229,15 +230,61 @@ impl Config {
 
     pub fn save(&self) -> Result<()> {
         let path = path().context("no config folder on this system")?;
+        self.save_to(&path)
+    }
+
+    /// Replace the file in one step, readable by its owner alone from the start: it holds
+    /// the token, so it is never world-readable even briefly, and a crash halfway leaves the
+    /// old file rather than half a new one.
+    fn save_to(&self, path: &Path) -> Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        std::fs::write(&path, toml::to_string_pretty(self)?)?;
+        let text = toml::to_string_pretty(self)?;
+        let temp = path.with_extension("toml.tmp");
+        // Left over from an earlier crash, it would keep whatever mode it was made with.
+        let _ = std::fs::remove_file(&temp);
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let written = options.open(&temp).and_then(|mut file| {
+            file.write_all(text.as_bytes())?;
+            file.sync_all()
+        });
+        written.with_context(|| format!("could not write {}", temp.display()))?;
+        std::fs::rename(&temp, path)
+            .with_context(|| format!("could not replace {}", path.display()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_saved_config_is_private_and_leaves_no_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wormholesystems").join("desktop.toml");
+        let mut config = Config {
+            token: "wst_first".into(),
+            ..Config::default()
+        };
+        config.save_to(&path).unwrap();
+        config.token = "wst_second".into();
+        config.save_to(&path).unwrap();
+
+        let saved: Config = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved.token, "wst_second");
+        assert!(!path.with_extension("toml.tmp").exists());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
         }
-        Ok(())
     }
 }

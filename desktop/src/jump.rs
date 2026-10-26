@@ -215,7 +215,11 @@ fn is_ignored_alias(alias: &str, ignored: &str) -> bool {
 }
 
 fn lowest_free(used: &HashSet<u32>) -> u32 {
-    (1..).find(|i| !used.contains(i)).unwrap_or(1)
+    // One of the first `len + 1` is always free.
+    let last = u32::try_from(used.len())
+        .unwrap_or(u32::MAX)
+        .saturating_add(1);
+    (1..=last).find(|i| !used.contains(i)).unwrap_or(1)
 }
 
 /// The next child alias of `parent`, given every alias in use. Gaps are filled before the
@@ -255,7 +259,7 @@ pub fn guess_next_alias(
                     .position(|&l| l == a.as_bytes()[prefix.len()])
             })
             .collect();
-        let index = (0..).find(|i| !used.contains(i)).unwrap_or(0);
+        let index = (0..=used.len()).find(|i| !used.contains(i)).unwrap_or(0);
         // Past 22 direct children the sequence repeats rather than blocking the jump.
         let letter = WORMHOLE_LETTERS[index.min(WORMHOLE_LETTERS.len() - 1)] as char;
         return format!("{prefix}{letter}");

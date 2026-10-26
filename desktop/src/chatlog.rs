@@ -140,19 +140,29 @@ impl LogFile {
         let text: String = char::decode_utf16(units)
             .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
             .collect();
-        let mut text = std::mem::take(&mut self.partial) + &text;
-        let mut lines = Vec::new();
-        while let Some(end) = text.find('\n') {
-            let line: String = text.drain(..=end).collect();
-            lines.push(
-                line.trim_end_matches(['\r', '\n'])
-                    .trim_start_matches('\u{feff}')
-                    .to_string(),
-            );
-        }
-        self.partial = text;
+        let text = std::mem::take(&mut self.partial) + &text;
+        let (lines, rest) = split_lines(&text);
+        self.partial = rest.to_string();
         lines
     }
+}
+
+/// The complete lines in `text`, without their line endings, and what follows the last
+/// newline. One pass, so the first read of a long log stays linear.
+fn split_lines(text: &str) -> (Vec<String>, &str) {
+    let (complete, rest) = match text.rfind('\n') {
+        Some(end) => text.split_at(end + 1),
+        None => ("", text),
+    };
+    let lines = complete
+        .split_terminator('\n')
+        .map(|line| {
+            line.trim_end_matches('\r')
+                .trim_start_matches('\u{feff}')
+                .to_string()
+        })
+        .collect();
+    (lines, rest)
 }
 
 /// Follows every recent Local log in one folder.
@@ -263,6 +273,21 @@ impl Watcher {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn splits_complete_lines_and_keeps_the_rest() {
+        let (lines, rest) = split_lines("one\r\n\u{feff}two\n\r\nthr");
+        assert_eq!(lines, ["one", "two", ""]);
+        assert_eq!(rest, "thr");
+
+        let (lines, rest) = split_lines("no newline yet");
+        assert!(lines.is_empty());
+        assert_eq!(rest, "no newline yet");
+
+        let (lines, rest) = split_lines("ends\r\n");
+        assert_eq!(lines, ["ends"]);
+        assert_eq!(rest, "");
+    }
 
     fn utf16(text: &str) -> Vec<u8> {
         text.encode_utf16().flat_map(u16::to_le_bytes).collect()

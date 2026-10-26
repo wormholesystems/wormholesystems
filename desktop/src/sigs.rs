@@ -3,6 +3,7 @@
 //! their buttons emit [`Command`]s, which the app carries out.
 
 use std::cell::RefCell;
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -194,50 +195,28 @@ impl Sigs {
 
     /// What the list shows: [`Sigs::rows`] without the hidden categories, sorted the way the
     /// website's panel sorts, ties by scanner id so rows never swap on a refresh.
-    pub fn shown(&self) -> Vec<&Signature> {
-        let mut rows: Vec<&Signature> = self
-            .rows()
-            .into_iter()
+    /// `rows` is what [`Sigs::rows`] gave, so a render that wants both looks them up once.
+    pub fn shown<'a>(&self, rows: &[&'a Signature]) -> Vec<&'a Signature> {
+        let mut shown: Vec<&Signature> = rows
+            .iter()
+            .copied()
             .filter(|s| !self.list.hidden.contains(&s.group))
             .collect();
-        let name = |s: &Signature| {
-            self.type_of(s)
-                .map(|t| t.name.clone())
-                .or_else(|| s.name.clone())
-        };
-        // A missing value sorts last going up, first going down, like the website.
-        fn nullable<T: Ord>(a: Option<T>, b: Option<T>) -> std::cmp::Ordering {
-            match (a, b) {
-                (Some(a), Some(b)) => a.cmp(&b),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => std::cmp::Ordering::Equal,
-            }
-        }
-        let since = |s: &Signature| {
-            if s.group == "wormhole" {
-                s.created_at
-            } else {
-                s.updated_at
-            }
-        };
         let column = self.list.sort;
-        let descending = self.list.descending;
-        rows.sort_by(|a, b| {
-            let order = match column {
-                SortColumn::Id => a.signature_id.cmp(&b.signature_id),
-                SortColumn::Category => nullable(
-                    Some(&a.group).filter(|g| *g != "unknown"),
-                    Some(&b.group).filter(|g| *g != "unknown"),
-                ),
-                SortColumn::Type => nullable(name(a), name(b)),
-                // Newest first going up.
-                SortColumn::Age => since(b).cmp(&since(a)),
-            };
-            let order = if descending { order.reverse() } else { order };
-            order.then_with(|| a.signature_id.cmp(&b.signature_id))
-        });
-        rows
+        let key = |s: &&Signature| {
+            let name = (column == SortColumn::Type)
+                .then(|| self.type_of(s).map(|t| t.name.as_str()))
+                .flatten();
+            sort_key(column, s, name)
+        };
+        // The rows come in by scanner id and the sort is stable, so ties stay in that order
+        // both ways and rows never swap on a refresh.
+        if self.list.descending {
+            shown.sort_by_cached_key(|s| Reverse(key(s)));
+        } else {
+            shown.sort_by_cached_key(key);
+        }
+        shown
     }
 
     /// The review, when it is about the system you are in.
@@ -263,8 +242,12 @@ impl Sigs {
 
     /// Row keys of what the last paste no longer saw.
     pub fn missing(&self) -> Vec<i64> {
-        self.rows()
-            .into_iter()
+        self.missing_in(&self.rows())
+    }
+
+    /// [`Sigs::missing`], among `rows` from [`Sigs::rows`].
+    fn missing_in(&self, rows: &[&Signature]) -> Vec<i64> {
+        rows.iter()
             .filter(|s| self.paste_status(s) == Some(PasteStatus::Missing))
             .map(|s| s.id)
             .collect()
@@ -419,6 +402,34 @@ impl Sigs {
 /// `now`, `47m`, `3h`, `2d`: how old a row is, like the website's age column. Wormholes
 /// count from when they were found (the signature or its connection, whichever is older),
 /// sites from their last update.
+/// Where a row goes when the list is sorted by one column, going up.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum SortKey {
+    /// A missing value sorts last going up, first going down, like the website.
+    Text { missing: bool, text: String },
+    /// Newest first going up.
+    Age(Reverse<DateTime<Utc>>),
+}
+
+/// The key [`Sigs::shown`] sorts by. `type_name` is the name of the signature's catalog
+/// type, which only the type column looks at.
+fn sort_key(column: SortColumn, sig: &Signature, type_name: Option<&str>) -> SortKey {
+    let text = |value: Option<String>| SortKey::Text {
+        missing: value.is_none(),
+        text: value.unwrap_or_default(),
+    };
+    match column {
+        SortColumn::Id => text(Some(sig.signature_id.clone())),
+        SortColumn::Category => text(Some(sig.group.clone()).filter(|g| g != "unknown")),
+        SortColumn::Type => text(type_name.map(str::to_string).or_else(|| sig.name.clone())),
+        SortColumn::Age => SortKey::Age(Reverse(if sig.group == "wormhole" {
+            sig.created_at
+        } else {
+            sig.updated_at
+        })),
+    }
+}
+
 fn age(sig: &Signature, connection: Option<&Connection>, now: DateTime<Utc>) -> String {
     let since = if sig.group == "wormhole" {
         connection
@@ -483,6 +494,9 @@ pub fn panel_with(
     let theme = cx.theme().clone();
     let sigs = entity.read(cx);
     let now = Utc::now();
+    // Once per render: each is a lookup, a filter and a sort.
+    let all = sigs.rows();
+    let rows = sigs.shown(&all);
     let pad = if compact { rpx(8.0) } else { rpx(16.0) };
 
     // Header: the system, its class, and who is there.
@@ -524,8 +538,8 @@ pub fn panel_with(
                         .text_color(theme.muted_foreground)
                         .child(system.name.clone()),
                 );
-            let count = sigs.rows().len();
-            let hidden = count - sigs.shown().len();
+            let count = all.len();
+            let hidden = count - rows.len();
             let hidden = if hidden > 0 {
                 format!(", {hidden} hidden")
             } else {
@@ -604,17 +618,15 @@ pub fn panel_with(
         });
 
     // The rows.
-    let rows = sigs.shown();
     let mut list = div().flex().flex_col();
-    let all = sigs.rows().len();
-    if rows.is_empty() && all > 0 {
+    if rows.is_empty() && !all.is_empty() {
         list = list.child(
             div()
                 .px(pad)
                 .py_3()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child(format!("{all} hidden by the filters.")),
+                .child(format!("{} hidden by the filters.", all.len())),
         );
     } else if rows.is_empty() && sigs.system().is_some() {
         list = list.child(
@@ -879,7 +891,7 @@ pub fn panel_with(
         .map(|ask| ask_section(entity, sigs, ask, pad, &theme));
 
     // Footer: the last outcome and what can be done next.
-    let missing = sigs.missing().len();
+    let missing = sigs.missing_in(&all).len();
     let can_paste = sigs.system().is_some() && !sigs.busy;
     let footer = div()
         .flex_none()
@@ -1628,4 +1640,97 @@ fn ask_section(entity: &Entity<Sigs>, sigs: &Sigs, ask: &Ask, pad: Rems, theme: 
                     .child("None of these: a hole nobody scanned"),
             ),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    // Not a glob: GPUI has a `test` attribute of its own.
+    use super::{DateTime, ListView, Signature, Sigs, SortColumn, Utc};
+
+    fn sig(id: &str, name: Option<&str>) -> Signature {
+        Signature {
+            signature_id: id.into(),
+            group: "data".into(),
+            name: name.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    fn sorted(sigs: &Sigs, rows: &[Signature]) -> Vec<String> {
+        let rows: Vec<&Signature> = rows.iter().collect();
+        sigs.shown(&rows)
+            .into_iter()
+            .map(|s| s.signature_id.clone())
+            .collect()
+    }
+
+    fn sorted_by(column: SortColumn, descending: bool) -> Sigs {
+        Sigs {
+            list: ListView {
+                hidden: Vec::new(),
+                sort: column,
+                descending,
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn sorts_by_type_with_missing_names_last_going_up_and_first_going_down() {
+        let rows = [
+            sig("AAA-100", None),
+            sig("BBB-100", Some("Relic Site")),
+            sig("CCC-100", Some("Data Site")),
+            sig("DDD-100", Some("Data Site")),
+        ];
+        assert_eq!(
+            sorted(&sorted_by(SortColumn::Type, false), &rows),
+            ["CCC-100", "DDD-100", "BBB-100", "AAA-100"]
+        );
+        // Ties stay by scanner id either way.
+        assert_eq!(
+            sorted(&sorted_by(SortColumn::Type, true), &rows),
+            ["AAA-100", "BBB-100", "CCC-100", "DDD-100"]
+        );
+    }
+
+    #[test]
+    fn sorts_by_id_both_ways() {
+        let rows = [sig("AAA-100", None), sig("BBB-100", None)];
+        assert_eq!(
+            sorted(&sorted_by(SortColumn::Id, false), &rows),
+            ["AAA-100", "BBB-100"]
+        );
+        assert_eq!(
+            sorted(&sorted_by(SortColumn::Id, true), &rows),
+            ["BBB-100", "AAA-100"]
+        );
+    }
+
+    #[test]
+    fn sorts_by_age_newest_first_going_up() {
+        let at = |s: &str| s.parse::<DateTime<Utc>>().unwrap();
+        let mut old = sig("AAA-100", None);
+        old.updated_at = at("2026-10-01T00:00:00Z");
+        let mut new = sig("BBB-100", None);
+        new.updated_at = at("2026-10-02T00:00:00Z");
+        // A wormhole's age is when it was found, not when it was last touched.
+        let mut hole = sig("CCC-100", None);
+        hole.group = "wormhole".into();
+        hole.created_at = at("2026-09-01T00:00:00Z");
+        hole.updated_at = at("2026-10-03T00:00:00Z");
+        assert_eq!(
+            sorted(&sorted_by(SortColumn::Age, false), &[old, new, hole]),
+            ["BBB-100", "AAA-100", "CCC-100"]
+        );
+    }
+
+    #[test]
+    fn leaves_out_hidden_categories() {
+        let mut hole = sig("BBB-100", None);
+        hole.group = "wormhole".into();
+        let mut sigs = sorted_by(SortColumn::Id, false);
+        sigs.list.hidden = vec!["data".into()];
+        assert_eq!(sorted(&sigs, &[sig("AAA-100", None), hole]), ["BBB-100"]);
+    }
 }

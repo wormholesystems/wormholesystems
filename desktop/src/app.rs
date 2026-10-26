@@ -23,6 +23,7 @@ use crate::api::{
 use crate::chatlog::{self, ChatEvent, Watcher};
 use crate::config::{Config, Corner, OverlaySize};
 use crate::focus::{self, Focus};
+use crate::fresh::Freshness;
 use crate::hotkeys::{self, Action, PICK_MODIFIERS, Press, Registry};
 use crate::jump::{self, AliasScheme, Grid};
 use crate::naming::{
@@ -120,6 +121,10 @@ pub struct DesktopApp {
     token: Entity<InputState>,
     chatlog_dir: Entity<InputState>,
     account: Option<String>,
+    /// Built on connect and dropped on sign-out, so requests share its connections.
+    client: Option<Client>,
+    /// Which snapshot is newest, so a slow refresh never puts an older map back.
+    fresh: Freshness,
     maps: Vec<MapEntry>,
     connecting: bool,
     /// Wormhole codes by signature type, for the `{wh}` token.
@@ -231,6 +236,8 @@ impl DesktopApp {
             token,
             chatlog_dir,
             account: None,
+            client: None,
+            fresh: Freshness::default(),
             maps: Vec::new(),
             connecting: false,
             codes: Arc::default(),
@@ -318,8 +325,16 @@ impl DesktopApp {
     }
 
     fn client(&self) -> Option<Client> {
-        (!self.config.token.is_empty())
-            .then(|| Client::new(&self.config.server, &self.config.token))
+        self.client.clone()
+    }
+
+    /// A map that came back from a change: newer than any refresh still out.
+    fn show_changed(&mut self, snapshot: MapSnapshot, cx: &mut Context<Self>) {
+        self.fresh.changed();
+        self.sigs.update(cx, |sigs, cx| {
+            sigs.snapshot = Some(Arc::new(snapshot));
+            cx.notify();
+        });
     }
 
     fn copy(&mut self, text: &str) -> bool {
@@ -343,6 +358,8 @@ impl DesktopApp {
         self.config.server = self.server.read(cx).value().trim().to_string();
         self.config.token = self.token.read(cx).value().trim().to_string();
         self.save();
+        self.client = (!self.config.token.is_empty())
+            .then(|| Client::new(&self.config.server, &self.config.token));
         let Some(client) = self.client() else {
             self.note(Level::Problem, "Paste a token first".into());
             return;
@@ -409,6 +426,7 @@ impl DesktopApp {
 
     fn sign_out(&mut self, cx: &mut Context<Self>) {
         self.config.token.clear();
+        self.client = None;
         self.account = None;
         self.maps.clear();
         self.last = None;
@@ -419,6 +437,8 @@ impl DesktopApp {
     }
 
     fn clear_map(&mut self, cx: &mut Context<Self>) {
+        // Refreshes still out are for the map that was.
+        self.fresh.changed();
         self.sigs.update(cx, |sigs, cx| {
             sigs.snapshot = None;
             sigs.review = None;
@@ -446,10 +466,14 @@ impl DesktopApp {
         if self.account.is_none() {
             return;
         }
+        let n = self.fresh.start();
         let fetch = cx.background_spawn(async move { client.snapshot(map_id) });
         cx.spawn(async move |this, cx| match fetch.await {
             Ok(snapshot) => {
                 this.update(cx, |this, cx| {
+                    if !this.fresh.show(n) {
+                        return;
+                    }
                     let snapshot = Arc::new(snapshot);
                     this.mapped_elsewhere(&snapshot, cx);
                     this.sigs.update(cx, |sigs, cx| {
@@ -468,6 +492,13 @@ impl DesktopApp {
             }
         })
         .detach();
+    }
+
+    /// [`Self::refresh`] after changing the map: a refresh already out may have read it
+    /// before the change.
+    fn refresh_changed(&mut self, cx: &mut Context<Self>) {
+        self.fresh.changed();
+        self.refresh(cx);
     }
 
     /// The website's per-user settings for the map that the app follows.
@@ -690,7 +721,7 @@ impl DesktopApp {
                     Ok(Plan::Ask(ask)) => return this.ask(*ask, cx),
                     Err(err) => this.note(Level::Problem, format!("Could not map the jump: {err}")),
                 }
-                this.refresh(cx);
+                this.refresh_changed(cx);
                 this.next_jump(cx);
                 cx.notify();
             })
@@ -788,7 +819,7 @@ impl DesktopApp {
                     ),
                     Err(err) => this.note(Level::Problem, format!("Could not map the jump: {err}")),
                 }
-                this.refresh(cx);
+                this.refresh_changed(cx);
                 this.next_jump(cx);
                 cx.notify();
             })
@@ -1090,7 +1121,7 @@ impl DesktopApp {
                     }
                     Err(err) => this.note(Level::Problem, format!("{}: {err}", action.label())),
                 }
-                this.refresh(cx);
+                this.refresh_changed(cx);
                 cx.notify();
             })
             .ok();
@@ -1319,8 +1350,8 @@ impl DesktopApp {
                         let new = review.pasted.difference(&review.before).count();
                         let updated = review.pasted.intersection(&review.before).count();
                         let missing = review.before.difference(&review.pasted).count();
+                        this.show_changed(after, cx);
                         this.sigs.update(cx, |sigs, cx| {
-                            sigs.snapshot = Some(Arc::new(after));
                             sigs.review = Some(review);
                             cx.notify();
                         });
@@ -1370,10 +1401,7 @@ impl DesktopApp {
                 this.set_busy(false, cx);
                 match result {
                     Ok(after) => {
-                        this.sigs.update(cx, |sigs, cx| {
-                            sigs.snapshot = Some(Arc::new(after));
-                            cx.notify();
-                        });
+                        this.show_changed(after, cx);
                         this.tell(Tone::Done, done, cx);
                     }
                     Err(err) => this.tell(Tone::Problem, format!("Could not delete: {err}"), cx),
@@ -1413,10 +1441,7 @@ impl DesktopApp {
                 this.set_busy(false, cx);
                 match result {
                     Ok(after) => {
-                        this.sigs.update(cx, |sigs, cx| {
-                            sigs.snapshot = Some(Arc::new(after));
-                            cx.notify();
-                        });
+                        this.show_changed(after, cx);
                         this.tell(Tone::Done, done.into(), cx);
                     }
                     Err(err) => this.tell(Tone::Problem, format!("Could not change it: {err}"), cx),
@@ -1518,10 +1543,7 @@ impl DesktopApp {
             cx.spawn(async move |this, cx| {
                 let result = work.await;
                 this.update(cx, |this, cx| match result {
-                    Ok(after) => this.sigs.update(cx, |sigs, cx| {
-                        sigs.snapshot = Some(Arc::new(after));
-                        cx.notify();
-                    }),
+                    Ok(after) => this.show_changed(after, cx),
                     Err(err) => {
                         this.tell(Tone::Problem, format!("Could not name the hole: {err}"), cx)
                     }
@@ -1607,7 +1629,7 @@ impl DesktopApp {
                         this.tell(Tone::Problem, format!("Could not name {name}: {err}"), cx)
                     }
                 }
-                this.refresh(cx);
+                this.refresh_changed(cx);
             })
             .ok();
         })
@@ -1616,6 +1638,7 @@ impl DesktopApp {
 
     /// Fetch the portraits of characters the logs know an id for, once each.
     fn fetch_portraits(&mut self, cx: &mut Context<Self>) {
+        let mut agent: Option<ureq::Agent> = None;
         for (name, _, id) in &self.characters {
             let Some(id) = *id else { continue };
             if self.portraits.contains_key(name) {
@@ -1623,12 +1646,22 @@ impl DesktopApp {
             }
             self.portraits.insert(name.clone(), None);
             let name = name.clone();
+            // With a timeout, so a stalled download never holds a thread for good.
+            let agent = agent
+                .get_or_insert_with(|| {
+                    ureq::Agent::config_builder()
+                        .timeout_global(Some(Duration::from_secs(15)))
+                        .build()
+                        .new_agent()
+                })
+                .clone();
             let fetch = cx.background_spawn(async move {
-                let mut response = ureq::get(format!(
-                    "https://images.evetech.net/characters/{id}/portrait?size=64"
-                ))
-                .call()
-                .ok()?;
+                let mut response = agent
+                    .get(format!(
+                        "https://images.evetech.net/characters/{id}/portrait?size=64"
+                    ))
+                    .call()
+                    .ok()?;
                 let bytes = response.body_mut().read_to_vec().ok()?;
                 Some(Arc::new(Image::from_bytes(ImageFormat::Jpeg, bytes)))
             });
