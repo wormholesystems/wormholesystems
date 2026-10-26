@@ -7,6 +7,7 @@ mod app;
 mod chatlog;
 mod config;
 mod focus;
+mod fresh;
 mod hotkeys;
 mod jump;
 mod naming;

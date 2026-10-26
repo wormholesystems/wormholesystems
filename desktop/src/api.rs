@@ -437,12 +437,24 @@ impl Client {
         // Ghosts (holes nobody has been through) have no solar system to scan or jump to.
         let mut systems = Vec::new();
         let mut ghosts = Vec::new();
+        let mut unreadable = 0;
         for s in view.systems {
-            match s.get("kind").and_then(|k| k.as_str()) {
-                Some("system") => systems.extend(serde_json::from_value(s).ok()),
-                Some("ghost") => ghosts.extend(serde_json::from_value(s).ok()),
-                _ => {}
+            let id = s.get("id").cloned().unwrap_or_default();
+            let read = match s.get("kind").and_then(|k| k.as_str()) {
+                Some("system") => serde_json::from_value(s).map(|s| systems.push(s)),
+                Some("ghost") => serde_json::from_value(s).map(|g| ghosts.push(g)),
+                _ => Ok(()),
+            };
+            if let Err(err) = read {
+                eprintln!("map {map_id}: skipped system {id}: {err}");
+                unreadable += 1;
             }
+        }
+        // Every one failing is the server's format changing, not one odd row.
+        if unreadable > 0 && systems.is_empty() && ghosts.is_empty() {
+            return Err(anyhow!(
+                "could not read any of the map's {unreadable} systems; is the app out of date?"
+            ));
         }
         let signatures = self.get(&format!("/api/maps/{map_id}/signatures"))?;
         Ok(MapSnapshot {
