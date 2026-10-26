@@ -3,10 +3,12 @@
 //! those active on >= 5 distinct days, take the top 10. Summed kills set the level:
 //! >= 50 critical, >= 15 high, else unknown.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use sqlx::PgPool;
 
+use crate::entities::{self, EntityKind};
 use crate::esi::EsiClient;
 
 const ANALYSIS_WINDOW_DAYS: i32 = 90;
@@ -100,36 +102,32 @@ pub async fn analyze(pool: &PgPool, esi: &EsiClient) -> Result<(), Box<dyn std::
         })
         .collect();
 
-    // Resolve entity names: local tables first, ESI for the rest (best effort).
-    let mut names: std::collections::HashMap<(String, i64), String> =
-        std::collections::HashMap::new();
-    for s in &stats {
-        let key = (s.entity_type.clone(), s.entity_id);
-        if names.contains_key(&key) {
-            continue;
-        }
-        let local: Option<String> = if s.entity_type == "alliance" {
-            sqlx::query_scalar!("select name from alliances where id = $1", s.entity_id)
-                .fetch_optional(pool)
-                .await?
-        } else {
-            sqlx::query_scalar!("select name from corporations where id = $1", s.entity_id)
-                .fetch_optional(pool)
-                .await?
-        };
-        let name = match local {
-            Some(name) => name,
-            None => {
-                let fetched = if s.entity_type == "alliance" {
-                    esi.alliance(s.entity_id).await.map(|a| a.name).ok()
-                } else {
-                    esi.corporation(s.entity_id).await.map(|c| c.name).ok()
-                };
-                fetched.unwrap_or_else(|| "Unknown entity".to_string())
-            }
-        };
-        names.insert(key, name);
-    }
+    // Name what we can, fetching and keeping the rest so the next run need not ask again.
+    let ids_of = |kind: &str| -> Vec<i64> {
+        let mut ids: Vec<i64> = stats
+            .iter()
+            .filter(|s| s.entity_type == kind)
+            .map(|s| s.entity_id)
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    };
+    let (alliances, corporations) = (ids_of("alliance"), ids_of("corporation"));
+    entities::ensure(pool, esi, EntityKind::Alliance, &alliances).await;
+    entities::ensure(pool, esi, EntityKind::Corporation, &corporations).await;
+    let names: HashMap<(String, i64), String> = sqlx::query!(
+        r#"select 'alliance' as "kind!", id as "id!", name as "name!" from alliances where id = any($1)
+           union all
+           select 'corporation', id, name from corporations where id = any($2)"#,
+        &alliances,
+        &corporations,
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|r| ((r.kind, r.id), r.name))
+    .collect();
 
     // Full replacement in one transaction, and only one at a time: the backfill asks for an
     // analysis when it finishes, which can land on top of the daily one. Two replacements
@@ -149,7 +147,7 @@ pub async fn analyze(pool: &PgPool, esi: &EsiClient) -> Result<(), Box<dyn std::
     .await?;
 
     // Both written in one statement each, from parallel arrays.
-    let mut totals: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+    let mut totals: HashMap<i64, i64> = HashMap::new();
     let mut systems = Vec::with_capacity(stats.len());
     let mut entity_ids = Vec::with_capacity(stats.len());
     let mut entity_types = Vec::with_capacity(stats.len());
@@ -160,7 +158,8 @@ pub async fn analyze(pool: &PgPool, esi: &EsiClient) -> Result<(), Box<dyn std::
         systems.push(s.solar_system_id);
         entity_ids.push(s.entity_id);
         entity_types.push(s.entity_type.clone());
-        entity_names.push(names[&(s.entity_type.clone(), s.entity_id)].clone());
+        let name = names.get(&(s.entity_type.clone(), s.entity_id));
+        entity_names.push(name.map_or("Unknown entity", String::as_str).to_owned());
         kills.push(s.kills as i32);
     }
     sqlx::query!(

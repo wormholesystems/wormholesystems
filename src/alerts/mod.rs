@@ -139,6 +139,14 @@ impl Runtime {
             .collect()
     }
 
+    /// Whether any active alert watches for kills, so the stream can skip preparing them.
+    pub async fn watches_killmails(&self, pool: &PgPool) -> bool {
+        self.alerts(pool)
+            .await
+            .iter()
+            .any(|a| a.kind == AlertKind::Killmail)
+    }
+
     /// Offer a batch of kills to every alert watching for one. Each map's chain is read
     /// once per batch, however many kills land near it.
     pub async fn killmails(&self, pool: &PgPool, kills: &[killmail::Kill]) -> Vec<Outgoing> {

@@ -1,0 +1,45 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select false as \"is_type!\", id as \"id!\", name as \"name!\", null::bigint as group_id\n           from characters where id = any($1)\n           union all\n           select true, id, name, group_id from types where id = any($2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_type!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "name!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "group_id",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "4f221362e6884af2b2cc633d523ff72ddb4ee81fe5e8b5d680fd4d2c6f53c5c4"
+}

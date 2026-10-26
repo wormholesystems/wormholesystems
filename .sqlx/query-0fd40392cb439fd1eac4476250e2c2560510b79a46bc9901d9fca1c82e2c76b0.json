@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into characters (id, name) values (1, 'Dead Pilot')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "0fd40392cb439fd1eac4476250e2c2560510b79a46bc9901d9fca1c82e2c76b0"
+}
