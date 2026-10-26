@@ -139,6 +139,29 @@ pub(crate) async fn snapshot(
     .await?)
 }
 
+/// Every signature in one system as it stands, locked: a paste snapshots the list and
+/// then writes over it, and the expiry deletes without taking the map lock.
+pub(crate) async fn snapshot_system_for_update(
+    tx: &mut Tx<'_>,
+    map_id: i64,
+    solar_system_id: i64,
+) -> Result<Vec<SignatureRow>> {
+    Ok(sqlx::query_as!(
+        SignatureRow,
+        r#"select id, solar_system_id, signature_id, "group",
+                  signature_type_id, name, size,
+                  mass_status,
+                  time_status, connection_id, created_at as "created_at?",
+                  time_status_updated_at
+           from signatures where map_id = $1 and solar_system_id = $2
+           for update"#,
+        map_id,
+        solar_system_id,
+    )
+    .fetch_all(&mut **tx)
+    .await?)
+}
+
 /// Every signature scanned in these systems or linked to these connections, for a snapshot
 /// of what goes with them.
 pub(crate) async fn snapshot_around(

@@ -1254,7 +1254,7 @@ async fn nothing_connects_to_a_ghost_but_the_scan_that_raised_it(pool: PgPool) {
 ///
 /// The replay does not pass through the states the original did. Taking the scan removes
 /// the hole, which leaves its far side with no edges for a moment -- long enough for
-/// `delete_if_orphan` to clear it -- and the restore that follows was holding an edge back
+/// the orphan cleanup to clear it -- and the restore that follows was holding an edge back
 /// to it. The redo died on the foreign key.
 #[sqlx::test]
 async fn a_removal_can_be_walked_forward_again(pool: PgPool) {
