@@ -156,7 +156,7 @@ pub async fn post_webhook(
     url: &str,
     message: &Message,
 ) -> Result<(), SendError> {
-    send(http, http.post(url), message).await
+    send(http.post(url), message).await
 }
 
 /// Post as the bot into a channel it can see.
@@ -172,7 +172,6 @@ pub async fn post_channel(
     }
     let url = format!("{}/channels/{channel_id}/messages", crate::discord::API);
     send(
-        http,
         http.post(&url)
             .header("authorization", format!("Bot {token}")),
         message,
@@ -200,9 +199,7 @@ pub async fn post_dm(
         .await
         .map_err(|err| SendError::Failed(err.to_string()))?;
     if !opened.status().is_success() {
-        // Most often: the recipient does not share a server with the bot, or has direct
-        // messages closed. Neither fixes itself with a retry.
-        return Err(SendError::Gone);
+        return Err(dm_channel_refused(opened.status()));
     }
     #[derive(serde::Deserialize)]
     struct Channel {
@@ -215,12 +212,18 @@ pub async fn post_dm(
     post_channel(http, token, &channel.id, message).await
 }
 
+/// What a failure to open the DM channel means. Refused outright (the recipient shares no
+/// server with the bot, or is unknown) does not fix itself, so the alert stops; a rate
+/// limit or an outage is only this attempt, and must not switch the alert off for good.
+fn dm_channel_refused(status: reqwest::StatusCode) -> SendError {
+    match status.as_u16() {
+        400 | 401 | 403 | 404 => SendError::Gone,
+        _ => SendError::Failed(format!("opening the DM channel: discord returned {status}")),
+    }
+}
+
 /// The shared attempt loop: rate limits honoured, terminal failures reported as such.
-async fn send(
-    http: &reqwest::Client,
-    request: reqwest::RequestBuilder,
-    message: &Message,
-) -> Result<(), SendError> {
+async fn send(request: reqwest::RequestBuilder, message: &Message) -> Result<(), SendError> {
     let mut last = String::new();
     for attempt in 0..ATTEMPTS {
         let Some(request) = request.try_clone() else {
@@ -256,21 +259,20 @@ async fn send(
         last = format!("discord returned {status}");
         tokio::time::sleep(backoff(attempt)).await;
     }
-    let _ = http;
     Err(SendError::Failed(last))
 }
 
 fn retry_after(response: &reqwest::Response) -> Option<Duration> {
-    let seconds: f64 = response
-        .headers()
-        .get("retry-after")?
-        .to_str()
-        .ok()?
-        .parse()
-        .ok()?;
+    parse_retry_after(response.headers().get("retry-after")?.to_str().ok()?)
+}
+
+/// Seconds, possibly fractional. `NaN` and `inf` parse as floats too, and would panic in
+/// `Duration`, so anything that is not a finite number is no answer at all.
+fn parse_retry_after(header: &str) -> Option<Duration> {
+    let seconds: f64 = header.trim().parse().ok()?;
     // A minute is already absurd for a webhook; anything beyond it is a bug or a ban, and
     // holding the task open for it helps nobody.
-    Some(Duration::from_secs_f64(seconds.clamp(0.0, 60.0)))
+    Duration::try_from_secs_f64(seconds.clamp(0.0, 60.0)).ok()
 }
 
 fn backoff(attempt: usize) -> Duration {
@@ -322,6 +324,42 @@ mod tests {
             let sent = post_channel(&reqwest::Client::new(), "token", id, &message).await;
             assert!(matches!(sent, Err(SendError::Gone)), "{id:?}");
         }
+    }
+
+    #[test]
+    fn only_a_refused_dm_channel_stops_the_alert() {
+        use reqwest::StatusCode;
+        for status in [
+            StatusCode::BAD_REQUEST,
+            StatusCode::FORBIDDEN,
+            StatusCode::NOT_FOUND,
+        ] {
+            assert!(
+                matches!(dm_channel_refused(status), SendError::Gone),
+                "{status}"
+            );
+        }
+        for status in [
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::BAD_GATEWAY,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            assert!(
+                matches!(dm_channel_refused(status), SendError::Failed(_)),
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn retry_after_is_a_finite_number_of_seconds_capped_at_a_minute() {
+        assert_eq!(parse_retry_after("1.5"), Some(Duration::from_millis(1500)));
+        assert_eq!(parse_retry_after("-3"), Some(Duration::ZERO));
+        assert_eq!(parse_retry_after("3600"), Some(Duration::from_secs(60)));
+        assert_eq!(parse_retry_after("soon"), None);
+        assert_eq!(parse_retry_after("NaN"), None);
+        assert_eq!(parse_retry_after("inf"), Some(Duration::from_secs(60)));
     }
 
     #[test]
