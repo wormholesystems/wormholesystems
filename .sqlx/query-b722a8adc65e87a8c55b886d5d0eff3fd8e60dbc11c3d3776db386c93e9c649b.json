@@ -1,0 +1,213 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id, solar_system_id, signature_id, \"group\",\n                  signature_type_id, name, size,\n                  mass_status,\n                  time_status, connection_id, created_at as \"created_at?\",\n                  time_status_updated_at\n           from signatures where map_id = $1 and solar_system_id = $2\n           for update",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "signatures",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "solar_system_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "signatures",
+            "name": "solar_system_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "signature_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "signatures",
+            "name": "signature_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "group",
+        "type_info": {
+          "Custom": {
+            "name": "signature_group",
+            "kind": {
+              "Enum": [
+                "wormhole",
+                "data",
+                "relic",
+                "gas",
+                "combat",
+                "ore",
+                "homefront",
+                "faction_warfare",
+                "unknown"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "signatures",
+            "name": "group"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "signature_type_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "signatures",
+            "name": "signature_type_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "signatures",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "size",
+        "type_info": {
+          "Custom": {
+            "name": "wormhole_size",
+            "kind": {
+              "Enum": [
+                "xl",
+                "large",
+                "medium",
+                "small"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "signatures",
+            "name": "size"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "mass_status",
+        "type_info": {
+          "Custom": {
+            "name": "mass_status",
+            "kind": {
+              "Enum": [
+                "stable",
+                "reduced",
+                "critical"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "signatures",
+            "name": "mass_status"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "time_status",
+        "type_info": {
+          "Custom": {
+            "name": "time_status",
+            "kind": {
+              "Enum": [
+                "stable",
+                "eol",
+                "critical",
+                "expired"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "signatures",
+            "name": "time_status"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "connection_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "signatures",
+            "name": "connection_id"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "created_at?",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "signatures",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "time_status_updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "signatures",
+            "name": "time_status_updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "b722a8adc65e87a8c55b886d5d0eff3fd8e60dbc11c3d3776db386c93e9c649b"
+}

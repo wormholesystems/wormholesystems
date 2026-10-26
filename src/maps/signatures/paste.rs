@@ -1,5 +1,7 @@
 //! A scanner paste: every signature in a system at once, upserted.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
@@ -11,7 +13,7 @@ use crate::maps::{Actor, SignatureGroup};
 use crate::realtime::MapEvent;
 
 use super::{
-    capture_signatures, category_id_for, ensure_system_placed, is_wormhole, validate_signature_id,
+    RestoreSignatures, category_id_for, ensure_system_placed, is_wormhole, validate_signature_id,
 };
 
 /// One row of a parsed scanner paste. `group` is `None` when the scanner line carried no
@@ -104,16 +106,32 @@ pub(in crate::maps) async fn apply_paste_signatures(
     cmd: PasteSignatures,
 ) -> Result<Effect> {
     ensure_system_placed(tx, cmd.map_id, cmd.solar_system_id).await?;
-    // Snapshot the whole system: a paste both edits existing rows and adds new ones.
-    let existing_ids: Vec<i64> = sqlx::query_scalar!(
-        "select id from signatures where map_id = $1 and solar_system_id = $2",
-        cmd.map_id,
-        cmd.solar_system_id,
-    )
-    .fetch_all(&mut **tx)
-    .await?;
-    let mut restore = capture_signatures(tx, cmd.map_id, &existing_ids).await?;
-    restore.replaces_system = Some(cmd.solar_system_id);
+    // Snapshot the whole system: a paste both edits existing rows and adds new ones. The
+    // rows come back locked, and the loop below reads them from here.
+    let snapshot =
+        store::signatures::snapshot_system_for_update(tx, cmd.map_id, cmd.solar_system_id).await?;
+    // Each scanner id as it stands while the paste goes, so a line repeated within the
+    // paste merges into the row the first one wrote.
+    let mut current: HashMap<String, Current> = snapshot
+        .iter()
+        .map(|s| {
+            (
+                s.signature_id.clone(),
+                Current {
+                    id: s.id,
+                    group: s.group,
+                    type_id: s.signature_type_id,
+                    name: s.name.clone(),
+                },
+            )
+        })
+        .collect();
+    let mut restore = RestoreSignatures {
+        map_id: cmd.map_id,
+        signatures: snapshot,
+        replaces_system: Some(cmd.solar_system_id),
+        pasted_at: None,
+    };
 
     // Only a paste moves this: it says when the list last matched a scan, which a hand
     // edit does not. Undo puts the previous time back with the previous list.
@@ -134,6 +152,17 @@ pub(in crate::maps) async fn apply_paste_signatures(
     .execute(&mut **tx)
     .await?;
 
+    // Every catalog type the merge may ask about, pasted or kept, in one lookup.
+    let type_ids: Vec<i64> = cmd
+        .signatures
+        .iter()
+        .filter(|s| s.group.is_some())
+        .filter_map(|s| s.signature_type_id)
+        .chain(current.values().filter_map(|c| c.type_id))
+        .collect();
+    let categories = type_categories(tx, &type_ids).await?;
+    let category = |type_id: i64| categories.get(&type_id).copied();
+
     for s in &cmd.signatures {
         let sid = s.signature_id.trim();
         if sid.is_empty() {
@@ -142,29 +171,17 @@ pub(in crate::maps) async fn apply_paste_signatures(
         validate_signature_id(sid)?;
 
         // A pasted type only counts if it belongs to the pasted group's category.
-        let mut pasted_type = None;
-        if let (Some(type_id), Some(group)) = (s.signature_type_id, s.group)
-            && type_category(tx, type_id).await? == category_id_for(group)
-        {
-            pasted_type = Some(type_id);
-        }
+        let pasted_type = match (s.signature_type_id, s.group) {
+            (Some(type_id), Some(group)) if category(type_id) == category_id_for(group) => {
+                Some(type_id)
+            }
+            _ => None,
+        };
 
-        let existing = sqlx::query!(
-            r#"select id, "group", signature_type_id, name
-               from signatures
-               where map_id = $1 and solar_system_id = $2 and signature_id = $3
-               for update"#,
-            cmd.map_id,
-            cmd.solar_system_id,
-            sid,
-        )
-        .fetch_optional(&mut **tx)
-        .await?;
-
-        let Some(existing) = existing else {
+        let Some(existing) = current.get_mut(sid) else {
             // A paste only names what the scanner shows; the hole's state is for somebody
             // to fill in.
-            store::signatures::insert(
+            let row = store::signatures::insert(
                 tx,
                 cmd.map_id,
                 &NewSignature {
@@ -180,20 +197,25 @@ pub(in crate::maps) async fn apply_paste_signatures(
                 },
             )
             .await?;
+            current.insert(
+                row.signature_id,
+                Current {
+                    id: row.id,
+                    group: row.group,
+                    type_id: row.signature_type_id,
+                    name: row.name,
+                },
+            );
             continue;
         };
 
-        let kept_type_fits = match existing.signature_type_id {
-            Some(kept) => {
-                let group = s.group.unwrap_or(existing.group);
-                type_category(tx, kept).await? == category_id_for(group)
-            }
-            None => false,
-        };
+        let kept_type_fits = existing.type_id.is_some_and(|kept| {
+            category(kept) == category_id_for(s.group.unwrap_or(existing.group))
+        });
         let merged = merge_paste(
             existing.group,
-            existing.signature_type_id,
-            existing.name,
+            existing.type_id,
+            existing.name.take(),
             s,
             pasted_type,
             kept_type_fits,
@@ -213,6 +235,9 @@ pub(in crate::maps) async fn apply_paste_signatures(
         )
         .execute(&mut **tx)
         .await?;
+        existing.group = merged.group;
+        existing.type_id = merged.type_id;
+        existing.name = merged.name;
     }
 
     let count = cmd.signatures.len() as i64;
@@ -233,14 +258,29 @@ pub(in crate::maps) async fn apply_paste_signatures(
     }))
 }
 
-/// A catalog type's category id, or `None` for an unknown type id.
-async fn type_category(tx: &mut Tx<'_>, type_id: i64) -> Result<Option<i64>> {
-    Ok(sqlx::query_scalar!(
-        "select signature_category_id from signature_types where id = $1",
-        type_id,
+/// The fields of a signature the merge reads, as the paste has left them so far.
+struct Current {
+    id: i64,
+    group: SignatureGroup,
+    type_id: Option<i64>,
+    name: Option<String>,
+}
+
+/// These catalog types' category ids. An unknown type id is simply missing.
+async fn type_categories(tx: &mut Tx<'_>, type_ids: &[i64]) -> Result<HashMap<i64, i64>> {
+    if type_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = sqlx::query!(
+        "select id, signature_category_id from signature_types where id = any($1)",
+        type_ids,
     )
-    .fetch_optional(&mut **tx)
-    .await?)
+    .fetch_all(&mut **tx)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| (r.id, r.signature_category_id))
+        .collect())
 }
 
 #[cfg(test)]

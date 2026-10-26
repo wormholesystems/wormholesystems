@@ -517,13 +517,12 @@ pub(in crate::maps) async fn apply_remove_signatures(
     // and now connection-less disappear from the map. Never the system the signatures were
     // in: that is where the user is working, and losing its last hole doesn't make it stale.
     let mut removed_placement_ids = raised;
-    for placement_id in endpoint_candidates {
-        let snapshot =
-            crate::maps::restore::capture_systems(tx, cmd.map_id, &[placement_id]).await?;
-        if store::placements::delete_if_orphan(tx, cmd.map_id, placement_id).await? {
-            removed_placement_ids.push(placement_id);
-            absorb(&mut gone, snapshot);
-        }
+    let orphans = store::placements::orphans(tx, cmd.map_id, &endpoint_candidates).await?;
+    if !orphans.is_empty() {
+        let snapshot = crate::maps::restore::capture_systems(tx, cmd.map_id, &orphans).await?;
+        absorb(&mut gone, snapshot);
+        store::placements::delete(tx, cmd.map_id, &orphans).await?;
+        removed_placement_ids.extend(orphans);
     }
 
     let count = cmd.signature_pks.len() as i64;

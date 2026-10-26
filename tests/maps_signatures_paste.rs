@@ -686,6 +686,52 @@ async fn paste_files_faction_warfare_sites_under_their_own_group(pool: PgPool) {
     assert_eq!(sig.name.as_deref(), Some("Minmatar Large NVY-1"));
 }
 
+#[sqlx::test]
+async fn a_line_repeated_in_one_paste_merges_into_one_row(pool: PgPool) {
+    let w = world(&pool).await;
+    seed_catalog(&pool).await;
+    place(&pool, w.owner, w.map_id, SYS_A).await;
+
+    // The first line adds the row, the second merges over what the first wrote.
+    paste_signatures(
+        &pool,
+        w.owner,
+        PasteSignatures {
+            map_id: w.map_id,
+            solar_system_id: SYS_A,
+            signatures: vec![
+                PastedSignature {
+                    signature_id: "DUP-001".into(),
+                    group: Some(SignatureGroup::Data),
+                    signature_type_id: Some(600),
+                    name: Some("First".into()),
+                },
+                PastedSignature {
+                    signature_id: "DUP-001".into(),
+                    group: None,
+                    signature_type_id: None,
+                    name: Some("Second".into()),
+                },
+            ],
+        },
+    )
+    .await
+    .unwrap();
+
+    let all = list_signatures(&pool, w.owner, w.map_id).await.unwrap();
+    assert_eq!(
+        all.iter().filter(|s| s.signature_id == "DUP-001").count(),
+        1
+    );
+    let dup = sig_by_id(&pool, w.owner, w.map_id, "DUP-001")
+        .await
+        .unwrap();
+    assert_eq!(dup.group, SignatureGroup::Data);
+    // A site with only an unmatched name clears the type the first line set.
+    assert_eq!(dup.signature_type_id, None);
+    assert_eq!(dup.name.as_deref(), Some("Second"));
+}
+
 /// The placement's `signatures_pasted_at`, as the map read shows it.
 async fn pasted_at(
     pool: &PgPool,

@@ -95,7 +95,7 @@ pub(super) async fn capture_systems(
     // its own. A restore puts its placements back before its edges, but an edge whose
     // other end it does not carry depends on that end still being there -- and it may not
     // be. Replaying a removal walks through states the original never had: taking a scan
-    // leaves its hole's far side with no edges for a moment, `delete_if_orphan` clears it,
+    // leaves its hole's far side with no edges for a moment, the orphan cleanup clears it,
     // and the restore that follows is left holding an edge to nothing. Reinserting a
     // placement that never went is a no-op, so carrying them costs nothing.
     let far_ends: Vec<i64> = connections

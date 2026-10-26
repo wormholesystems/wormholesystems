@@ -255,8 +255,11 @@ pub(crate) async fn delete_unprotected(tx: &mut Tx<'_>, map_id: i64, ids: &[i64]
 }
 
 /// Which of these placements are orphans: unpinned, unmarked, and without a connection
-/// left. Asked by a sweep that snapshots them before they go.
+/// left. Asked by a sweep or a signature removal, which snapshot them before they go.
 pub(crate) async fn orphans(tx: &mut Tx<'_>, map_id: i64, ids: &[i64]) -> Result<Vec<i64>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
     Ok(sqlx::query_scalar!(
         r#"select id as "id!" from map_solar_systems mss
            where mss.map_id = $1 and mss.id = any($2)
@@ -270,26 +273,6 @@ pub(crate) async fn orphans(tx: &mut Tx<'_>, map_id: i64, ids: &[i64]) -> Result
     )
     .fetch_all(&mut **tx)
     .await?)
-}
-
-/// Take a placement off the map if it is an orphan by the same rule as [`orphans`]. Returns
-/// whether it went.
-pub(crate) async fn delete_if_orphan(tx: &mut Tx<'_>, map_id: i64, id: i64) -> Result<bool> {
-    let deleted = sqlx::query!(
-        "delete from map_solar_systems mss
-         where mss.id = $1 and mss.map_id = $2
-           and not mss.is_pinned and not mss.is_home and not mss.is_rally
-           and not exists (
-               select 1 from map_connections c
-               where c.map_id = $2 and (c.from_system = $1 or c.to_system = $1)
-           )",
-        id,
-        map_id,
-    )
-    .execute(&mut **tx)
-    .await?
-    .rows_affected();
-    Ok(deleted > 0)
 }
 
 /// Turn a ghost into the system it was found to be. A real system names no scan and hangs
