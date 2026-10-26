@@ -1,6 +1,8 @@
 <script lang="ts">
 	// Catalog types of the row's category that can spawn in this system, narrowed to the
-	// linked target's class once linked. An unmatched raw scanner name shows muted.
+	// linked target's class once linked. An unmatched raw scanner name shows muted. When a
+	// search finds nothing here it looks at the other classes, since the spawn data lags
+	// the game.
 	import type { MappedSystem } from '$lib/map/system';
 	import type { Signature } from '$lib/api/types/Signature';
 	import type { SignatureCatalog } from '$lib/api/types/SignatureCatalog';
@@ -74,6 +76,18 @@
 			.filter((section) => section.types.length > 0),
 	);
 
+	/** Types the query matches that are not known to spawn here, offered when nothing here matches. */
+	const elsewhere = $derived.by(() => {
+		if (categoryId === null || shown.length > 0 || query.trim() === '') return [];
+		const here = new Set(available.map((t) => t.id));
+		return typesForCategory(catalog, categoryId, null).filter(
+			(t) =>
+				!here.has(t.id) &&
+				(linkedClass === null || t.target_class === linkedClass) &&
+				matchesTypeQuery(t, query),
+		);
+	});
+
 	function pick(typeId: number | null) {
 		onpick(typeId);
 		open = false;
@@ -130,7 +144,7 @@
 			<Command.List class="max-h-64">
 				<!-- Our own, because `shouldFilter={false}` means the primitive does not know
 				     what the query ruled out and so never reaches its own empty state. -->
-				{#if shown.length === 0}
+				{#if shown.length === 0 && elsewhere.length === 0}
 					<div class="py-4 text-center text-xs text-muted-foreground">No type matches</div>
 				{/if}
 				<Command.Group>
@@ -147,6 +161,15 @@
 						{/each}
 					</Command.Group>
 				{/each}
+				{#if elsewhere.length > 0}
+					<Command.Group heading="Not known to spawn here">
+						{#each elsewhere as t (t.id)}
+							<Command.Item value={String(t.id)} onSelect={() => pick(t.id)} class="text-xs">
+								{@render typeLabel(t)}
+							</Command.Item>
+						{/each}
+					</Command.Group>
+				{/if}
 			</Command.List>
 		</Command.Root>
 	</Popover.Content>
