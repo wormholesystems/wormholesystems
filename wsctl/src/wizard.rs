@@ -1,5 +1,6 @@
 //! The commands themselves.
 
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -96,19 +97,19 @@ pub fn setup(
     scripted: Option<&[(String, String)]>,
 ) -> Result<()> {
     require_checkout(dir)?;
-    let on_disk = read_env(dir);
+    let on_disk = read_env(dir)?;
     let fresh = on_disk.is_empty();
     let (existing, template) = match scripted {
         Some(vars) => {
             ui::script();
             (
                 with_environment(&on_disk, vars),
-                with_environment(&template(dir), vars),
+                with_environment(&template(dir)?, vars),
             )
         }
         None => {
             require_terminal()?;
-            (on_disk, template(dir))
+            (on_disk, template(dir)?)
         }
     };
     ui::heading("Checking this machine");
@@ -189,7 +190,9 @@ pub fn setup(
         ui::note("from another shell with:  docker compose logs -f api");
     }
     if answers.backups {
-        std::fs::create_dir_all(config::backup_dir(dir, &read_env(dir)))?;
+        let backups = config::backup_dir(dir, &read_env(dir)?);
+        std::fs::create_dir_all(&backups)
+            .with_context(|| format!("could not make {}", backups.display()))?;
     }
     stack::up(runner, dir, answers.images)?;
     ui::done("running and healthy");
@@ -254,7 +257,7 @@ pub fn update(runner: &mut dyn Runner, dir: &Path, force_sde: bool, dump: bool) 
         ui::done(&format!("{before} → {after}"));
     }
 
-    let env = read_env(dir);
+    let env = read_env(dir)?;
     let deployment = Deployment::from_env(&env);
     let bundled = deployment.database == Database::Bundled;
     let old = rename::old_project(runner, dir)?;
@@ -280,7 +283,7 @@ pub fn update(runner: &mut dyn Runner, dir: &Path, force_sde: bool, dump: bool) 
     // COMPOSE_FILE follows whatever else changed.
     let rewritten = deployment.apply(&envfile::patch(&env, &values), &config::overrides(dir));
     if rewritten != env {
-        std::fs::write(dir.join(ENV), &rewritten)?;
+        save_env(dir, &rewritten)?;
     }
     if Deployment::is_legacy(&env) {
         ui::done(&format!(
@@ -350,7 +353,7 @@ fn dump_before_update(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
 /// and match the backup client to an external database: pg_dump refuses a server newer
 /// than itself. Answers with the directory.
 fn prepare_backups(runner: &mut dyn Runner, dir: &Path) -> Result<std::path::PathBuf> {
-    let env = read_env(dir);
+    let env = read_env(dir)?;
     if envfile::get(&env, "COMPOSE_FILE")
         .unwrap_or_default()
         .contains(config::LEGACY_STANDALONE_COMPOSE)
@@ -372,7 +375,7 @@ fn prepare_backups(runner: &mut dyn Runner, dir: &Path) -> Result<std::path::Pat
             .map(|number| number / 10000);
         if let Some(major) = major.filter(|m| *m > config::BUNDLED_POSTGRES) {
             let values = [("WS_BACKUP_PG_VERSION".to_string(), major.to_string())].into();
-            std::fs::write(dir.join(ENV), envfile::patch(&env, &values))?;
+            save_env(dir, &envfile::patch(&env, &values))?;
             ui::done(&format!(
                 "your database is Postgres {major}, so the backups use its client"
             ));
@@ -434,7 +437,7 @@ pub fn restore(runner: &mut dyn Runner, dir: &Path, file: &Path, yes: bool) -> R
         );
     }
     ui::done(&format!("restored {name}"));
-    stack::up(runner, dir, Images::from_env(&read_env(dir)))?;
+    stack::up(runner, dir, Images::from_env(&read_env(dir)?))?;
     ui::done("running and healthy on the restored data");
     Ok(())
 }
@@ -567,7 +570,7 @@ pub fn status(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
     ui::heading("Static data");
     report_sde(runner, dir);
 
-    let env = read_env(dir);
+    let env = read_env(dir)?;
     if let Some(url) = Deployment::from_env(&env).public_url() {
         ui::heading("Public URL");
         ui::report(&probe_url(runner, dir, &url));
@@ -606,7 +609,7 @@ fn probe_url(runner: &mut dyn Runner, dir: &Path, url: &str) -> checks::Check {
 
 pub fn discord_register(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
     require_checkout(dir)?;
-    let env = read_env(dir);
+    let env = read_env(dir)?;
     // The command reads both, and without either it panics in a container instead of
     // saying which.
     let unset: Vec<&str> = ["DISCORD_APPLICATION_ID", "DISCORD_BOT_TOKEN"]
@@ -625,7 +628,7 @@ pub fn discord_register(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
 }
 
 pub fn doctor(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
-    let env = read_env(dir);
+    let env = read_env(dir)?;
     let deployment = Deployment::from_env(&env);
 
     ui::heading("This machine");
@@ -646,7 +649,7 @@ pub fn doctor(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
 /// What a reverse proxy in front of this install needs, again, for whoever sets it up.
 pub fn integrate(dir: &Path) -> Result<()> {
     require_checkout(dir)?;
-    integrate::print(&Deployment::from_env(&read_env(dir)));
+    integrate::print(&Deployment::from_env(&read_env(dir)?));
     Ok(())
 }
 
@@ -1168,16 +1171,53 @@ fn after_boot(answers: &Answers) {
 /// What is already configured. Only a real `.env` counts: the example file is a template
 /// full of placeholders, and offering `your-client-id` as the default answer invites
 /// someone to press enter straight past it.
-fn read_env(dir: &Path) -> String {
-    std::fs::read_to_string(dir.join(ENV)).unwrap_or_default()
+///
+/// Only a missing file reads as empty. Anything else (no permission, a stray non-UTF-8
+/// byte) is an error, because every command that reads `.env` may write it back, and
+/// writing back what an unreadable file "contained" would be writing back nothing.
+fn read_env(dir: &Path) -> Result<String> {
+    read_if_present(&dir.join(ENV))
 }
 
 /// What a new `.env` is written on top of, so the comments explaining each setting come
 /// with it.
-fn template(dir: &Path) -> String {
-    std::fs::read_to_string(dir.join(ENV))
-        .or_else(|_| std::fs::read_to_string(dir.join(EXAMPLE)))
-        .unwrap_or_default()
+fn template(dir: &Path) -> Result<String> {
+    let env = read_if_present(&dir.join(ENV))?;
+    if !env.is_empty() {
+        return Ok(env);
+    }
+    read_if_present(&dir.join(EXAMPLE))
+}
+
+/// The file's contents, or empty when it does not exist.
+fn read_if_present(path: &Path) -> Result<String> {
+    match std::fs::read_to_string(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        read => read.with_context(|| format!("could not read {}", path.display())),
+    }
+}
+
+/// Replace `.env` in one step, readable by its owner alone from the start: it holds the
+/// client secret and the database password, so it is never world-readable even briefly,
+/// and a crash halfway leaves the old file rather than half a new one.
+fn save_env(dir: &Path, contents: &str) -> Result<()> {
+    let path = dir.join(ENV);
+    let temp = dir.join(".env.tmp");
+    // Left over from an earlier crash, it would keep whatever mode it was made with.
+    let _ = std::fs::remove_file(&temp);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let written = options.open(&temp).and_then(|mut file| {
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()
+    });
+    written.with_context(|| format!("could not write {}", temp.display()))?;
+    std::fs::rename(&temp, &path).with_context(|| format!("could not replace {}", path.display()))
 }
 
 fn write_env(dir: &Path, existing: &str, answers: &Answers, has_database: bool) -> Result<()> {
@@ -1199,15 +1239,7 @@ fn write_env(dir: &Path, existing: &str, answers: &Answers, has_database: bool) 
         out = envfile::patch(&out, &values);
     }
 
-    let path = dir.join(ENV);
-    std::fs::write(&path, out)?;
-    // It holds the client secret and the database password.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(())
+    save_env(dir, &out)
 }
 
 /// Ports only matter without a domain; with one it is 80 and 443, because that is where
@@ -1323,6 +1355,35 @@ mod tests {
         assert!(!runner.commands.iter().any(|c| c.contains("compose build")));
     }
 
+    #[test]
+    fn an_unreadable_env_stops_the_update_instead_of_replacing_it() {
+        let dir = checkout("");
+        let mut bytes = INSTALLED.as_bytes().to_vec();
+        bytes.extend_from_slice(b"WS_CONTACT_NAME=\xff\n");
+        std::fs::write(dir.join(ENV), &bytes).unwrap();
+
+        let err = update(&mut running(), &dir, false, true).unwrap_err();
+
+        assert!(format!("{err:#}").contains(".env"), "{err:#}");
+        assert_eq!(std::fs::read(dir.join(ENV)).unwrap(), bytes);
+    }
+
+    #[test]
+    fn a_rewritten_env_is_private_and_leaves_no_temp_file() {
+        let dir = checkout(INSTALLED);
+        update(&mut running(), &dir, false, true).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.join(ENV))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        assert!(!dir.join(".env.tmp").exists());
+    }
+
     // An install from before the choice has always built, and keeps doing so.
     #[test]
     fn an_update_that_never_chose_builds() {
@@ -1352,7 +1413,7 @@ mod tests {
         );
         let mut runner = running();
         update(&mut runner, &dir, false, true).unwrap();
-        let env = read_env(&dir);
+        let env = read_env(&dir).unwrap();
         assert_eq!(
             envfile::get(&env, "COMPOSE_FILE").as_deref(),
             Some("docker-compose.yml:deploy/external-db.yml:deploy/app-network.yml")
@@ -1382,7 +1443,7 @@ mod tests {
         std::fs::write(dir.join("compose.override.yml"), "services: {}\n").unwrap();
         update(&mut running(), &dir, false, true).unwrap();
         assert_eq!(
-            envfile::get(&read_env(&dir), "COMPOSE_FILE").as_deref(),
+            envfile::get(&read_env(&dir).unwrap(), "COMPOSE_FILE").as_deref(),
             Some(
                 "docker-compose.yml:deploy/external-db.yml:deploy/app-network.yml:compose.override.yml"
             )
@@ -1493,7 +1554,7 @@ mod tests {
         assert!(at(DUMP).expect("dumped") < at(UP).expect("started"));
         assert!(at("docker compose pull").unwrap() < at(DUMP).unwrap());
         assert_eq!(
-            envfile::get(&read_env(&dir), "WS_BACKUP_PG_VERSION").as_deref(),
+            envfile::get(&read_env(&dir).unwrap(), "WS_BACKUP_PG_VERSION").as_deref(),
             Some("17")
         );
         assert!(dir.join("backups").is_dir());
@@ -1543,7 +1604,10 @@ mod tests {
             ]
         );
         // The client the bundled database has is new enough for a 16.
-        assert_eq!(envfile::get(&read_env(&dir), "WS_BACKUP_PG_VERSION"), None);
+        assert_eq!(
+            envfile::get(&read_env(&dir).unwrap(), "WS_BACKUP_PG_VERSION"),
+            None
+        );
     }
 
     // A dump from anywhere else is mounted in rather than copied.
@@ -1591,7 +1655,7 @@ mod tests {
         ]);
         let mut runner = Recording::default();
         setup(&mut runner, &dir, Some(&env)).unwrap();
-        let written = read_env(&dir);
+        let written = read_env(&dir).unwrap();
         let get = |key: &str| envfile::get(&written, key);
         assert_eq!(
             get("COMPOSE_FILE").as_deref(),
@@ -1657,7 +1721,7 @@ mod tests {
         let dsn = "https://key@errors.example.com/7";
         let (dir, result) = scripted_setup(&[("SENTRY_DSN", dsn), ("SENTRY_ENVIRONMENT", "prod")]);
         result.unwrap();
-        let env = read_env(&dir);
+        let env = read_env(&dir).unwrap();
         assert_eq!(envfile::get(&env, "SENTRY_DSN").as_deref(), Some(dsn));
         assert_eq!(
             envfile::get(&env, "PUBLIC_SENTRY_DSN").as_deref(),
@@ -1670,7 +1734,7 @@ mod tests {
 
         let (dir, result) = scripted_setup(&[]);
         result.unwrap();
-        let env = read_env(&dir);
+        let env = read_env(&dir).unwrap();
         assert_eq!(envfile::get(&env, "SENTRY_DSN"), None);
         assert_eq!(envfile::get(&env, "PUBLIC_SENTRY_DSN"), None);
     }
@@ -1689,7 +1753,7 @@ mod tests {
     fn an_update_leaves_a_bundled_install_on_the_default_file() {
         let dir = checkout(&format!("{INSTALLED}WS_DOMAIN=map.example.com\n"));
         update(&mut running(), &dir, false, true).unwrap();
-        let env = read_env(&dir);
+        let env = read_env(&dir).unwrap();
         assert_eq!(envfile::get(&env, "COMPOSE_FILE"), None);
         assert_eq!(envfile::get(&env, "WS_PROXY").as_deref(), Some("caddy"));
         assert_eq!(
