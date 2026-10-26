@@ -413,3 +413,80 @@ async fn claim_window_and_prune(pool: PgPool) {
         .unwrap();
     assert_eq!(remaining, 1);
 }
+
+/// The jump log of a map, as JSON. `updated_at` is a write stamp, not state.
+async fn jump_rows(pool: &PgPool, map_id: i64) -> serde_json::Value {
+    sqlx::query_scalar(
+        "select coalesce(jsonb_agg(to_jsonb(t) - 'updated_at' order by t.id), '[]')
+         from map_connection_jumps t where map_id = $1",
+    )
+    .bind(map_id)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// Undoing a cleared map puts every jump back on its own id, and forgets a pilot whose
+/// character went in the meantime.
+#[sqlx::test]
+async fn undoing_a_clear_puts_every_jump_back(pool: PgPool) {
+    use wormholesystems::maps::history::{MapIdBody, redo, undo};
+    use wormholesystems::maps::solar_system::{ClearMap, clear_map};
+
+    let w = world(&pool).await;
+    seed_ship(&pool, 587, "Rifter", 1_067_000.0).await;
+    let gone_user = common::new_user(&pool).await;
+    common::add_character(&pool, gone_user, 1003, 2001, None).await;
+    let a = place(&pool, w.owner, w.map_id, SYS_A).await;
+    let b = place(&pool, w.owner, w.map_id, SYS_B).await;
+    let c = place(&pool, w.owner, w.map_id, SYS_C).await;
+    let ab = connect(&pool, w.owner, w.map_id, a, b).await.id;
+    let bc = connect(&pool, w.owner, w.map_id, b, c).await.id;
+    for n in 0..40_i32 {
+        let (conn, character) = if n % 2 == 0 { (ab, 1001) } else { (bc, 1003) };
+        sqlx::query(
+            "insert into map_connection_jumps
+                 (map_id, connection_id, character_id, from_solar_system_id,
+                  to_solar_system_id, ship_type_id, ship_name, mass, is_manual, created_at)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, now() - make_interval(mins => $10))",
+        )
+        .bind(w.map_id)
+        .bind(conn)
+        .bind(character)
+        .bind(SYS_A)
+        .bind(SYS_B)
+        .bind((n % 3 == 0).then_some(587_i64))
+        .bind((n % 5 == 0).then(|| format!("Ship {n}")))
+        .bind(1_000_000 + i64::from(n))
+        .bind(n % 4 == 0)
+        .bind(n)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let before = jump_rows(&pool, w.map_id).await;
+
+    clear_map(&pool, w.owner, ClearMap { map_id: w.map_id })
+        .await
+        .unwrap();
+    assert_eq!(jump_rows(&pool, w.map_id).await, serde_json::json!([]));
+
+    let body = MapIdBody { map_id: w.map_id };
+    undo(&pool, w.owner, body.clone()).await.unwrap();
+    assert_eq!(jump_rows(&pool, w.map_id).await, before);
+
+    // The pilot leaves while the jumps are cleared again: putting them back forgets who flew.
+    redo(&pool, w.owner, body.clone()).await.unwrap();
+    sqlx::query("delete from characters where id = 1003")
+        .execute(&pool)
+        .await
+        .unwrap();
+    undo(&pool, w.owner, body).await.unwrap();
+    let mut want = before;
+    for row in want.as_array_mut().unwrap() {
+        if row["character_id"] == 1003 {
+            row["character_id"] = serde_json::Value::Null;
+        }
+    }
+    assert_eq!(jump_rows(&pool, w.map_id).await, want);
+}
