@@ -57,6 +57,27 @@ pub async fn actor_for_session(
     }))
 }
 
+/// The session a finished login lands in. Adding an alt or topping up permissions is a
+/// login as well, but the browser is already signed in to this account: it keeps that
+/// session and the character it was flying, rather than gaining a second session that
+/// outlives the first and starting over on the preferred character. Any other session the
+/// browser held, for another account or already dead, is ended.
+pub async fn resume_or_create(
+    pool: &PgPool,
+    current: Option<&str>,
+    user_id: i64,
+    character_id: i64,
+) -> Result<String, sqlx::Error> {
+    if let Some(current) = current {
+        let actor = actor_for_session(pool, current).await?;
+        if actor.is_some_and(|actor| actor.user_id == user_id) {
+            return Ok(current.to_string());
+        }
+        delete_session(pool, current).await?;
+    }
+    create_session(pool, user_id, character_id).await
+}
+
 /// Open a session for a user, [`SESSION_DAYS`] long. Returns the opaque id to put in the
 /// cookie.
 ///

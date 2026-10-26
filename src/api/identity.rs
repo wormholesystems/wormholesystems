@@ -149,7 +149,7 @@ pub async fn my_scopes(
 ) -> ApiResult<Vec<ScopeStatus>> {
     let actor = require_actor(&state.db, &creds).await?;
     Ok(Json(
-        characters::scopes(&state.db, actor.character_id).await,
+        characters::scopes(&state.db, actor.character_id).await?,
     ))
 }
 

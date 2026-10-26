@@ -196,7 +196,10 @@ pub async fn list(pool: &PgPool, actor: Actor) -> Result<Vec<CharacterRef>> {
 }
 
 /// The ESI scopes a character has consented to, across every token we hold for them.
-pub async fn granted_scopes(pool: &PgPool, character_id: i64) -> Vec<Scope> {
+///
+/// An error stays an error: the login that tops up scopes asks SSO for these plus the new
+/// ones, and SSO replaces the token wholesale, so reading "none" here would revoke them.
+pub async fn granted_scopes(pool: &PgPool, character_id: i64) -> Result<Vec<Scope>> {
     let names = sqlx::query_scalar!(
         "select distinct s.name
          from esi_tokens t
@@ -206,23 +209,22 @@ pub async fn granted_scopes(pool: &PgPool, character_id: i64) -> Vec<Scope> {
         character_id,
     )
     .fetch_all(pool)
-    .await
-    .unwrap_or_default();
-    names.iter().filter_map(|n| Scope::parse(n)).collect()
+    .await?;
+    Ok(names.iter().filter_map(|n| Scope::parse(n)).collect())
 }
 
 /// Every ESI permission the app can use, and whether this character has granted it.
 /// Always the full list, so the UI can show what is missing.
-pub async fn scopes(pool: &PgPool, character_id: i64) -> Vec<ScopeStatus> {
-    let granted = granted_scopes(pool, character_id).await;
-    Scope::ALL
+pub async fn scopes(pool: &PgPool, character_id: i64) -> Result<Vec<ScopeStatus>> {
+    let granted = granted_scopes(pool, character_id).await?;
+    Ok(Scope::ALL
         .iter()
         .map(|scope| ScopeStatus {
             scope: scope.as_str().to_string(),
             granted: granted.contains(scope),
             optional: scope.is_optional(),
         })
-        .collect()
+        .collect())
 }
 
 async fn owns(pool: &PgPool, user_id: i64, character_id: i64) -> Result<bool> {
