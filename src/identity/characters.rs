@@ -74,7 +74,7 @@ pub struct CharacterRef {
     /// EVE refused this character's token (revoked, or rotated away), so it is not tracked
     /// and cannot act until it logs in again.
     pub needs_login: bool,
-    /// The ESI permissions the app uses that this character has not granted, so the UI can
+    /// The required ESI permissions this character has not granted, so the UI can
     /// say which of them is why something does not work for it.
     pub missing_scopes: Vec<String>,
 }
@@ -85,6 +85,8 @@ pub struct CharacterRef {
 pub struct ScopeStatus {
     pub scope: String,
     pub granted: bool,
+    /// Not asked for at sign-in, and never warned about when missing.
+    pub optional: bool,
 }
 
 /// The acting character as the UI shows it, or `None` when the character is gone.
@@ -167,7 +169,7 @@ pub async fn list(pool: &PgPool, actor: Actor) -> Result<Vec<CharacterRef>> {
     .fetch_all(pool)
     .await?;
     let missing = |character_id: i64| {
-        Scope::ALL
+        Scope::REQUIRED
             .iter()
             .map(|scope| scope.as_str())
             .filter(|scope| {
@@ -218,6 +220,7 @@ pub async fn scopes(pool: &PgPool, character_id: i64) -> Vec<ScopeStatus> {
         .map(|scope| ScopeStatus {
             scope: scope.as_str().to_string(),
             granted: granted.contains(scope),
+            optional: scope.is_optional(),
         })
         .collect()
 }

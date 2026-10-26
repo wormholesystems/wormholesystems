@@ -18,6 +18,14 @@ The app talks to EVE Online through **ESI**, CCP's official API. To unlock live 
 
 The first three power [character tracking](/documentation/tracking/character-presence); the waypoint scope powers [setting waypoints](/documentation/autopilot-and-routing/setting-waypoints). If a scope is missing, the header shows how many are outstanding so you can grant them in one place.
 
+## Optional scopes
+
+| Scope                             | What it enables                                |
+| --------------------------------- | ---------------------------------------------- |
+| `esi-universe.read_structures.v1` | Names the structures you dock in, for the map. |
+
+Not asked for when you sign in, and never flagged as missing. Grant it from the characters settings page if you want it. Public structures are named anyway; a private one is visible only to pilots on its docking list, so the pilots list shows it as an unknown structure until someone with this scope docks in it.
+
 ## Multiple characters
 
 You can connect several characters and switch your **active character** at any time. Tracking and waypoint actions apply to the character you choose, and [bulk waypoints](/documentation/autopilot-and-routing/setting-waypoints) can target several of your characters at once.

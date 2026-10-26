@@ -49,10 +49,12 @@
 	// what clears a token EVE refused. The SSO picks the character, so this is the same link.
 	const reloginUrl = `/auth/login?link=true&return_to=${encodeURIComponent('/settings/characters')}`;
 
-	const missing = $derived(scopes.filter((s) => !s.granted));
-	const grantUrl = $derived(
-		`/auth/login?scopes=${encodeURIComponent(missing.map((s) => s.scope).join(','))}&return_to=${encodeURIComponent('/settings/characters')}`,
-	);
+	// Optional permissions are granted one at a time, on purpose, so "grant the missing"
+	// leaves them out.
+	const missing = $derived(scopes.filter((s) => !s.granted && !s.optional));
+	function grantUrl(wanted: string[]): string {
+		return `/auth/login?scopes=${encodeURIComponent(wanted.join(','))}&return_to=${encodeURIComponent('/settings/characters')}`;
+	}
 </script>
 
 <div class="flex flex-col gap-6">
@@ -189,7 +191,12 @@
 				{@const meta = scopeMeta(scope.scope)}
 				<div class="flex items-start justify-between gap-4 py-3" data-testid="scope-row">
 					<span class="flex min-w-0 flex-col gap-0.5">
-						<span class="text-sm font-medium">{meta?.name ?? scope.scope}</span>
+						<span class="flex items-center gap-2 text-sm font-medium">
+							{meta?.name ?? scope.scope}
+							{#if scope.optional}
+								<Badge variant="outline" class="text-[10px] font-normal">Optional</Badge>
+							{/if}
+						</span>
 						{#if meta}
 							<span class="text-xs text-muted-foreground">{meta.blurb}</span>
 						{/if}
@@ -202,6 +209,16 @@
 							<CheckCircleIcon class="size-3.5" />
 							Granted
 						</span>
+					{:else if scope.optional}
+						<Button
+							href={grantUrl([scope.scope])}
+							size="sm"
+							variant="outline"
+							class="shrink-0"
+							data-testid="grant-optional-scope"
+						>
+							Grant
+						</Button>
 					{:else}
 						<span class="shrink-0 text-xs text-amber-500">Not granted</span>
 					{/if}
@@ -210,7 +227,7 @@
 		</Card.Content>
 		{#if missing.length > 0}
 			<Card.Footer class="flex-col items-start gap-2">
-				<Button href={grantUrl} size="sm" data-testid="grant-scopes">
+				<Button href={grantUrl(missing.map((s) => s.scope))} size="sm" data-testid="grant-scopes">
 					Grant the {missing.length} missing
 					{missing.length === 1 ? 'permission' : 'permissions'}
 				</Button>

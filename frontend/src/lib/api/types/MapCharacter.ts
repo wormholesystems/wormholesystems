@@ -19,6 +19,11 @@ ship_group_id: number | null,
  */
 is_docked: boolean, 
 /**
+ * The station or structure, by name. `None` in a private structure nobody with the
+ * structures permission has docked in yet.
+ */
+docked_at: string | null, 
+/**
  * One of the viewer's own characters, so their alts can be told apart at a glance.
  */
 is_mine: boolean, };

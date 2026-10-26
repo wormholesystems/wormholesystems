@@ -128,7 +128,7 @@ impl Config {
                 client_id: required("EVE_CLIENT_ID")?,
                 client_secret: required("EVE_CLIENT_SECRET")?,
                 redirect_uri: redirect_uri.clone(),
-                scopes: Scope::ALL.to_vec(),
+                scopes: Scope::REQUIRED.to_vec(),
             },
             grid: grid_from_env(),
             esi_base_url: std::env::var("ESI_BASE_URL")

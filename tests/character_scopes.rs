@@ -81,9 +81,16 @@ async fn each_character_says_which_permissions_it_has_not_granted(pool: PgPool) 
             "esi-location.read_ship_type.v1"
         ]
     );
-    assert_eq!(missing(&pool, actor, 300).await.len(), Scope::ALL.len());
+    assert_eq!(
+        missing(&pool, actor, 300).await.len(),
+        Scope::REQUIRED.len()
+    );
 
     // Granting the rest clears it.
     store.save(200, &token(&Scope::ALL)).await.unwrap();
     assert!(missing(&pool, actor, 200).await.is_empty());
+
+    // Optional permissions are never reported missing.
+    store.save(300, &token(&Scope::REQUIRED)).await.unwrap();
+    assert!(missing(&pool, actor, 300).await.is_empty());
 }

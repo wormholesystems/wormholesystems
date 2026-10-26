@@ -111,7 +111,17 @@
 										<Tooltip.Trigger class="shrink-0 text-[10px] text-muted-foreground">
 											(D)
 										</Tooltip.Trigger>
-										<Tooltip.Content>Docked</Tooltip.Content>
+										<Tooltip.Content class="max-w-64" data-testid="pilot-docked-at">
+											{#if pilot.docked_at}
+												Docked at {pilot.docked_at}
+											{:else}
+												Docked in a private structure the map cannot name yet. It is named once a
+												pilot with the Structure names permission docks in it.
+												{#if pilot.is_mine}
+													<a href="/settings/characters" class="underline">Grant it</a>
+												{/if}
+											{/if}
+										</Tooltip.Content>
 									</Tooltip.Root>
 								{:else if isScanner(pilot)}
 									<Tooltip.Root>

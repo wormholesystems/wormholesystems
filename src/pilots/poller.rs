@@ -29,8 +29,10 @@ use crate::background::{Streak, spawn_every};
 use crate::db::PgTokenStore;
 use crate::esi::scopes::Scope;
 use crate::esi::{EsiClient, EsiError, Result as EsiResult, Sso, Token, TokenCache, TokenStore};
+use crate::pilots::structures::{self, wait};
 use crate::realtime::{UserEvent, UserHub};
 use crate::server_status::ServerWatch;
+use crate::structures::{is_named, store as store_structure};
 
 /// Max ESI requests in flight per tick, the one tuning knob. Raise to fit more characters
 /// in the 5s tier-2 budget; lower to stay further under ESI's error limit.
@@ -61,6 +63,8 @@ struct Poller {
     users: UserHub,
     store: PgTokenStore,
     tokens: TokenCache,
+    /// Which docked pilots' structures to leave alone for now.
+    structures: structures::Backoff,
     /// The poller's share of the pool. [`CONCURRENCY`] polls can be in flight and each
     /// ends in a write, while the API, websockets and killmail ingest draw on the same
     /// connections; without a cap of its own a busy tick could take all of them.
@@ -123,6 +127,7 @@ pub fn start(pool: PgPool, sso: Arc<Sso>, esi: EsiClient, users: UserHub, server
         esi,
         users,
         tokens: TokenCache::new(),
+        structures: structures::Backoff::default(),
         db: Semaphore::new(db),
         tier_one_failing: Streak::new(FAILING_FOR),
         tier_two_failing: Streak::new(FAILING_FOR),
@@ -398,8 +403,7 @@ async fn poll_online(poller: Arc<Poller>, due: Due) -> Poll {
 }
 
 /// Poll one character's location and ship (tier 2). The two use independent scopes, so a
-/// missing one skips just that field, and one failing does not stop the other. Docking is
-/// left null until we cache those entities.
+/// missing one skips just that field, and one failing does not stop the other.
 async fn poll_location_ship(poller: Arc<Poller>, due: Due) -> Poll {
     let id = due.character_id;
     let Some(token) = poller
@@ -408,18 +412,25 @@ async fn poll_location_ship(poller: Arc<Poller>, due: Due) -> Poll {
     else {
         return Ok(());
     };
-    let location = if token.has_scope(Scope::ReadLocation) {
-        poll_location(&poller, &token.access_token, id).await
+    let (location, structure_id) = if token.has_scope(Scope::ReadLocation) {
+        match poll_location(&poller, &token.access_token, id).await {
+            Ok((moved, structure_id)) => (Ok(moved), structure_id),
+            Err(err) => (Err(err), None),
+        }
     } else {
-        Ok(false)
+        (Ok(false), None)
     };
     let ship = if token.has_scope(Scope::ReadShipType) {
         poll_ship(&poller, &token.access_token, id).await
     } else {
         Ok(false)
     };
+    let named = match structure_id {
+        Some(structure_id) => name_structure(&poller, id, structure_id).await,
+        None => false,
+    };
 
-    if matches!(location, Ok(true)) || matches!(ship, Ok(true)) {
+    if matches!(location, Ok(true)) || matches!(ship, Ok(true)) || named {
         poller.users.publish(
             due.user_id,
             UserEvent::CharacterStatusChanged { character_id: id },
@@ -429,8 +440,13 @@ async fn poll_location_ship(poller: Arc<Poller>, due: Due) -> Poll {
     location.and(ship).map(|_| ())
 }
 
-/// The location half of tier 2. `Ok(true)` when it moved.
-async fn poll_location(poller: &Poller, token: &str, id: i64) -> Result<bool, String> {
+/// The location half of tier 2: whether it moved, docked or undocked, and the structure
+/// it is docked in, if any.
+async fn poll_location(
+    poller: &Poller,
+    token: &str,
+    id: i64,
+) -> Result<(bool, Option<i64>), String> {
     let location = poller
         .esi
         .character_location(token, id)
@@ -445,21 +461,24 @@ async fn poll_location(poller: &Poller, token: &str, id: i64) -> Result<bool, St
                      select solar_system_id from character_status where character_id = $1
                  )
                  update character_status
-                 set solar_system_id = $2, station_id = null, structure_id = null,
+                 set solar_system_id = $2, station_id = $3, structure_id = $4,
                      updated_at = now()
                  where character_id = $1
                    and (solar_system_id is distinct from $2
-                        or station_id is not null or structure_id is not null)
+                        or station_id is distinct from $3
+                        or structure_id is distinct from $4)
                  returning (select solar_system_id from prev) as "prev_solar_system_id?""#,
             id,
             location.solar_system_id,
+            location.station_id,
+            location.structure_id,
         )
         .fetch_optional(&poller.pool)
         .await
         .map_err(|err| err.to_string())?
     };
     let Some(moved) = moved else {
-        return Ok(false);
+        return Ok((false, location.structure_id));
     };
 
     // A system change is a potential wormhole transit: jump capture must never
@@ -475,7 +494,73 @@ async fn poll_location(poller: &Poller, token: &str, id: i64) -> Result<bool, St
             tracing::error!("jump capture failed for character {id}: {err}");
         }
     }
-    Ok(true)
+    Ok((true, location.structure_id))
+}
+
+/// Name the structure `id` is docked in with their own token, unless it already has a name
+/// or was tried too recently. `true` when this named it, so the pilot lists refetch.
+async fn name_structure(poller: &Poller, id: i64, structure_id: i64) -> bool {
+    if !poller.structures.due(structure_id, id) {
+        return false;
+    }
+    let named = {
+        let _db = poller.db().await;
+        is_named(&poller.pool, structure_id).await
+    };
+    match named {
+        Ok(true) => {
+            poller.structures.wait(structure_id, id, wait::NAMED);
+            return false;
+        }
+        Ok(false) => {}
+        Err(err) => {
+            tracing::warn!("could not look up structure {structure_id}: {err}");
+            poller.structures.wait(structure_id, id, wait::FAILED);
+            return false;
+        }
+    }
+    let token = match poller.token(id, &[Scope::ReadStructures]).await {
+        Ok(Some(token)) if token.has_scope(Scope::ReadStructures) => token,
+        _ => {
+            poller
+                .structures
+                .wait(structure_id, id, wait::NO_PERMISSION);
+            return false;
+        }
+    };
+    let structure = match poller
+        .esi
+        .structure(&token.access_token, structure_id)
+        .await
+    {
+        Ok(structure) => structure,
+        Err(EsiError::Api {
+            status: 403 | 404, ..
+        }) => {
+            poller.structures.wait(structure_id, id, wait::REFUSED);
+            return false;
+        }
+        Err(err) => {
+            tracing::warn!("could not fetch structure {structure_id}: {err}");
+            poller.structures.wait(structure_id, id, wait::FAILED);
+            return false;
+        }
+    };
+    let stored = {
+        let _db = poller.db().await;
+        store_structure(&poller.pool, structure_id, &structure).await
+    };
+    match stored {
+        Ok(()) => {
+            poller.structures.wait(structure_id, id, wait::NAMED);
+            true
+        }
+        Err(err) => {
+            tracing::warn!("could not store structure {structure_id}: {err}");
+            poller.structures.wait(structure_id, id, wait::FAILED);
+            false
+        }
+    }
 }
 
 /// The ship half of tier 2. `Ok(true)` when the hull or its name changed.

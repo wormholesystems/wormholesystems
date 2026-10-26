@@ -38,6 +38,15 @@ pub struct Affiliation {
     pub faction_id: Option<i64>,
 }
 
+/// A player-owned structure, as one character with docking access sees it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Structure {
+    pub name: String,
+    pub owner_id: i64,
+    pub solar_system_id: i64,
+    pub type_id: Option<i64>,
+}
+
 /// One id resolved by the bulk name endpoint. `category` says which kind it turned out to
 /// be: `character`, `corporation`, `alliance`, `solar_system`, and so on.
 #[derive(Debug, Clone, Deserialize)]
@@ -64,6 +73,18 @@ impl EsiClient {
 
     pub async fn alliance(&self, alliance_id: i64) -> Result<Alliance> {
         self.get_json(&format!("/alliances/{alliance_id}"), None)
+            .await
+    }
+
+    /// Every public structure's id, without a token. Naming one still needs one.
+    pub async fn public_structures(&self) -> Result<Vec<i64>> {
+        self.get_json("/universe/structures", None).await
+    }
+
+    /// Needs `esi-universe.read_structures.v1`, and access to the structure: a 403 means
+    /// this character is not on its docking list.
+    pub async fn structure(&self, token: &str, structure_id: i64) -> Result<Structure> {
+        self.get_json(&format!("/universe/structures/{structure_id}"), Some(token))
             .await
     }
 

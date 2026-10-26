@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "with prev as (\n                     select solar_system_id from character_status where character_id = $1\n                 )\n                 update character_status\n                 set solar_system_id = $2, station_id = $3, structure_id = $4,\n                     updated_at = now()\n                 where character_id = $1\n                   and (solar_system_id is distinct from $2\n                        or station_id is distinct from $3\n                        or structure_id is distinct from $4)\n                 returning (select solar_system_id from prev) as \"prev_solar_system_id?\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "prev_solar_system_id?",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "0ab845286a71b08ab59526d5761dbbc1cab7b11651b94cd87628954ec69bec8c"
+}

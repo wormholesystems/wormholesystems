@@ -6722,7 +6722,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The ESI permissions the app uses that this character has not granted, so the UI can\nsay which of them is why something does not work for it."
+            "description": "The required ESI permissions this character has not granted, so the UI can\nsay which of them is why something does not work for it."
           },
           "name": {
             "type": "string"
@@ -7836,6 +7836,13 @@
           },
           "corporation_ticker": {
             "type": "string"
+          },
+          "docked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The station or structure, by name. `None` in a private structure nobody with the\nstructures permission has docked in yet."
           },
           "is_docked": {
             "type": "boolean",
@@ -9853,11 +9860,16 @@
         "description": "One ESI permission and whether the acting character has consented to it.",
         "required": [
           "scope",
-          "granted"
+          "granted",
+          "optional"
         ],
         "properties": {
           "granted": {
             "type": "boolean"
+          },
+          "optional": {
+            "type": "boolean",
+            "description": "Not asked for at sign-in, and never warned about when missing."
           },
           "scope": {
             "type": "string"
