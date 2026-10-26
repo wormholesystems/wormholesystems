@@ -4,7 +4,7 @@
 //! What it says is turned into the map's own vocabulary here, once, so the card and the
 //! command that maps a hub's holes read the same typed statuses.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -65,7 +65,10 @@ impl EveScoutConnection {
 /// The feed, with its last read. One per process, in the app state.
 pub struct EveScout {
     url: String,
-    cache: Mutex<Option<(Instant, Vec<EveScoutConnection>)>>,
+    cache: Mutex<Option<(Instant, Arc<Vec<EveScoutConnection>>)>>,
+    /// Held while one request refills the cache, so the viewers that find it stale at the
+    /// same moment wait for that read instead of each making their own.
+    refill: tokio::sync::Mutex<()>,
 }
 
 impl EveScout {
@@ -73,27 +76,41 @@ impl EveScout {
         EveScout {
             url: url.into(),
             cache: Mutex::new(None),
+            refill: tokio::sync::Mutex::new(()),
         }
     }
 
     /// Every public hole out of both hubs. A failed read is an empty list, cached like any
     /// other, so an outage at EVE Scout costs one attempt a minute rather than one per
     /// viewer.
-    pub async fn connections(&self) -> Vec<EveScoutConnection> {
-        if let Some((at, edges)) = self.cache.lock().expect("cache lock").as_ref()
-            && at.elapsed() < CACHE_FOR
-        {
-            return edges.clone();
+    pub async fn connections(&self) -> Arc<Vec<EveScoutConnection>> {
+        if let Some(edges) = self.fresh() {
+            return edges;
         }
-        let edges = match self.fetch().await {
+        let _refill = self.refill.lock().await;
+        // Whoever held the lock before us has likely just refilled it.
+        if let Some(edges) = self.fresh() {
+            return edges;
+        }
+        let edges = Arc::new(match self.fetch().await {
             Ok(edges) => edges,
             Err(err) => {
                 tracing::warn!("eve scout: {err}");
                 Vec::new()
             }
-        };
-        *self.cache.lock().expect("cache lock") = Some((Instant::now(), edges.clone()));
+        });
+        *self.cache.lock().expect("cache lock") = Some((Instant::now(), Arc::clone(&edges)));
         edges
+    }
+
+    /// The last read, while it is still fresh.
+    fn fresh(&self) -> Option<Arc<Vec<EveScoutConnection>>> {
+        self.cache
+            .lock()
+            .expect("cache lock")
+            .as_ref()
+            .filter(|(at, _)| at.elapsed() < CACHE_FOR)
+            .map(|(_, edges)| Arc::clone(edges))
     }
 
     /// The holes out of one hub, ready for the command that maps them.

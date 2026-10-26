@@ -299,3 +299,43 @@ async fn a_viewer_may_not(pool: PgPool) {
     .await;
     assert!(matches!(err, Err(MapError::Forbidden)));
 }
+
+/// Viewers who find the feed stale at the same moment share one read of it.
+#[tokio::test]
+async fn concurrent_viewers_share_one_read_of_the_feed() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use axum::extract::State;
+    use wormholesystems::integrations::eve_scout::EveScout;
+
+    async fn signatures(State(hits): State<Arc<AtomicUsize>>) -> axum::Json<serde_json::Value> {
+        hits.fetch_add(1, Ordering::SeqCst);
+        // Slow enough that every viewer arrives while the read is in flight.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        axum::Json(serde_json::json!([{
+            "in_system_id": THERA, "out_system_id": SYS_A,
+            "in_signature": "AAA-111", "out_signature": "BBB-222"
+        }]))
+    }
+
+    let hits = Arc::new(AtomicUsize::new(0));
+    let feed = axum::Router::new()
+        .route("/signatures", axum::routing::get(signatures))
+        .with_state(hits.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/signatures", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, feed).await.unwrap() });
+
+    let scout = Arc::new(EveScout::new(url));
+    let reads: Vec<_> = (0..8)
+        .map(|_| {
+            let scout = scout.clone();
+            tokio::spawn(async move { scout.connections().await })
+        })
+        .collect();
+    for read in reads {
+        assert_eq!(read.await.unwrap().len(), 1);
+    }
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+}

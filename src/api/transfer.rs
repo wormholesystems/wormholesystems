@@ -7,20 +7,22 @@
 
 use super::extract::Credentials;
 use axum::Json;
-use axum::extract::rejection::JsonRejection;
-use axum::extract::{DefaultBodyLimit, Path, Query, State};
+use axum::body::Bytes;
+use axum::extract::{DefaultBodyLimit, FromRequest, Path, Query, Request, State};
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
-use super::extract::require_actor;
+use super::extract::{require_actor, require_role_on_map};
 use super::{ApiError, ApiResult};
 use crate::app::AppState;
+use crate::maps::Role;
 use crate::maps::transfer::{
-    ImportSummary, SectionSet, TransferCounts, export_map, import_map, import_map_as_new,
-    parse_export, transfer_counts,
+    ImportSummary, SectionSet, TransferCounts, check_may_import_as_new, export_map, import_map,
+    import_map_as_new, parse_export, transfer_counts,
 };
 
 /// Alliance-scale exports run to a few megabytes; comfortably above that, and still a
@@ -148,12 +150,14 @@ async fn import(
     State(state): State<AppState>,
     creds: Credentials,
     Path(map_id): Path<i64>,
-    body: Result<Json<ImportBody>, JsonRejection>,
+    request: Request,
 ) -> ApiResult<ImportSummary> {
-    let Json(body) = body.map_err(|e| ApiError::bad_request(e.to_string()))?;
-    let actor = require_actor(&state.db, &creds).await?;
-    let sections = SectionSet::from_names(&body.sections)?;
-    let parsed = parse_export(&body.content, sections, false)?;
+    let actor = require_role_on_map(&state, &creds, map_id, Role::Manager).await?;
+    let parsed = decode(&state, request, |body: ImportBody| {
+        let sections = SectionSet::from_names(&body.sections)?;
+        Ok(parse_export(&body.content, sections, false)?)
+    })
+    .await?;
     Ok(Json(import_map(&state.db, actor, map_id, &parsed).await?))
 }
 
@@ -178,13 +182,61 @@ struct ImportNewBody {
 async fn import_new(
     State(state): State<AppState>,
     creds: Credentials,
-    body: Result<Json<ImportNewBody>, JsonRejection>,
+    request: Request,
 ) -> ApiResult<crate::maps::Map> {
-    let Json(body) = body.map_err(|e| ApiError::bad_request(e.to_string()))?;
     let actor = require_actor(&state.db, &creds).await?;
-    let sections = SectionSet::from_names(&body.sections)?;
-    let parsed = parse_export(&body.content, sections, true)?;
+    check_may_import_as_new(&state.db, actor, &state.map_creators).await?;
+    let (parsed, name) = decode(&state, request, |body: ImportNewBody| {
+        let sections = SectionSet::from_names(&body.sections)?;
+        Ok((parse_export(&body.content, sections, true)?, body.name))
+    })
+    .await?;
     Ok(Json(
-        import_map_as_new(&state.db, actor, &state.map_creators, parsed, body.name).await?,
+        import_map_as_new(&state.db, actor, &state.map_creators, parsed, name).await?,
     ))
+}
+
+/// Read an import body and turn it into what the import needs. Only called once the caller
+/// has been let in, so a stranger cannot make the server buffer and decode 32 MB. Decoding
+/// and parsing a file that size is CPU work, so it runs on the blocking pool rather than
+/// holding an async worker.
+async fn decode<B, T>(
+    state: &AppState,
+    request: Request,
+    parse: impl FnOnce(B) -> Result<T, ApiError> + Send + 'static,
+) -> Result<T, ApiError>
+where
+    B: DeserializeOwned,
+    T: Send + 'static,
+{
+    let is_json = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .map(str::trim)
+        .is_some_and(|v| v == "application/json" || v.ends_with("+json"));
+    if !is_json {
+        return Err(ApiError::bad_request(
+            "Expected request with `Content-Type: application/json`",
+        ));
+    }
+    // `Bytes` honors the router's `DefaultBodyLimit`, so the 32 MB ceiling still holds.
+    let bytes = Bytes::from_request(request, state)
+        .await
+        .map_err(|rejection| ApiError {
+            status: rejection.status(),
+            message: rejection.body_text(),
+        })?;
+    tokio::task::spawn_blocking(move || {
+        let body = serde_json::from_slice::<B>(&bytes).map_err(|e| {
+            ApiError::bad_request(format!("Failed to deserialize the JSON body: {e}"))
+        })?;
+        parse(body)
+    })
+    .await
+    .map_err(|e| ApiError {
+        status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        message: e.to_string(),
+    })?
 }

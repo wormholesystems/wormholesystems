@@ -28,7 +28,9 @@ pub fn routes() -> OpenApiRouter<AppState> {
     responses((status = 200, body = Vec<EveScoutConnection>, description = "OK")),
     security(()),
 )]
-pub async fn eve_scout(State(state): State<AppState>) -> ApiResult<Vec<EveScoutConnection>> {
+pub async fn eve_scout(
+    State(state): State<AppState>,
+) -> ApiResult<std::sync::Arc<Vec<EveScoutConnection>>> {
     Ok(Json(state.eve_scout.connections().await))
 }
 
