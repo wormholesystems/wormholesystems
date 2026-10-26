@@ -60,10 +60,9 @@ pub async fn login(
     // would revoke them.
     let mut scopes: Vec<Scope> = Vec::new();
     if let (Some(requested), Some(actor)) = (query.scopes.as_deref(), actor.as_ref()) {
-        for scope in
-            crate::identity::characters::granted_scopes(&state.db, actor.character_id).await
-        {
-            scopes.push(scope);
+        match crate::identity::characters::granted_scopes(&state.db, actor.character_id).await {
+            Ok(granted) => scopes.extend(granted),
+            Err(err) => return server_error(err),
         }
         for name in requested.split(',') {
             if let Some(scope) = Scope::parse(name.trim())
@@ -140,25 +139,20 @@ async fn finish_login(state: &AppState, jar: CookieJar, query: CallbackQuery) ->
 
     let (token, claims) = match state.sso.exchange_code(&query.code).await {
         Ok(pair) => pair,
-        Err(err) => {
-            return (StatusCode::BAD_GATEWAY, format!("login failed: {err}")).into_response();
-        }
+        Err(err) => return upstream_error("EVE's login did not complete", err),
     };
 
     // Corp/alliance drive access checks, so they're required and refreshed on every login.
     // We also cache the entity rows (name/ticker) the character's deferred FKs reference.
-    let affiliation = state
-        .esi
-        .affiliation(&[claims.character_id])
-        .await
-        .ok()
-        .and_then(|a| a.into_iter().next());
+    let affiliation = match state.esi.affiliation(&[claims.character_id]).await {
+        Ok(found) => found.into_iter().next(),
+        Err(err) => return upstream_error("could not resolve character affiliation", err),
+    };
     let Some(affiliation) = affiliation else {
-        return (
-            StatusCode::BAD_GATEWAY,
+        return upstream_error(
             "could not resolve character affiliation",
-        )
-            .into_response();
+            format!("ESI had no affiliation for {}", claims.character_id),
+        );
     };
 
     // Before anything is stored: a refused character gets no account, no token and no
@@ -171,8 +165,9 @@ async fn finish_login(state: &AppState, jar: CookieJar, query: CallbackQuery) ->
         return Redirect::to(refused_destination(flow.link_user_id.is_some())).into_response();
     }
 
-    let Ok(corp) = state.esi.corporation(affiliation.corporation_id).await else {
-        return (StatusCode::BAD_GATEWAY, "could not resolve corporation").into_response();
+    let corp = match state.esi.corporation(affiliation.corporation_id).await {
+        Ok(corp) => corp,
+        Err(err) => return upstream_error("could not resolve corporation", err),
     };
     let corporation = session::Entity {
         id: affiliation.corporation_id,
@@ -186,9 +181,7 @@ async fn finish_login(state: &AppState, jar: CookieJar, query: CallbackQuery) ->
                 name: a.name,
                 ticker: a.ticker,
             }),
-            Err(_) => {
-                return (StatusCode::BAD_GATEWAY, "could not resolve alliance").into_response();
-            }
+            Err(err) => return upstream_error("could not resolve alliance", err),
         },
         None => None,
     };
@@ -214,10 +207,12 @@ async fn finish_login(state: &AppState, jar: CookieJar, query: CallbackQuery) ->
         return server_error(err);
     }
 
-    let session_id = match session::create_session(&state.db, user_id, claims.character_id).await {
-        Ok(id) => id,
-        Err(err) => return server_error(err),
-    };
+    let current = jar.get(session::SESSION_COOKIE).map(|c| c.value());
+    let session_id =
+        match session::resume_or_create(&state.db, current, user_id, claims.character_id).await {
+            Ok(id) => id,
+            Err(err) => return server_error(err),
+        };
 
     let cookie = session_cookie(session_id, state.secure_cookies);
     let destination = flow.redirect_to.unwrap_or_else(|| "/".to_string());
@@ -254,7 +249,8 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> Response {
         let _ = session::delete_session(&state.db, cookie.value()).await;
     }
     (
-        jar.remove(Cookie::from(session::SESSION_COOKIE)),
+        // The path has to match the one it was set with, or the browser keeps the cookie.
+        jar.remove(Cookie::build(session::SESSION_COOKIE).path("/")),
         Redirect::to("/"),
     )
         .into_response()
@@ -262,6 +258,13 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> Response {
 
 /// A failure on our side. The detail is for the log: a database error describes the schema,
 /// and the person mid-login can do nothing with it.
+/// EVE or ESI let the login down. The detail (status codes, response bodies, URLs) is for
+/// the log; the person signing in gets what failed and that trying again may work.
+fn upstream_error(what: &str, err: impl std::fmt::Display) -> Response {
+    tracing::warn!("login failed: {what}: {err}");
+    (StatusCode::BAD_GATEWAY, format!("{what}, please try again")).into_response()
+}
+
 fn server_error(err: impl std::fmt::Display) -> Response {
     tracing::error!("login failed: {err}");
     (

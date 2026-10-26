@@ -6,7 +6,8 @@ use sqlx::PgPool;
 use wormholesystems::esi::jwt::Claims;
 use wormholesystems::session::{
     Entity, SESSION_DAYS, actor_for_session, create_session, delete_session,
-    ensure_preferred_character, persist_identity, set_active_character, set_preferred_character,
+    ensure_preferred_character, persist_identity, resume_or_create, set_active_character,
+    set_preferred_character,
 };
 
 fn claims(character_id: i64, owner_hash: &str) -> Claims {
@@ -314,6 +315,51 @@ async fn session_lifecycle_and_character_switch(pool: PgPool) {
     // Logout invalidates the session.
     delete_session(&pool, &session).await.unwrap();
     assert!(actor_for_session(&pool, &session).await.unwrap().is_none());
+}
+
+#[sqlx::test]
+async fn a_login_from_a_signed_in_browser_keeps_its_session_and_character(pool: PgPool) {
+    let user = persist_identity(&pool, &claims(100, "h1"), corp(2001), None, None)
+        .await
+        .unwrap();
+    persist_identity(&pool, &claims(200, "h2"), corp(2001), None, Some(user))
+        .await
+        .unwrap();
+    let other = persist_identity(&pool, &claims(300, "h3"), corp(2001), None, None)
+        .await
+        .unwrap();
+    let session = create_session(&pool, user, 100).await.unwrap();
+    assert!(set_active_character(&pool, &session, 200).await.unwrap());
+
+    // Topping up the alt's permissions, or adding another alt: same account, same session,
+    // still flying the alt.
+    let resumed = resume_or_create(&pool, Some(&session), user, 200)
+        .await
+        .unwrap();
+    assert_eq!(resumed, session);
+    let actor = actor_for_session(&pool, &session).await.unwrap().unwrap();
+    assert_eq!(actor.character_id, 200);
+
+    // Signing in to another account ends the one the browser had.
+    let switched = resume_or_create(&pool, Some(&session), other, 300)
+        .await
+        .unwrap();
+    assert_ne!(switched, session);
+    assert!(actor_for_session(&pool, &session).await.unwrap().is_none());
+    assert_eq!(
+        actor_for_session(&pool, &switched)
+            .await
+            .unwrap()
+            .unwrap()
+            .user_id,
+        other
+    );
+
+    // A cookie for a session that is already gone is no reason to fail.
+    let fresh = resume_or_create(&pool, Some("gone"), user, 100)
+        .await
+        .unwrap();
+    assert!(actor_for_session(&pool, &fresh).await.unwrap().is_some());
 }
 
 #[sqlx::test]
