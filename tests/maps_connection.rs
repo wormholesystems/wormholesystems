@@ -336,7 +336,7 @@ async fn age_by(pool: &PgPool, connection_id: i64, hours: i32) {
     .bind(hours)
     .execute(pool)
     .await
-    .unwrap();
+    .expect("update map_connections");
 }
 
 async fn marked_ago(pool: &PgPool, connection_id: i64, hours: i32) {
@@ -348,7 +348,7 @@ async fn marked_ago(pool: &PgPool, connection_id: i64, hours: i32) {
     .bind(hours)
     .execute(pool)
     .await
-    .unwrap();
+    .expect("update map_connections");
 }
 
 /// A wormhole signature in Jita, already linked to the connection.
@@ -362,7 +362,7 @@ async fn link_signature_row(pool: &PgPool, map_id: i64, connection_id: i64) -> i
     .bind(connection_id)
     .fetch_one(pool)
     .await
-    .unwrap()
+    .expect("insert signatures")
 }
 
 async fn status_of(pool: &PgPool, connection_id: i64) -> Option<TimeStatus> {
@@ -370,7 +370,7 @@ async fn status_of(pool: &PgPool, connection_id: i64) -> Option<TimeStatus> {
         .bind(connection_id)
         .fetch_one(pool)
         .await
-        .unwrap()
+        .expect("query map_connections")
 }
 
 /// The clock marks a plain hole EOL at 20 hours and critical at 23, records each mark as a
@@ -675,7 +675,11 @@ async fn clocks_of(
         }
         _ => "select created_at, time_status_updated_at from signatures where id = $1",
     };
-    sqlx::query_as(sql).bind(id).fetch_one(pool).await.unwrap()
+    sqlx::query_as(sql)
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .expect("run query")
 }
 
 /// Undoing a removal puts the hole and the scan back as old as they were and EOL since when
@@ -765,7 +769,7 @@ async fn swept_rows(pool: &PgPool, map_id: i64) -> Vec<serde_json::Value> {
                 .bind(map_id)
                 .fetch_one(pool)
                 .await
-                .unwrap(),
+                .expect("run query"),
         );
     }
     out

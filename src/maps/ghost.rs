@@ -84,13 +84,18 @@ pub(super) async fn reconcile(
     tx: &mut Tx<'_>,
     map_id: i64,
 ) -> Result<(Vec<MapCommand>, Vec<MapEvent>)> {
-    let wanted = sqlx::query_scalar!(
+    let wanted = if sqlx::query_scalar!(
         "select ghost_unlinked_wormholes from maps where id = $1",
         map_id,
     )
     .fetch_optional(&mut **tx)
     .await?
-    .unwrap_or(false);
+    .unwrap_or(false)
+    {
+        Ghosts::Wanted
+    } else {
+        Ghosts::Unwanted
+    };
 
     let mut undo = Vec::new();
     let mut events = Vec::new();
@@ -102,7 +107,7 @@ pub(super) async fn reconcile(
             map_solar_system_id: *id,
         }));
     }
-    if wanted {
+    if wanted == Ghosts::Wanted {
         let (raised, raised_events) = raise_unmapped_holes(tx, map_id).await?;
         events.extend(raised_events);
         if !raised.is_empty() {
@@ -118,13 +123,20 @@ pub(super) async fn reconcile(
     Ok((undo, events))
 }
 
+/// Whether the map raises ghosts for unlinked wormholes (`maps.ghost_unlinked_wormholes`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ghosts {
+    Wanted,
+    Unwanted,
+}
+
 /// The ghosts the map no longer owes: those whose scan has stopped being an unmapped
 /// wormhole, whether it was retyped, linked to a real system or unlinked from this node,
 /// and, on a map that wants none, all of them. A scan that has been deleted outright, or a
 /// system that has been taken off the map, are the database's business rather than ours:
 /// both cascade. Home, pinned and rally nodes are deliberate markers and survive here as
 /// they do everywhere else.
-async fn unclaimed_ghosts(tx: &mut Tx<'_>, map_id: i64, wanted: bool) -> Result<Vec<i64>> {
+async fn unclaimed_ghosts(tx: &mut Tx<'_>, map_id: i64, wanted: Ghosts) -> Result<Vec<i64>> {
     Ok(sqlx::query_scalar!(
         r#"select g.id as "id!" from map_solar_systems g
            join signatures s on s.id = g.raised_by_signature_id
@@ -139,7 +151,7 @@ async fn unclaimed_ghosts(tx: &mut Tx<'_>, map_id: i64, wanted: bool) -> Result<
                         and (c.from_system = g.id or c.to_system = g.id)
                   ))"#,
         map_id,
-        wanted,
+        wanted == Ghosts::Wanted,
     )
     .fetch_all(&mut **tx)
     .await?)
@@ -450,6 +462,43 @@ pub(super) async fn apply_resolve_ghost_system(
 
     // Whatever survives the merge is what carries the alias; the ghost row may not.
     let surviving = existing.unwrap_or(cmd.map_solar_system_id);
+    let (undo, events) = carry_details(tx, &cmd, surviving).await?;
+
+    let effect = if let Some(target) = existing {
+        merge(tx, cmd.map_id, cmd.map_solar_system_id, target, &name).await
+    } else {
+        let was = Raised {
+            signature_pk: placement.raised_by_signature_id.ok_or(MapError::NotFound)?,
+            from_system: placement.hangs_off_id.ok_or(MapError::NotFound)?,
+        };
+        let placed =
+            placements::assign_system(tx, cmd.map_id, cmd.map_solar_system_id, solar_system_id)
+                .await?;
+        claim_pending_for(tx, cmd.map_id, cmd.map_solar_system_id, solar_system_id).await?;
+        Ok(Effect::new(
+            "systems.details",
+            format!("scanned that hole as {name}"),
+            CommandOutput::System(Box::new(placed)),
+        )
+        .undo_with(MapCommand::ResolveGhostSystem(
+            ResolveGhostSystem::unresolve(cmd.map_id, cmd.map_solar_system_id, was),
+        ))
+        .emit(MapEvent::SystemDetailsChanged {
+            map_id: cmd.map_id,
+            map_solar_system_id: cmd.map_solar_system_id,
+        }))
+    }?;
+
+    Ok(with_undo_steps(cmd.map_id, undo, effect).emit_all(events))
+}
+
+/// Set the alias and connection status the resolve carries, on whichever node survives the
+/// merge. Returns their undo steps and events.
+async fn carry_details(
+    tx: &mut Tx<'_>,
+    cmd: &ResolveGhostSystem,
+    surviving: i64,
+) -> Result<(Vec<MapCommand>, Vec<MapEvent>)> {
     let mut undo = Vec::new();
     let mut events = Vec::new();
     if let Some(alias) = cmd.alias.clone() {
@@ -494,34 +543,7 @@ pub(super) async fn apply_resolve_ghost_system(
             events.extend(effect.events);
         }
     }
-
-    let effect = match existing {
-        Some(target) => merge(tx, cmd.map_id, cmd.map_solar_system_id, target, &name).await,
-        None => {
-            let was = Raised {
-                signature_pk: placement.raised_by_signature_id.ok_or(MapError::NotFound)?,
-                from_system: placement.hangs_off_id.ok_or(MapError::NotFound)?,
-            };
-            let placed =
-                placements::assign_system(tx, cmd.map_id, cmd.map_solar_system_id, solar_system_id)
-                    .await?;
-            claim_pending_for(tx, cmd.map_id, cmd.map_solar_system_id, solar_system_id).await?;
-            Ok(Effect::new(
-                "systems.details",
-                format!("scanned that hole as {name}"),
-                CommandOutput::System(Box::new(placed)),
-            )
-            .undo_with(MapCommand::ResolveGhostSystem(
-                ResolveGhostSystem::unresolve(cmd.map_id, cmd.map_solar_system_id, was),
-            ))
-            .emit(MapEvent::SystemDetailsChanged {
-                map_id: cmd.map_id,
-                map_solar_system_id: cmd.map_solar_system_id,
-            }))
-        }
-    }?;
-
-    Ok(with_undo_steps(cmd.map_id, undo, effect).emit_all(events))
+    Ok((undo, events))
 }
 
 /// Put the alias and status back before the node itself goes, so one jump is one undo.

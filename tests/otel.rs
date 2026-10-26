@@ -17,7 +17,7 @@ use tower::ServiceExt;
 #[sqlx::test]
 async fn a_request_span_is_exported_by_its_route(pool: PgPool) {
     let seen: Arc<Mutex<Vec<Bytes>>> = Arc::default();
-    let keep = seen.clone();
+    let keep = Arc::clone(&seen);
     let collector = Router::new().route(
         "/v1/traces",
         post(move |body: Bytes| {

@@ -23,14 +23,10 @@ pub struct Swept {
 
 /// Spawn the daily sweep. Returns immediately; the loop runs for the process lifetime.
 pub fn start(pool: PgPool) {
-    crate::background::spawn_every(
-        "retention sweep",
-        Duration::from_secs(24 * 60 * 60),
-        move || {
-            let pool = pool.clone();
-            async move { sweep(&pool).await.map(drop) }
-        },
-    );
+    crate::background::spawn_every("retention sweep", Duration::from_hours(24), move || {
+        let pool = pool.clone();
+        async move { sweep(&pool).await.map(drop) }
+    });
 }
 
 pub async fn sweep(pool: &PgPool) -> sqlx::Result<Swept> {

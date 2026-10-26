@@ -102,7 +102,7 @@ async fn user_heartbeat(mut socket: WebSocket, pool: sqlx::PgPool, users: UserHu
 
     loop {
         tokio::select! {
-            _ = crate::background::stopped() => {
+            () = crate::background::stopped() => {
                 going_away(socket).await;
                 break;
             }
@@ -183,7 +183,7 @@ async fn stream_map_events(
     recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
         let received = tokio::select! {
-            _ = crate::background::stopped() => {
+            () = crate::background::stopped() => {
                 going_away(socket).await;
                 return;
             }

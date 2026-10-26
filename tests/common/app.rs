@@ -9,6 +9,7 @@ use axum::body::Body;
 use axum::http::{Request, Response, StatusCode, header};
 use sqlx::PgPool;
 use tower::ServiceExt;
+use wormholesystems::allowlist::AffiliationAllowlist;
 use wormholesystems::app::AppState;
 use wormholesystems::esi::sso::{Sso, SsoConfig};
 use wormholesystems::maps::Actor;
@@ -17,15 +18,15 @@ use wormholesystems::server_status::{ServerState, ServerStatus, ServerWatch};
 /// The real router with a test `AppState`. SSO and the server watch are stubs: nothing
 /// under test touches EVE, but every route, extractor and error mapping is the production
 /// one, the WebSockets included.
-pub fn app(pool: &PgPool) -> Router {
+pub(crate) fn app(pool: &PgPool) -> Router {
     wormholesystems::app::router(state(pool))
 }
 
 /// The state the router runs on, for the code that takes it directly, such as the bot.
-pub fn state(pool: &PgPool) -> AppState {
+pub(crate) fn state(pool: &PgPool) -> AppState {
     let http = reqwest::Client::new();
     let sso = Sso::stub(
-        http.clone(),
+        http,
         SsoConfig {
             client_id: "test".into(),
             client_secret: "test".into(),
@@ -51,8 +52,8 @@ pub fn state(pool: &PgPool) -> AppState {
         backgrounds: wormholesystems::maps::BackgroundStore::new(
             std::env::temp_dir().join("ws-test-uploads"),
         ),
-        allowed_logins: Default::default(),
-        map_creators: Default::default(),
+        allowed_logins: AffiliationAllowlist::default(),
+        map_creators: AffiliationAllowlist::default(),
         announcement: None,
         eve_scout: Arc::new(wormholesystems::integrations::eve_scout::EveScout::new(
             "http://127.0.0.1:9/unreachable",
@@ -62,14 +63,14 @@ pub fn state(pool: &PgPool) -> AppState {
 }
 
 /// A signed-in session for `actor`, as the cookie header value the browser would send.
-pub async fn session_cookie(pool: &PgPool, actor: Actor) -> String {
+pub(crate) async fn session_cookie(pool: &PgPool, actor: Actor) -> String {
     let id = wormholesystems::session::create_session(pool, actor.user_id, actor.character_id)
         .await
-        .unwrap();
+        .expect("create_session");
     format!("ws_session={id}")
 }
 
-pub struct TestResponse {
+pub(crate) struct TestResponse {
     pub status: StatusCode,
     pub body: serde_json::Value,
     pub headers: header::HeaderMap,
@@ -77,29 +78,29 @@ pub struct TestResponse {
 
 impl TestResponse {
     /// Every `Set-Cookie` the response carries, as sent.
-    pub fn set_cookies(&self) -> Vec<String> {
+    pub(crate) fn set_cookies(&self) -> Vec<String> {
         self.headers
             .get_all(header::SET_COOKIE)
             .iter()
-            .map(|v| v.to_str().unwrap().to_string())
+            .map(|v| v.to_str().expect("header is ASCII").to_string())
             .collect()
     }
 
-    pub fn location(&self) -> Option<&str> {
+    pub(crate) fn location(&self) -> Option<&str> {
         self.headers
             .get(header::LOCATION)
-            .map(|v| v.to_str().unwrap())
+            .map(|v| v.to_str().expect("header is ASCII"))
     }
 }
 
 /// Any request, for the ones `get` and `request_json` cannot build.
-pub async fn send(app: Router, req: Request<Body>) -> TestResponse {
+pub(crate) async fn send(app: Router, req: Request<Body>) -> TestResponse {
     let response: Response<Body> = app.oneshot(req).await.unwrap();
     let status = response.status();
     let headers = response.headers().clone();
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
-        .unwrap();
+        .expect("read response body");
     let body = if bytes.is_empty() {
         serde_json::Value::Null
     } else {
@@ -112,15 +113,15 @@ pub async fn send(app: Router, req: Request<Body>) -> TestResponse {
     }
 }
 
-pub async fn get(app: Router, path: &str, cookie: Option<&str>) -> TestResponse {
+pub(crate) async fn get(app: Router, path: &str, cookie: Option<&str>) -> TestResponse {
     let mut builder = Request::builder().uri(path);
     if let Some(cookie) = cookie {
         builder = builder.header(header::COOKIE, cookie);
     }
-    send(app, builder.body(Body::empty()).unwrap()).await
+    send(app, builder.body(Body::empty()).expect("build request")).await
 }
 
-pub async fn request_json(
+pub(crate) async fn request_json(
     app: Router,
     method: &str,
     path: &str,
@@ -134,5 +135,11 @@ pub async fn request_json(
     if let Some(cookie) = cookie {
         builder = builder.header(header::COOKIE, cookie);
     }
-    send(app, builder.body(Body::from(body.to_string())).unwrap()).await
+    send(
+        app,
+        builder
+            .body(Body::from(body.to_string()))
+            .expect("build request"),
+    )
+    .await
 }

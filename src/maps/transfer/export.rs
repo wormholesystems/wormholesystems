@@ -238,7 +238,10 @@ async fn export_connections(
         let (Some(from_ss), Some(to_ss)) = (row.from_ss, row.to_ss) else {
             continue;
         };
-        indexes.insert(row.id, exported.len() as i64);
+        indexes.insert(
+            row.id,
+            i64::try_from(exported.len()).expect("a map holds far fewer than i64::MAX connections"),
+        );
         exported.push(ConnectionRow {
             from_solarsystem_id: from_ss,
             to_solarsystem_id: to_ss,

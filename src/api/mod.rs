@@ -72,42 +72,60 @@ pub struct ApiError {
 }
 
 /// What every error answers with.
-#[derive(Serialize, ToSchema)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ErrorBody {
     pub error: String,
 }
 
 // The error responses, named once so every handler can point at the same description.
 // They exist for the document only; the field is what says the body is an `ErrorBody`.
-#[allow(dead_code)]
-#[derive(ToResponse)]
+#[expect(
+    dead_code,
+    reason = "only described in the OpenAPI document, never built"
+)]
+#[derive(Debug, ToResponse)]
 #[response(
     description = "The request does not make sense: a missing field, a value out of range, or a body naming a different map than the URL"
 )]
 pub struct BadRequest(ErrorBody);
 
-#[allow(dead_code)]
-#[derive(ToResponse)]
+#[expect(
+    dead_code,
+    reason = "only described in the OpenAPI document, never built"
+)]
+#[derive(Debug, ToResponse)]
 #[response(description = "Nobody is signed in, or the bearer token is unknown, revoked or expired")]
 pub struct Unauthorized(ErrorBody);
 
-#[allow(dead_code)]
-#[derive(ToResponse)]
+#[expect(
+    dead_code,
+    reason = "only described in the OpenAPI document, never built"
+)]
+#[derive(Debug, ToResponse)]
 #[response(description = "Signed in, but the role on this map does not allow it")]
 pub struct Forbidden(ErrorBody);
 
-#[allow(dead_code)]
-#[derive(ToResponse)]
+#[expect(
+    dead_code,
+    reason = "only described in the OpenAPI document, never built"
+)]
+#[derive(Debug, ToResponse)]
 #[response(description = "No such thing, or not one the caller may know about")]
 pub struct NotFound(ErrorBody);
 
-#[allow(dead_code)]
-#[derive(ToResponse)]
+#[expect(
+    dead_code,
+    reason = "only described in the OpenAPI document, never built"
+)]
+#[derive(Debug, ToResponse)]
 #[response(description = "The change contradicts the map's current state")]
 pub struct Conflict(ErrorBody);
 
-#[allow(dead_code)]
-#[derive(ToResponse)]
+#[expect(
+    dead_code,
+    reason = "only described in the OpenAPI document, never built"
+)]
+#[derive(Debug, ToResponse)]
 #[response(description = "EVE's API refused or failed")]
 pub struct UpstreamFailed(ErrorBody);
 
@@ -116,8 +134,7 @@ pub struct UpstreamFailed(ErrorBody);
 
 /// What a write to a map can be refused with: a bad body, nobody signed in, too low a role,
 /// no such map (or no access to it), or a change the map's state contradicts.
-#[allow(dead_code)]
-#[derive(IntoResponses)]
+#[derive(Debug, IntoResponses)]
 pub enum MapWriteErrors {
     #[response(status = 400)]
     BadRequest(#[ref_response] BadRequest),
@@ -132,8 +149,7 @@ pub enum MapWriteErrors {
 }
 
 /// What a role-gated read of a map can be refused with.
-#[allow(dead_code)]
-#[derive(IntoResponses)]
+#[derive(Debug, IntoResponses)]
 pub enum MapReadErrors {
     #[response(status = 401)]
     Unauthorized(#[ref_response] Unauthorized),
@@ -145,8 +161,7 @@ pub enum MapReadErrors {
 
 /// What a read that a share link also opens can be refused with: there is no role to fall
 /// short of, only access or none.
-#[allow(dead_code)]
-#[derive(IntoResponses)]
+#[derive(Debug, IntoResponses)]
 pub enum SharedReadErrors {
     #[response(status = 401)]
     Unauthorized(#[ref_response] Unauthorized),
@@ -155,8 +170,7 @@ pub enum SharedReadErrors {
 }
 
 /// What an endpoint that only needs someone signed in can be refused with.
-#[allow(dead_code)]
-#[derive(IntoResponses)]
+#[derive(Debug, IntoResponses)]
 pub enum AuthedErrors {
     #[response(status = 401)]
     Unauthorized(#[ref_response] Unauthorized),
@@ -353,7 +367,7 @@ fn split() -> (Router<AppState>, utoipa::openapi::OpenApi) {
         .flatten()
         {
             if operation.security.is_none() {
-                operation.security = default.clone();
+                operation.security.clone_from(&default);
             }
         }
     }

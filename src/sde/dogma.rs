@@ -4,6 +4,10 @@ use serde::Deserialize;
 /// `dogmaAttributes.jsonl`
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "mirrors the SDE file, whose flags are independent booleans"
+)]
 pub struct DogmaAttribute {
     #[serde(rename = "_key")]
     pub id: i64,
@@ -35,6 +39,10 @@ pub struct DogmaAttribute {
 /// `dogmaEffects.jsonl`
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "mirrors the SDE file, whose flags are independent booleans"
+)]
 pub struct DogmaEffect {
     #[serde(rename = "_key")]
     pub id: i64,

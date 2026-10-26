@@ -19,7 +19,7 @@ use crate::pilots::poller::run_bounded;
 use crate::server_status::ServerWatch;
 
 /// Structures change hands and names slowly; an hour keeps new ones turning up promptly.
-const INTERVAL: Duration = Duration::from_secs(60 * 60);
+const INTERVAL: Duration = Duration::from_hours(1);
 
 /// Lookups per pass. The first passes work through the whole public list, so this is what
 /// keeps that from being one burst against ESI.
@@ -37,7 +37,7 @@ pub fn start(
     server: ServerWatch,
 ) {
     crate::background::spawn_every("structure sync", INTERVAL, move || {
-        let (pool, sso, tokens) = (pool.clone(), sso.clone(), tokens.clone());
+        let (pool, sso, tokens) = (pool.clone(), Arc::clone(&sso), Arc::clone(&tokens));
         let (esi, server) = (esi.clone(), server.clone());
         async move {
             if server.should_poll() {
@@ -75,7 +75,8 @@ async fn sync_once(pool: &PgPool, sso: &Sso, tokens: &TokenCache, esi: &EsiClien
     let halted = Arc::new(AtomicBool::new(false));
     run_bounded(&wanted, CONCURRENCY, |id| {
         let (pool, esi, token) = (pool.clone(), esi.clone(), token.clone());
-        let (named, failed, halted) = (named.clone(), failed.clone(), halted.clone());
+        let (named, failed, halted) =
+            (Arc::clone(&named), Arc::clone(&failed), Arc::clone(&halted));
         async move {
             if halted.load(Ordering::Relaxed) {
                 return;
@@ -148,10 +149,10 @@ async fn borrow_token(pool: &PgPool, sso: &Sso, tokens: &TokenCache) -> Option<S
         {
             Ok(token) if token.has_scope(Scope::ReadStructures) => return Some(token.access_token),
             Ok(_) => {
-                tracing::debug!("structure sync: token for {character_id} lacks the scope")
+                tracing::debug!("structure sync: token for {character_id} lacks the scope");
             }
             Err(err) => {
-                tracing::debug!("structure sync: token for {character_id} unusable: {err}")
+                tracing::debug!("structure sync: token for {character_id} unusable: {err}");
             }
         }
     }

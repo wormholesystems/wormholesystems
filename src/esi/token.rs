@@ -25,7 +25,10 @@ impl Token {
 
 /// Token persistence, implemented by the database layer so the ESI/SSO code never
 /// depends on a concrete store.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "every implementation lives in this crate, so no outside caller needs a Send bound on the futures"
+)]
 pub trait TokenStore {
     /// The character's token. A token EVE has refused is
     /// [`EsiError::TokenRejected`](super::EsiError::TokenRejected), not a token.

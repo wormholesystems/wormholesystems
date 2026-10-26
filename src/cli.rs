@@ -10,6 +10,7 @@ use crate::config::{Contact, DatabaseConfig, DiscordRegistration};
 use crate::esi::EsiClient;
 
 /// What the arguments ask for.
+#[derive(Debug)]
 pub enum Command {
     Serve,
     /// Populate the reference tables from the SDE + data/static.
@@ -96,12 +97,17 @@ pub async fn run(command: Command) {
         }
         Command::SdeFetch { force } => {
             init_contact();
-            match tokio::task::spawn_blocking(move || crate::sde::fetch(force))
+            let mode = if force {
+                crate::sde::Fetch::Replace
+            } else {
+                crate::sde::Fetch::IfMissing
+            };
+            match tokio::task::spawn_blocking(move || crate::sde::fetch(mode))
                 .await
                 .expect("join failed")
             {
                 Ok(true) => {
-                    tracing::info!("SDE downloaded and unpacked into {}", crate::sde::SDE_DIR)
+                    tracing::info!("SDE downloaded and unpacked into {}", crate::sde::SDE_DIR);
                 }
                 Ok(false) => tracing::info!("SDE already unpacked in {}", crate::sde::SDE_DIR),
                 Err(err) => panic!("could not fetch the SDE: {err}"),
@@ -136,6 +142,10 @@ fn init_contact() {
     crate::user_agent::init(&contact);
 }
 
+#[expect(
+    clippy::print_stdout,
+    reason = "the command's answer goes to stdout, where wsctl parses it"
+)]
 async fn sde_status(db: &PgPool) {
     // `query!` rather than `query_as`: the row is built from the real schema at compile
     // time, so a renamed column or a changed type stops the build instead of this.
@@ -162,7 +172,7 @@ async fn sde_status(db: &PgPool) {
     match latest {
         Ok(latest) => {
             println!("latest={}", latest.build_number);
-            let stale = loaded.map(|(b, _)| b < latest.build_number).unwrap_or(true);
+            let stale = loaded.is_none_or(|(b, _)| b < latest.build_number);
             println!("update_available={}", if stale { "yes" } else { "no" });
         }
         // A deploy should not fail because CCP's endpoint is having a moment.
@@ -175,7 +185,7 @@ mod tests {
     use super::Command;
 
     fn parse(args: &[&str]) -> Result<Command, String> {
-        Command::parse(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>())
+        Command::parse(&args.iter().map(ToString::to_string).collect::<Vec<_>>())
     }
 
     #[test]

@@ -1,10 +1,18 @@
 //! Set up and run WormholeSystems on one machine.
 
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "wsctl is an interactive CLI; printing is its output"
+)]
+
 use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use console::style;
+
+use crate::wizard::{Confirmation, Dump, Sde};
 
 mod checks;
 mod config;
@@ -87,9 +95,20 @@ fn run() -> Result<()> {
             let vars: Vec<(String, String)> = std::env::vars().collect();
             wizard::setup(runner, &dir, non_interactive.then_some(vars.as_slice()))
         }
-        Some(Command::Update { sde, no_backup }) => wizard::update(runner, &dir, sde, !no_backup),
+        Some(Command::Update { sde, no_backup }) => {
+            let sde = if sde { Sde::Force } else { Sde::IfNewer };
+            let dump = if no_backup { Dump::Skip } else { Dump::First };
+            wizard::update(runner, &dir, sde, dump)
+        }
         Some(Command::Backup) => wizard::backup(runner, &dir),
-        Some(Command::Restore { file, yes }) => wizard::restore(runner, &dir, &file, yes),
+        Some(Command::Restore { file, yes }) => {
+            let confirmation = if yes {
+                Confirmation::Given
+            } else {
+                Confirmation::Ask
+            };
+            wizard::restore(runner, &dir, &file, confirmation)
+        }
         Some(Command::Status) => wizard::status(runner, &dir),
         Some(Command::Integrate) => wizard::integrate(&dir),
         Some(Command::DiscordRegister) => wizard::discord_register(runner, &dir),

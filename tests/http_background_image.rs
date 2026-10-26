@@ -40,7 +40,7 @@ async fn upload(
         .header(header::CONTENT_TYPE, content_type)
         .header(header::COOKIE, cookie)
         .body(Body::from(body))
-        .unwrap();
+        .expect("build request");
     common::app::send(app(pool), req).await
 }
 
@@ -53,7 +53,7 @@ async fn fetch_image(
         .uri(format!("/api/maps/{map_id}/background-image"))
         .header(header::COOKIE, cookie)
         .body(Body::empty())
-        .unwrap();
+        .expect("build request");
     let response = app(pool).oneshot(req).await.unwrap();
     let status = response.status();
     let content_type = response
@@ -63,7 +63,7 @@ async fn fetch_image(
         .map(str::to_string);
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
-        .unwrap();
+        .expect("read response body");
     (status, content_type, bytes.to_vec())
 }
 

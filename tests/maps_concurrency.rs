@@ -22,7 +22,7 @@ async fn seed_more_systems(pool: &PgPool) -> Vec<i64> {
         .bind(format!("System {id}"))
         .execute(pool)
         .await
-        .unwrap();
+        .expect("insert solar_systems");
     }
     ids
 }
@@ -33,7 +33,7 @@ async fn steps(pool: &PgPool, map_id: i64) -> Vec<(i64, Option<i64>)> {
         .bind(map_id)
         .fetch_all(pool)
         .await
-        .unwrap()
+        .expect("query map_events")
 }
 
 async fn head(pool: &PgPool, map_id: i64) -> Option<i64> {
@@ -41,7 +41,7 @@ async fn head(pool: &PgPool, map_id: i64) -> Option<i64> {
         .bind(map_id)
         .fetch_one(pool)
         .await
-        .unwrap()
+        .expect("query maps")
 }
 
 async fn placed(pool: &PgPool, map_id: i64) -> i64 {
@@ -49,7 +49,7 @@ async fn placed(pool: &PgPool, map_id: i64) -> i64 {
         .bind(map_id)
         .fetch_one(pool)
         .await
-        .unwrap()
+        .expect("query map_solar_systems")
 }
 
 #[sqlx::test]
@@ -64,9 +64,10 @@ async fn concurrent_changes_form_one_chain_and_concurrent_undos_take_distinct_st
             let pool = pool.clone();
             let owner = w.owner;
             let map_id = w.map_id;
-            tokio::spawn(async move {
-                common::map::place_at(&pool, owner, map_id, system, i as f64 * 200.0).await
-            })
+            let x = f64::from(u32::try_from(i).expect("a handful of writers")) * 200.0;
+            tokio::spawn(
+                async move { common::map::place_at(&pool, owner, map_id, system, x).await },
+            )
         })
         .collect();
     for writer in writers {
@@ -75,7 +76,10 @@ async fn concurrent_changes_form_one_chain_and_concurrent_undos_take_distinct_st
 
     // Every change is a step, each on top of the one before, and the head is the last.
     let chain = steps(&pool, w.map_id).await;
-    assert_eq!(chain.len() as i64, WRITERS);
+    assert_eq!(
+        i64::try_from(chain.len()).expect("step count fits i64"),
+        WRITERS
+    );
     assert_eq!(chain[0].1, None);
     for pair in chain.windows(2) {
         assert_eq!(pair[1].1, Some(pair[0].0), "{chain:?}");
@@ -96,7 +100,10 @@ async fn concurrent_changes_form_one_chain_and_concurrent_undos_take_distinct_st
     }
 
     // Three different steps undone: three systems gone, and the head three steps back.
-    assert_eq!(placed(&pool, w.map_id).await, WRITERS - UNDOS as i64);
+    assert_eq!(
+        placed(&pool, w.map_id).await,
+        WRITERS - i64::try_from(UNDOS).expect("UNDOS fits i64")
+    );
     assert_eq!(
         head(&pool, w.map_id).await,
         Some(chain[chain.len() - 1 - UNDOS].0)

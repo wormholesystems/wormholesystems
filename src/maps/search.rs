@@ -53,11 +53,33 @@ pub async fn search_map(
     if q.len() < 2 {
         return Ok(Vec::new());
     }
-    // Notes are member-gated everywhere else, so they must not leak through search.
-    let with_notes = role >= crate::maps::Role::Member;
     let contains = format!("%{q}%");
     let prefix = format!("{q}%");
 
+    let mut hits = placed_hits(pool, map_id, role, q, &contains, &prefix).await?;
+    // Then systems that are not on the map yet, so the palette doubles as "add".
+    let placed_ids: Vec<i64> = hits.iter().map(|h| h.system.id).collect();
+    hits.extend(off_map_hits(pool, &placed_ids, &contains, &prefix).await?);
+    hits.extend(threat_hits(pool, map_id, q, &contains, &prefix).await?);
+    // Stable, so within a tier the queries' own ordering (prefix first, then name; threat
+    // organisations by rank and kills) is what the client renders.
+    let lower = q.to_lowercase();
+    hits.sort_by_key(|hit| match_rank(hit, &lower));
+    Ok(hits)
+}
+
+/// The placed systems whose name, alias, occupier or (for members) notes match, saying
+/// which one did.
+async fn placed_hits(
+    pool: &PgPool,
+    map_id: i64,
+    role: Role,
+    q: &str,
+    contains: &str,
+    prefix: &str,
+) -> Result<Vec<MapSearchHit>> {
+    // Notes are member-gated everywhere else, so they must not leak through search.
+    let with_notes = role >= crate::maps::Role::Member;
     // The same columns the standalone system search selects, so both build an identical
     // SystemSearchResult.
     let placed = sqlx::query!(
@@ -95,7 +117,7 @@ pub async fn search_map(
         &placed.iter().map(|r| r.solar_system_id).collect::<Vec<_>>(),
     )
     .await?;
-    let mut hits: Vec<MapSearchHit> = placed
+    Ok(placed
         .into_iter()
         .map(|r| {
             let hit = |v: &Option<String>| {
@@ -141,10 +163,16 @@ pub async fn search_map(
                 matched: matched.into(),
             }
         })
-        .collect();
+        .collect())
+}
 
-    // Then systems that are not on the map yet, so the palette doubles as "add".
-    let placed_ids: Vec<i64> = hits.iter().map(|h| h.system.id).collect();
+/// Systems named like the query that are not on the map, for the palette to offer.
+async fn off_map_hits(
+    pool: &PgPool,
+    placed_ids: &[i64],
+    contains: &str,
+    prefix: &str,
+) -> Result<Vec<MapSearchHit>> {
     let off_map = sqlx::query!(
         r#"select ss.id as "solar_system_id!", ss.name as "name!", r.name as "region!",
                   ss.security_status as "security!", ss.region_id, ss.constellation_id,
@@ -159,7 +187,7 @@ pub async fn search_map(
            order by (ss.name ilike $3) desc, length(ss.name), ss.name
            limit 10"#,
         contains,
-        &placed_ids,
+        placed_ids,
         prefix,
     )
     .fetch_all(pool)
@@ -172,32 +200,34 @@ pub async fn search_map(
             .collect::<Vec<_>>(),
     )
     .await?;
-    hits.extend(off_map.into_iter().map(|r| MapSearchHit {
-        system: SystemSearchResult {
-            statics: off_statics.remove(&r.solar_system_id).unwrap_or_default(),
-            id: r.solar_system_id,
-            name: r.name,
-            security: r.security,
-            region: r.region,
-            region_id: r.region_id,
-            constellation_id: r.constellation_id,
-            wormhole_class_id: r.wormhole_class_id,
-            effect_name: r.effect_name,
-            sovereignty: sovereignty_of(r.sov_kind.as_deref(), r.sov_id, r.sov_name, r.sov_ticker),
-        },
-        map_solar_system_id: None,
-        alias: None,
-        occupying_group: None,
-        note_excerpt: None,
-        threat: None,
-        matched: "name".into(),
-    }));
-
-    hits.extend(threat_hits(pool, map_id, q, &contains, &prefix).await?);
-    // Stable, so within a tier the queries' own ordering (prefix first, then name; threat
-    // organisations by rank and kills) is what the client renders.
-    hits.sort_by_key(|hit| match_rank(hit, &lower));
-    Ok(hits)
+    Ok(off_map
+        .into_iter()
+        .map(|r| MapSearchHit {
+            system: SystemSearchResult {
+                statics: off_statics.remove(&r.solar_system_id).unwrap_or_default(),
+                id: r.solar_system_id,
+                name: r.name,
+                security: r.security,
+                region: r.region,
+                region_id: r.region_id,
+                constellation_id: r.constellation_id,
+                wormhole_class_id: r.wormhole_class_id,
+                effect_name: r.effect_name,
+                sovereignty: sovereignty_of(
+                    r.sov_kind.as_deref(),
+                    r.sov_id,
+                    r.sov_name,
+                    r.sov_ticker,
+                ),
+            },
+            map_solar_system_id: None,
+            alias: None,
+            occupying_group: None,
+            note_excerpt: None,
+            threat: None,
+            matched: "name".into(),
+        })
+        .collect())
 }
 
 /// How directly a hit answers the query. A system *named* what was typed comes before one
@@ -264,7 +294,7 @@ async fn threat_hits(
         contains,
         prefix,
         THREAT_ENTITIES,
-        THREAT_SYSTEMS as i64,
+        i64::try_from(THREAT_SYSTEMS).expect("THREAT_SYSTEMS is a small constant"),
     )
     .fetch_all(db)
     .await?;

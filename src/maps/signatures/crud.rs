@@ -525,7 +525,7 @@ pub(in crate::maps) async fn apply_remove_signatures(
         removed_placement_ids.extend(orphans);
     }
 
-    let count = cmd.signature_pks.len() as i64;
+    let count = cmd.signature_pks.len();
     let mut events: Vec<MapEvent> = systems
         .iter()
         .map(|solar_system_id| MapEvent::SignatureChanged {

@@ -3,12 +3,12 @@
 //! Plain `f32` geometry so it is easy to test. From the tournament tool's overlays.
 
 /// How close (px) an edge has to come before it snaps.
-pub const THRESHOLD: f32 = 10.;
+pub(crate) const THRESHOLD: f32 = 10.;
 /// Gap between boxes snapped next to each other.
-pub const GAP: f32 = 8.;
+pub(crate) const GAP: f32 = 8.;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Rect {
+pub(crate) struct Rect {
     pub x: f32,
     pub y: f32,
     pub w: f32,
@@ -17,7 +17,7 @@ pub struct Rect {
 
 /// A line to draw while an edge is snapped to it.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Guide {
+pub(crate) enum Guide {
     Vertical(f32),
     Horizontal(f32),
 }
@@ -89,7 +89,7 @@ fn spans(others: &[Rect]) -> (Spans, Spans) {
 }
 
 /// Snap a box being moved; returns the snapped box and the active guides.
-pub fn snap_move(r: Rect, others: &[Rect], screen: (f32, f32)) -> (Rect, Vec<Guide>) {
+pub(crate) fn snap_move(r: Rect, others: &[Rect], screen: (f32, f32)) -> (Rect, Vec<Guide>) {
     let (xs, ys) = spans(others);
     let mut out = r;
     let mut guides = Vec::new();
@@ -105,7 +105,7 @@ pub fn snap_move(r: Rect, others: &[Rect], screen: (f32, f32)) -> (Rect, Vec<Gui
 }
 
 /// Snap a box being resized from its bottom-right corner.
-pub fn snap_resize(r: Rect, others: &[Rect], screen: (f32, f32)) -> (Rect, Vec<Guide>) {
+pub(crate) fn snap_resize(r: Rect, others: &[Rect], screen: (f32, f32)) -> (Rect, Vec<Guide>) {
     let (xs, ys) = spans(others);
     let mut out = r;
     let mut guides = Vec::new();

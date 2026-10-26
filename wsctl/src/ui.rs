@@ -20,16 +20,16 @@ thread_local! {
 }
 
 /// Answer every prompt from here on with its default.
-pub fn script() {
+pub(crate) fn script() {
     SCRIPTED.set(true);
 }
 
-pub fn scripted() -> bool {
+pub(crate) fn scripted() -> bool {
     SCRIPTED.get()
 }
 
 /// The keys a scripted run needed and did not have, emptied as they are read.
-pub fn take_missing() -> Vec<String> {
+pub(crate) fn take_missing() -> Vec<String> {
     MISSING.with_borrow_mut(std::mem::take)
 }
 
@@ -44,19 +44,19 @@ fn answered(prompt: &str, answer: &str) {
     note(&format!("{prompt}: {answer}"));
 }
 
-pub fn heading(text: &str) {
+pub(crate) fn heading(text: &str) {
     println!("\n{}", style(text).bold());
 }
 
-pub fn note(text: &str) {
+pub(crate) fn note(text: &str) {
     println!("  {}", style(text).dim());
 }
 
-pub fn done(text: &str) {
+pub(crate) fn done(text: &str) {
     println!("  {} {text}", style("✓").green());
 }
 
-pub fn report(check: &Check) {
+pub(crate) fn report(check: &Check) {
     let mark = match check.verdict {
         Verdict::Ok => style("✓").green(),
         Verdict::Warn => style("!").yellow(),
@@ -71,7 +71,7 @@ pub fn report(check: &Check) {
 /// A required answer, kept until there is one. Everything asked for here is something the
 /// server refuses to start without, so a blank would only move the failure to the boot.
 /// `key` is the variable a scripted run reads it from, named when it is missing.
-pub fn ask(key: &str, prompt: &str, default: Option<String>) -> Result<String> {
+pub(crate) fn ask(key: &str, prompt: &str, default: Option<String>) -> Result<String> {
     if scripted() {
         return Ok(match default {
             Some(value) => {
@@ -95,7 +95,7 @@ pub fn ask(key: &str, prompt: &str, default: Option<String>) -> Result<String> {
 }
 
 /// An answer that may be left blank.
-pub fn ask_optional(prompt: &str, default: Option<String>) -> Result<String> {
+pub(crate) fn ask_optional(prompt: &str, default: Option<String>) -> Result<String> {
     if scripted() {
         let value = default.unwrap_or_default();
         answered(prompt, &value);
@@ -110,7 +110,7 @@ pub fn ask_optional(prompt: &str, default: Option<String>) -> Result<String> {
 
 /// An answer that may be left blank, pre-filled with the current one so it can be edited or
 /// cleared. `tidy` checks the input and returns what is stored.
-pub fn edit(
+pub(crate) fn edit(
     prompt: &str,
     current: &str,
     tidy: fn(&str) -> Result<String, String>,
@@ -135,7 +135,7 @@ pub fn edit(
 
 /// A secret, echoed as nothing. Not confirmed twice: it is pasted, not remembered. A
 /// scripted run needs one, under `key`, unless `key` is empty.
-pub fn ask_secret(key: &str, prompt: &str, keep: Option<String>) -> Result<String> {
+pub(crate) fn ask_secret(key: &str, prompt: &str, keep: Option<String>) -> Result<String> {
     if scripted() {
         let keep = keep.filter(|k| !k.is_empty());
         answered(prompt, if keep.is_some() { "(set)" } else { "(none)" });
@@ -147,7 +147,10 @@ pub fn ask_secret(key: &str, prompt: &str, keep: Option<String>) -> Result<Strin
     }
     if let Some(existing) = keep
         && !existing.is_empty()
-        && !confirm(&format!("{prompt} — replace the one already set?"), false)?
+        && !confirm(
+            &format!("{prompt} — replace the one already set?"),
+            Answer::No,
+        )?
     {
         return Ok(existing);
     }
@@ -159,7 +162,21 @@ pub fn ask_secret(key: &str, prompt: &str, keep: Option<String>) -> Result<Strin
         .to_string())
 }
 
-pub fn confirm(prompt: &str, default: bool) -> Result<bool> {
+/// What a yes/no prompt answers when the operator just presses enter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Answer {
+    Yes,
+    No,
+}
+
+impl From<bool> for Answer {
+    fn from(yes: bool) -> Self {
+        if yes { Self::Yes } else { Self::No }
+    }
+}
+
+pub(crate) fn confirm(prompt: &str, default: Answer) -> Result<bool> {
+    let default = default == Answer::Yes;
     if scripted() {
         answered(prompt, if default { "yes" } else { "no" });
         return Ok(default);
@@ -171,7 +188,7 @@ pub fn confirm(prompt: &str, default: bool) -> Result<bool> {
 }
 
 /// One of a few options, by index.
-pub fn choose(prompt: &str, options: &[&str], default: usize) -> Result<usize> {
+pub(crate) fn choose(prompt: &str, options: &[&str], default: usize) -> Result<usize> {
     if scripted() {
         answered(prompt, options.get(default).copied().unwrap_or_default());
         return Ok(default);
@@ -197,10 +214,10 @@ mod tests {
         assert_eq!(ask_secret("C", "c", None).unwrap(), "");
         assert_eq!(ask_secret("", "optional", None).unwrap(), "");
         assert_eq!(ask_secret("D", "d", Some("s".into())).unwrap(), "s");
-        assert!(confirm("e", true).unwrap());
+        assert!(confirm("e", Answer::Yes).unwrap());
         assert_eq!(choose("f", &["one", "two"], 1).unwrap(), 1);
         assert!(edit("g", "nope", |_| Err("bad".into())).is_err());
         assert_eq!(take_missing(), vec!["B", "C"]);
-        assert!(take_missing().is_empty());
+        assert_eq!(take_missing(), Vec::<String>::new());
     }
 }

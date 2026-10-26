@@ -11,11 +11,11 @@ use serde::{Deserialize, Serialize};
 use crate::hotkeys::Action;
 use crate::theme::Appearance;
 
-pub const DEFAULT_SERVER: &str = "https://wormhole.systems";
+pub(crate) const DEFAULT_SERVER: &str = "https://wormhole.systems";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct Config {
+pub(crate) struct Config {
     pub server: String,
     pub token: String,
     pub map_id: Option<i64>,
@@ -42,7 +42,7 @@ pub struct Config {
 /// The signature list's category filter and sort, like the website's panel.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct ListView {
+pub(crate) struct ListView {
     /// Categories left out. The hidden set is what is kept, so a new category shows.
     pub hidden: Vec<String>,
     pub sort: SortColumn,
@@ -61,7 +61,7 @@ impl Default for ListView {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SortColumn {
+pub(crate) enum SortColumn {
     Id,
     Category,
     Type,
@@ -71,7 +71,11 @@ pub enum SortColumn {
 /// The signatures window that floats over the game.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct Overlay {
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the settings file's shape: independent switches, each its own key"
+)]
+pub(crate) struct Overlay {
     pub open: bool,
     /// Where it sits until it is dragged somewhere.
     pub corner: Corner,
@@ -98,28 +102,31 @@ pub struct Overlay {
 }
 
 /// Distance from the screen edges of an overlay in its corner.
-pub const OVERLAY_MARGIN: f32 = 24.0;
+pub(crate) const OVERLAY_MARGIN: f32 = 24.0;
 
 impl Overlay {
     /// Width and height in logical pixels.
-    pub fn dimensions(&self) -> (f32, f32) {
+    pub(crate) fn dimensions(&self) -> (f32, f32) {
         let (w, h) = self.size.dimensions();
         (self.width.unwrap_or(w), self.height.unwrap_or(h))
     }
 
     /// The top-left corner on a `screen` of that size: where it was dragged, else its
     /// corner. Kept on the screen, which may have changed since.
-    pub fn origin(&self, screen: (f32, f32)) -> (f32, f32) {
-        let (w, h) = self.dimensions();
-        let m = OVERLAY_MARGIN;
+    pub(crate) fn origin(&self, screen: (f32, f32)) -> (f32, f32) {
+        let (width, height) = self.dimensions();
+        let margin = OVERLAY_MARGIN;
         let (cx, cy) = match self.corner {
-            Corner::TopLeft => (m, m),
-            Corner::TopRight => (screen.0 - w - m, m),
-            Corner::BottomLeft => (m, screen.1 - h - m),
-            Corner::BottomRight => (screen.0 - w - m, screen.1 - h - m),
+            Corner::TopLeft => (margin, margin),
+            Corner::TopRight => (screen.0 - width - margin, margin),
+            Corner::BottomLeft => (margin, screen.1 - height - margin),
+            Corner::BottomRight => (screen.0 - width - margin, screen.1 - height - margin),
         };
-        let x = self.x.unwrap_or(cx).clamp(0.0, (screen.0 - w).max(0.0));
-        let y = self.y.unwrap_or(cy).clamp(0.0, (screen.1 - h).max(0.0));
+        let x = self.x.unwrap_or(cx).clamp(0.0, (screen.0 - width).max(0.0));
+        let y = self
+            .y
+            .unwrap_or(cy)
+            .clamp(0.0, (screen.1 - height).max(0.0));
         (x, y)
     }
 }
@@ -146,7 +153,7 @@ impl Default for Overlay {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Corner {
+pub(crate) enum Corner {
     TopLeft,
     TopRight,
     BottomLeft,
@@ -155,7 +162,7 @@ pub enum Corner {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum OverlaySize {
+pub(crate) enum OverlaySize {
     Small,
     Medium,
     Large,
@@ -163,7 +170,7 @@ pub enum OverlaySize {
 
 impl OverlaySize {
     /// Width and height in logical pixels.
-    pub fn dimensions(self) -> (f32, f32) {
+    pub(crate) fn dimensions(self) -> (f32, f32) {
         match self {
             OverlaySize::Small => (440.0, 300.0),
             OverlaySize::Medium => (560.0, 420.0),
@@ -191,7 +198,7 @@ impl Default for Config {
     }
 }
 
-pub fn path() -> Option<PathBuf> {
+pub(crate) fn path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("wormholesystems").join("desktop.toml"))
 }
 
@@ -199,7 +206,7 @@ impl Config {
     /// The saved config, or the defaults when there is none. One that does not parse is
     /// moved aside to `desktop.toml.broken` rather than overwritten by the next save, and
     /// the second value says so.
-    pub fn load() -> (Config, Option<String>) {
+    pub(crate) fn load() -> (Config, Option<String>) {
         let Some(path) = path() else {
             return (Config::default(), None);
         };
@@ -228,7 +235,7 @@ impl Config {
         }
     }
 
-    pub fn save(&self) -> Result<()> {
+    pub(crate) fn save(&self) -> Result<()> {
         let path = path().context("no config folder on this system")?;
         self.save_to(&path)
     }

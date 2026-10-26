@@ -12,19 +12,19 @@ pub mod wait {
     use std::time::Duration;
 
     /// Named, or fresh enough: only checked again in case it goes stale.
-    pub const NAMED: Duration = Duration::from_secs(60 * 60);
+    pub const NAMED: Duration = Duration::from_hours(1);
     /// The pilot has not granted the permission. As often as the token cache rechecks a
     /// missing scope, so granting it names the structure within a minute.
     pub const NO_PERMISSION: Duration = Duration::from_secs(60);
     /// ESI refused (403, not on the docking list) or does not know it (404).
-    pub const REFUSED: Duration = Duration::from_secs(24 * 60 * 60);
+    pub const REFUSED: Duration = Duration::from_hours(24);
     /// Anything else: ESI or the database had a bad minute.
-    pub const FAILED: Duration = Duration::from_secs(5 * 60);
+    pub const FAILED: Duration = Duration::from_mins(5);
 }
 
 /// Which (structure, pilot) pairs are not worth asking about yet. Keyed by pilot too, since
 /// a structure one pilot cannot see may be visible to the next one who docks.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Backoff {
     until: Mutex<HashMap<(i64, i64), Instant>>,
 }

@@ -151,7 +151,10 @@ pub fn sovereignty_of(
 // The two variants are deliberately lopsided: a ghost is a node and nothing else. Boxing
 // the larger one would put the wire type behind an indirection to save bytes on a value
 // that is built once per node and serialised immediately.
-#[allow(clippy::large_enum_variant)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a ghost is only a node; boxing the system variant would put the wire type behind an indirection"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, utoipa::ToSchema)]
 #[ts(export)]
 #[serde(tag = "kind", rename_all = "snake_case")]

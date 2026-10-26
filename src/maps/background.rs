@@ -110,9 +110,13 @@ impl BackgroundStore {
         );
         let path = self.root.join(&relative);
         if let Some(dir) = path.parent() {
-            tokio::fs::create_dir_all(dir).await.map_err(io_error)?;
+            tokio::fs::create_dir_all(dir)
+                .await
+                .map_err(|e| io_error(&e))?;
         }
-        tokio::fs::write(&path, bytes).await.map_err(io_error)?;
+        tokio::fs::write(&path, bytes)
+            .await
+            .map_err(|e| io_error(&e))?;
         Ok(relative)
     }
 
@@ -125,7 +129,7 @@ impl BackgroundStore {
         match tokio::fs::read(self.root.join(relative)).await {
             Ok(bytes) => Ok(Some((format, bytes))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(io_error(e)),
+            Err(e) => Err(io_error(&e)),
         }
     }
 
@@ -135,7 +139,7 @@ impl BackgroundStore {
         match tokio::fs::remove_file(self.root.join(relative)).await {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(io_error(e)),
+            Err(e) => Err(io_error(&e)),
         }
     }
 
@@ -229,7 +233,7 @@ fn format_of(relative: &str) -> Option<ImageFormat> {
         .and_then(ImageFormat::from_extension)
 }
 
-fn io_error(e: std::io::Error) -> MapError {
+fn io_error(e: &std::io::Error) -> MapError {
     MapError::Validation(format!("could not store the image: {e}"))
 }
 
@@ -278,7 +282,10 @@ mod tests {
         let store = scratch();
         let relative = store.save(7, 3, PNG).await.unwrap();
         assert!(relative.starts_with("map-backgrounds/7/3-"));
-        assert!(relative.ends_with(".png"));
+        assert_eq!(
+            Path::new(&relative).extension().and_then(|e| e.to_str()),
+            Some("png")
+        );
 
         let (format, bytes) = store.read(&relative).await.unwrap().unwrap();
         assert_eq!(format, ImageFormat::Png);

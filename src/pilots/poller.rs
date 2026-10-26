@@ -45,7 +45,7 @@ const CONCURRENCY: usize = 32;
 const POLL_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// How long a tier may fail on every tick before it is an error rather than a warning.
-const FAILING_FOR: Duration = Duration::from_secs(15 * 60);
+const FAILING_FOR: Duration = Duration::from_mins(15);
 
 /// A poll's outcome. A missing scope is not a failure: that field is simply not tracked.
 type Poll = Result<(), String>;
@@ -129,7 +129,9 @@ pub fn start(
     server: ServerWatch,
 ) {
     // Half the pool, leaving the rest to requests and the other background work.
-    let db = (pool.options().get_max_connections() as usize / 2).max(1);
+    let db = (usize::try_from(pool.options().get_max_connections()).expect("u32 fits in usize")
+        / 2)
+    .max(1);
     let poller = Arc::new(Poller {
         store: PgTokenStore::new(pool.clone()),
         pool,
@@ -142,12 +144,12 @@ pub fn start(
         tier_one_failing: Streak::new(FAILING_FOR),
         tier_two_failing: Streak::new(FAILING_FOR),
     });
-    let (one, one_server) = (poller.clone(), server.clone());
+    let (one, one_server) = (Arc::clone(&poller), server.clone());
     spawn_every("tracking tier-1", Duration::from_secs(60), move || {
-        tier_one(one.clone(), one_server.clone())
+        tier_one(Arc::clone(&one), one_server.clone())
     });
     spawn_every("tracking tier-2", Duration::from_secs(5), move || {
-        tier_two(poller.clone(), server.clone())
+        tier_two(Arc::clone(&poller), server.clone())
     });
 }
 
@@ -165,7 +167,7 @@ async fn tier_one(poller: Arc<Poller>, server: ServerWatch) -> Result<(), sqlx::
 
     // Nobody can be online while the server is not, and every call would fail against the
     // error limit. See [`crate::server_status`].
-    let polled = if server.should_poll() {
+    let outcome = if server.should_poll() {
         poll_online_all(&poller, &changed).await
     } else {
         skipped_offline("tier-1");
@@ -173,17 +175,17 @@ async fn tier_one(poller: Arc<Poller>, server: ServerWatch) -> Result<(), sqlx::
     };
     // Whoever went offline above is announced even when the polls could not run.
     changed.announce(&poller).await;
-    polled
+    outcome
 }
 
 async fn poll_online_all(poller: &Arc<Poller>, changed: &Changed) -> Result<(), sqlx::Error> {
-    let due = active_characters(&poller.pool, false).await?;
+    let due = active_characters(&poller.pool).await?;
     // Everyone tier 2 polls is in this set too, so this is where tokens for characters that
     // dropped out of polling are let go.
     let ids: HashSet<i64> = due.iter().map(|d| d.character_id).collect();
     poller.tokens.retain(|id| ids.contains(&id));
     run_polls("tier-1", &poller.tier_one_failing, &due, |d| {
-        poll_online(poller.clone(), d, changed.clone())
+        poll_online(Arc::clone(poller), d, changed.clone())
     })
     .await;
     Ok(())
@@ -195,10 +197,10 @@ async fn tier_two(poller: Arc<Poller>, server: ServerWatch) -> Result<(), sqlx::
         skipped_offline("tier-2");
         return Ok(());
     }
-    let due = active_characters(&poller.pool, true).await?;
+    let due = online_characters(&poller.pool).await?;
     let changed = Changed::default();
     run_polls("tier-2", &poller.tier_two_failing, &due, |d| {
-        poll_location_ship(poller.clone(), d, changed.clone())
+        poll_location_ship(Arc::clone(&poller), d, changed.clone())
     })
     .await;
     changed.announce(&poller).await;
@@ -246,45 +248,46 @@ fn skipped_offline(tier: &'static str) {
 }
 
 /// Characters whose user has been active within the last 5 minutes and that hold a token EVE
-/// has not refused. With `online_only`, also restricted to those currently flagged online
-/// (the tier-2 set).
-async fn active_characters(pool: &PgPool, online_only: bool) -> Result<Vec<Due>, sqlx::Error> {
-    let rows = if online_only {
-        sqlx::query!(
-            r#"select c.id, c.user_id as "user_id!"
+/// has not refused (the tier-1 set).
+async fn active_characters(pool: &PgPool) -> Result<Vec<Due>, sqlx::Error> {
+    let rows = sqlx::query!(
+        r#"select c.id, c.user_id as "user_id!"
+             from characters c
+             join users u on u.id = c.user_id
+             where u.last_active_at > now() - interval '5 minutes'
+               and exists (select 1 from esi_tokens t
+                           where t.character_id = c.id and t.rejected_at is null)"#
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|r| Due {
+        character_id: r.id,
+        user_id: r.user_id,
+    })
+    .collect();
+    Ok(rows)
+}
+
+/// [`active_characters`], restricted to those currently flagged online (the tier-2 set).
+async fn online_characters(pool: &PgPool) -> Result<Vec<Due>, sqlx::Error> {
+    let rows = sqlx::query!(
+        r#"select c.id, c.user_id as "user_id!"
              from characters c
              join users u on u.id = c.user_id
              join character_status s on s.character_id = c.id
              where u.last_active_at > now() - interval '5 minutes' and s.online
                and exists (select 1 from esi_tokens t
                            where t.character_id = c.id and t.rejected_at is null)"#
-        )
-        .fetch_all(pool)
-        .await?
-        .into_iter()
-        .map(|r| Due {
-            character_id: r.id,
-            user_id: r.user_id,
-        })
-        .collect()
-    } else {
-        sqlx::query!(
-            r#"select c.id, c.user_id as "user_id!"
-             from characters c
-             join users u on u.id = c.user_id
-             where u.last_active_at > now() - interval '5 minutes'
-               and exists (select 1 from esi_tokens t
-                           where t.character_id = c.id and t.rejected_at is null)"#
-        )
-        .fetch_all(pool)
-        .await?
-        .into_iter()
-        .map(|r| Due {
-            character_id: r.id,
-            user_id: r.user_id,
-        })
-        .collect()
-    };
+    )
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|r| Due {
+        character_id: r.id,
+        user_id: r.user_id,
+    })
+    .collect();
     Ok(rows)
 }
 
@@ -329,8 +332,7 @@ where
     let mut set = JoinSet::new();
     for &item in items {
         // Acquiring before spawning is the backpressure: never more than CONCURRENCY tasks.
-        let permit = permits
-            .clone()
+        let permit = Arc::clone(&permits)
             .acquire_owned()
             .await
             .expect("semaphore open");
@@ -355,7 +357,7 @@ where
     let failed = Arc::new(Mutex::new((0usize, None::<String>)));
     run_bounded(due, CONCURRENCY, |d| {
         let poll = timeout(POLL_TIMEOUT, f(d));
-        let failed = failed.clone();
+        let failed = Arc::clone(&failed);
         async move {
             let err = match poll.await {
                 Ok(Ok(())) => return,
@@ -373,15 +375,15 @@ where
     let (count, sample) = std::mem::take(&mut *failed.lock().expect("poll failures lock"));
     let polls = |outcome: &'static str, n: usize| {
         metrics::counter!("ws_tracking_polls_total", "tier" => tier, "outcome" => outcome)
-            .increment(n as u64);
+            .increment(u64::try_from(n).expect("usize fits in u64"));
     };
     polls("ok", due.len() - count);
     polls("failed", count);
     let Some(sample) = sample else {
-        streak.record(false, Instant::now());
+        streak.record_success();
         return;
     };
-    if streak.record(true, Instant::now()) {
+    if streak.record_failure(Instant::now()) {
         tracing::error!(
             failed = count,
             polls = due.len(),

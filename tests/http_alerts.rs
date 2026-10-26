@@ -33,7 +33,7 @@ async fn make_webhook(pool: &PgPool, cookie: &str, map_id: i64, name: &str) -> i
     )
     .await;
     assert_eq!(made.status, StatusCode::OK);
-    made.body["id"].as_i64().unwrap()
+    made.body["id"].as_i64().expect("id is an integer")
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -88,7 +88,7 @@ async fn an_alert_survives_the_full_round_trip(pool: PgPool) {
     assert_eq!(deleted.status, StatusCode::OK);
 
     let listed = get(app(&pool), &base, Some(&cookie)).await;
-    assert_eq!(listed.body.as_array().map(|a| a.len()), Some(0));
+    assert_eq!(listed.body.as_array().map(std::vec::Vec::len), Some(0));
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -196,7 +196,7 @@ async fn channel_of(pool: &PgPool, alert_id: i64) -> (Option<String>, Option<Str
     )
     .fetch_one(pool)
     .await
-    .unwrap();
+    .expect("query map_alerts");
     (row.discord_guild_id, row.discord_channel_id)
 }
 

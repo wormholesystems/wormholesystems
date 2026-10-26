@@ -26,7 +26,7 @@ use wormholesystems::maps::{
 async fn systems(pool: &PgPool, actor: Actor, map_id: i64) -> Vec<MapSystemView> {
     get_map(pool, actor, GetMap { map_id })
         .await
-        .unwrap()
+        .expect("get_map")
         .systems
 }
 
@@ -34,19 +34,21 @@ async fn placed(pool: &PgPool, actor: Actor, map_id: i64) -> Vec<i64> {
     systems(pool, actor, map_id)
         .await
         .iter()
-        .filter_map(|s| s.solar_system_id())
+        .filter_map(wormholesystems::maps::MapSystemView::solar_system_id)
         .collect()
 }
 
 async fn connections(pool: &PgPool, actor: Actor, map_id: i64) -> Vec<MapConnection> {
     get_map(pool, actor, GetMap { map_id })
         .await
-        .unwrap()
+        .expect("get_map")
         .connections
 }
 
 async fn history(pool: &PgPool, actor: Actor, map_id: i64) -> MapHistory {
-    list_history(pool, actor, map_id).await.unwrap()
+    list_history(pool, actor, map_id)
+        .await
+        .expect("list_history")
 }
 
 /// The newest journal row, which is also the head right after a change.
@@ -55,11 +57,11 @@ async fn newest(pool: &PgPool, actor: Actor, map_id: i64) -> MapEventEntry {
 }
 
 async fn step_back(pool: &PgPool, actor: Actor, map_id: i64) {
-    undo(pool, actor, MapIdBody { map_id }).await.unwrap()
+    undo(pool, actor, MapIdBody { map_id }).await.expect("undo");
 }
 
 async fn step_forward(pool: &PgPool, actor: Actor, map_id: i64) {
-    redo(pool, actor, MapIdBody { map_id }).await.unwrap()
+    redo(pool, actor, MapIdBody { map_id }).await.expect("redo");
 }
 
 #[sqlx::test]

@@ -88,57 +88,40 @@ pub(super) async fn apply_add_eve_scout_connections(
     let mut outcome = Outcome::default();
     let mut placed = placements(tx, cmd.map_id).await?;
 
-    let hub_placement = match placed
-        .iter()
-        .find(|p| p.solar_system_id == cmd.hub_solar_system_id)
-    {
-        Some(p) => p.id,
-        None => {
-            let spot = free_spot(&placed, cmd.at.unwrap_or(DEFAULT_HUB_SPOT));
-            let id = place(tx, cmd.map_id, cmd.hub_solar_system_id, spot).await?;
-            placed.push(Placement {
-                id,
-                solar_system_id: cmd.hub_solar_system_id,
-                at: spot,
-            });
-            outcome.system_ids.push(id);
-            id
-        }
-    };
+    let hub_placement = ensure_placed(
+        tx,
+        cmd.map_id,
+        &mut placed,
+        &mut outcome,
+        cmd.hub_solar_system_id,
+        cmd.at.unwrap_or(DEFAULT_HUB_SPOT),
+    )
+    .await?;
     let hub_at = placed
         .iter()
         .find(|p| p.id == hub_placement)
-        .map(|p| p.at)
-        .unwrap_or(DEFAULT_HUB_SPOT);
+        .map_or(DEFAULT_HUB_SPOT, |p| p.at);
 
     for hole in holes {
-        let far_placement = match placed
-            .iter()
-            .find(|p| p.solar_system_id == hole.solar_system_id)
-        {
-            Some(p) => p.id,
-            None => {
-                let spot = free_spot(&placed, hub_at);
-                let id = place(tx, cmd.map_id, hole.solar_system_id, spot).await?;
-                placed.push(Placement {
-                    id,
-                    solar_system_id: hole.solar_system_id,
-                    at: spot,
-                });
-                outcome.system_ids.push(id);
-                id
-            }
-        };
+        let far_placement = ensure_placed(
+            tx,
+            cmd.map_id,
+            &mut placed,
+            &mut outcome,
+            hole.solar_system_id,
+            hub_at,
+        )
+        .await?;
 
-        let connection_id =
-            match existing_connection(tx, cmd.map_id, hub_placement, far_placement).await? {
-                Some(id) => id,
-                None => {
-                    let id = connect(tx, cmd.map_id, hub_placement, far_placement, &hole).await?;
-                    outcome.connection_ids.push(id);
-                    id
-                }
-            };
+        let connection_id = if let Some(id) =
+            existing_connection(tx, cmd.map_id, hub_placement, far_placement).await?
+        {
+            id
+        } else {
+            let id = connect(tx, cmd.map_id, hub_placement, far_placement, &hole).await?;
+            outcome.connection_ids.push(id);
+            id
+        };
 
         let type_id = match &hole.wormhole_type {
             Some(code) => wormhole_signature_type(tx, code).await?,
@@ -162,7 +145,7 @@ pub(super) async fn apply_add_eve_scout_connections(
         }
     }
 
-    let added = outcome.connection_ids.len() as u64;
+    let added = u64::try_from(outcome.connection_ids.len()).expect("a usize fits in u64");
     let label = match added {
         0 => format!("checked EVE Scout's holes out of {hub}"),
         1 => format!("added an EVE Scout hole out of {hub}"),
@@ -172,8 +155,8 @@ pub(super) async fn apply_add_eve_scout_connections(
         + outcome.connection_ids.len()
         + outcome.signature_ids.len()
         + outcome.touched.len();
-    let mut effect = Effect::new("evescout.added", label, CommandOutput::Count(added))
-        .entries((changed as i64).max(1));
+    let mut effect =
+        Effect::new("evescout.added", label, CommandOutput::Count(added)).entries(changed.max(1));
     if changed == 0 {
         return Ok(effect);
     }
@@ -194,12 +177,16 @@ pub(super) async fn apply_add_eve_scout_connections(
         map_id: cmd.map_id,
         steps,
     }));
+    Ok(effect.emit_all(announce(cmd.map_id, &mut outcome)))
+}
 
+/// The events for everything the run added or changed.
+fn announce(map_id: i64, outcome: &mut Outcome) -> Vec<MapEvent> {
     let mut events: Vec<MapEvent> = outcome
         .system_ids
         .iter()
         .map(|id| MapEvent::SystemAdded {
-            map_id: cmd.map_id,
+            map_id,
             map_solar_system_id: *id,
         })
         .collect();
@@ -208,7 +195,7 @@ pub(super) async fn apply_add_eve_scout_connections(
             .connection_ids
             .iter()
             .map(|id| MapEvent::ConnectionChanged {
-                map_id: cmd.map_id,
+                map_id,
                 connection_id: *id,
             }),
     );
@@ -219,11 +206,35 @@ pub(super) async fn apply_add_eve_scout_connections(
             .changed_systems
             .iter()
             .map(|id| MapEvent::SignatureChanged {
-                map_id: cmd.map_id,
+                map_id,
                 solar_system_id: *id,
             }),
     );
-    Ok(effect.emit_all(events))
+    events
+}
+
+/// The placement of `solar_system_id`, placing it in a free spot near `near` when the map
+/// does not have it yet.
+async fn ensure_placed(
+    tx: &mut Tx<'_>,
+    map_id: i64,
+    placed: &mut Vec<Placement>,
+    outcome: &mut Outcome,
+    solar_system_id: i64,
+    near: (f64, f64),
+) -> Result<i64> {
+    if let Some(p) = placed.iter().find(|p| p.solar_system_id == solar_system_id) {
+        return Ok(p.id);
+    }
+    let spot = free_spot(placed, near);
+    let id = place(tx, map_id, solar_system_id, spot).await?;
+    placed.push(Placement {
+        id,
+        solar_system_id,
+        at: spot,
+    });
+    outcome.system_ids.push(id);
+    Ok(id)
 }
 
 struct Placement {
@@ -283,16 +294,23 @@ async fn sorted_far_sides(
             let key = match row.wormhole_class_id {
                 Some(class) => (1, class),
                 // Negated so that the safest sorts first with one ascending sort.
-                None => (
-                    0,
-                    -(ccp_round_security(row.security_status) * 10.0).round() as i32,
-                ),
+                None => (0, -security_tenths(ccp_round_security(row.security_status))),
             };
             Some((key.0, key.1, hole.clone()))
         })
         .collect();
     keyed.sort_by_key(|(space, rank, _)| (*space, *rank));
     Ok(keyed.into_iter().map(|(_, _, hole)| hole).collect())
+}
+
+/// Security status in whole tenths, the steps the scout sorts known space by.
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    reason = "security status lies within -1.0..=1.0, so its tenths always fit an i32"
+)]
+fn security_tenths(security: f64) -> i32 {
+    (security * 10.0).round() as i32
 }
 
 async fn place(tx: &mut Tx<'_>, map_id: i64, solar_system_id: i64, at: (f64, f64)) -> Result<i64> {
@@ -372,7 +390,10 @@ async fn wormhole_signature_type(tx: &mut Tx<'_>, code: &str) -> Result<Option<i
 
 /// See that `signature_id` in `solar_system_id` is a wormhole linked to `connection_id`,
 /// adding or promoting it as needed. Skips ids EVE Scout has not scanned yet.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one signature's whole context; a struct for a single private call site adds nothing"
+)]
 async fn ensure_signature(
     tx: &mut Tx<'_>,
     map_id: i64,

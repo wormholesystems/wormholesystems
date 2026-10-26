@@ -11,7 +11,9 @@ use serde_json::json;
 use sqlx::PgPool;
 use wormholesystems::allowlist::AffiliationAllowlist;
 use wormholesystems::maps::map::{CreateMap, GetMap, create_map, get_map};
-use wormholesystems::maps::transfer::{SectionSet, export_map, import_map_as_new, parse_export};
+use wormholesystems::maps::transfer::{
+    ImportTarget, SectionSet, export_map, import_map_as_new, parse_export,
+};
 use wormholesystems::maps::{Actor, MapError};
 
 const CORP: i64 = 2001;
@@ -55,7 +57,7 @@ async fn map_count(pool: &PgPool) -> i64 {
     sqlx::query_scalar("select count(*) from maps")
         .fetch_one(pool)
         .await
-        .unwrap()
+        .expect("query maps")
 }
 
 #[sqlx::test]
@@ -135,7 +137,7 @@ async fn importing_a_file_as_a_new_map_is_limited_the_same_way(pool: PgPool) {
         &pool,
         w.owner,
         &only(&[99_999_999]),
-        parse_export(&content, sections(), true).unwrap(),
+        parse_export(&content, sections(), ImportTarget::NewMap).unwrap(),
         None,
     )
     .await;
@@ -146,7 +148,7 @@ async fn importing_a_file_as_a_new_map_is_limited_the_same_way(pool: PgPool) {
         &pool,
         w.owner,
         &only(&[w.owner.character_id]),
-        parse_export(&content, sections(), true).unwrap(),
+        parse_export(&content, sections(), ImportTarget::NewMap).unwrap(),
         None,
     )
     .await

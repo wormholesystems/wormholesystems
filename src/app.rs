@@ -19,7 +19,7 @@ use crate::esi::{EsiClient, Sso, TokenCache};
 /// ([`crate::maps::hub`], [`crate::maps::grid`]) because a command, which has only its
 /// transaction, publishes and places through them; a second copy here would be one that
 /// could disagree.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AppState {
     pub sso: Arc<Sso>,
     /// Every character's access token, shared by everything that acts as one, so no two of
@@ -50,6 +50,24 @@ pub struct AppState {
     pub eve_scout: Arc<crate::integrations::eve_scout::EveScout>,
     /// Where the browser's error reports go, when the operator set a DSN for them.
     pub sentry_tunnel: Option<Arc<crate::telemetry::tunnel::Tunnel>>,
+}
+
+/// Whether cookies are marked `Secure`, so a browser only sends them over HTTPS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CookieSecurity {
+    Https,
+    /// Local development over plain http, which would never get a `Secure` cookie back.
+    PlainHttp,
+}
+
+impl AppState {
+    pub fn cookie_security(&self) -> CookieSecurity {
+        if self.secure_cookies {
+            CookieSecurity::Https
+        } else {
+            CookieSecurity::PlainHttp
+        }
+    }
 }
 
 /// Everything the server answers: sign-in, Discord, the realtime sockets, the JSON API and
@@ -206,8 +224,8 @@ async fn start_background(
     // a change.
     crate::pilots::poller::start(
         db.clone(),
-        sso.clone(),
-        tokens.clone(),
+        Arc::clone(sso),
+        Arc::clone(tokens),
         esi.clone(),
         user_hub.clone(),
         server.clone(),
@@ -223,8 +241,8 @@ async fn start_background(
     // Name every public structure, so docked pilots read as more than "a structure".
     crate::structures::start(
         db.clone(),
-        sso.clone(),
-        tokens.clone(),
+        Arc::clone(sso),
+        Arc::clone(tokens),
         esi.clone(),
         server.clone(),
     );
@@ -293,8 +311,8 @@ async fn shutdown_signal() {
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
     tokio::select! {
-        _ = ctrl_c => {}
-        _ = terminate => {}
+        () = ctrl_c => {}
+        () = terminate => {}
     }
     tracing::info!("shutting down");
     // WebSockets outlive the request that opened them, so the server would wait on them

@@ -23,24 +23,27 @@ async fn connect(
     map_id: i64,
     cookie: &str,
 ) -> Result<Socket, tokio_tungstenite::tungstenite::Error> {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let addr = listener.local_addr().expect("read listener address");
     let app = app(pool);
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    tokio::spawn(async move { axum::serve(listener, app).await.expect("serve test app") });
 
     let mut request = format!("ws://{addr}/ws/map/{map_id}")
         .into_client_request()
-        .unwrap();
-    request
-        .headers_mut()
-        .insert("cookie", cookie.parse().unwrap());
+        .expect("build ws request");
+    request.headers_mut().insert(
+        "cookie",
+        cookie.parse().expect("cookie is a valid header value"),
+    );
     tokio_tungstenite::connect_async(request)
         .await
         .map(|(socket, _)| socket)
 }
 
 async fn open(pool: &PgPool, map_id: i64, cookie: &str) -> Socket {
-    connect(pool, map_id, cookie).await.unwrap()
+    connect(pool, map_id, cookie).await.expect("connect")
 }
 
 /// The next frame, or a failure after a few seconds rather than a hung test.
@@ -49,7 +52,7 @@ async fn next(socket: &mut Socket) -> Message {
         .await
         .expect("a frame within five seconds")
         .expect("the socket is still open")
-        .unwrap()
+        .expect("read ws frame")
 }
 
 #[sqlx::test]
@@ -99,7 +102,7 @@ async fn losing_access_closes_the_socket(pool: PgPool) {
             }
             Message::Close(None) => panic!("closed without saying why"),
             // Frames already in flight, or another test's map with the same id.
-            _ => continue,
+            _ => {}
         }
     }
 }

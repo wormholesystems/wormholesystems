@@ -29,7 +29,7 @@ async fn make_webhook(pool: &PgPool, map_id: i64, url: &str) -> i64 {
     )
     .fetch_one(pool)
     .await
-    .unwrap()
+    .expect("insert map_webhooks")
 }
 
 async fn make_alert(pool: &PgPool, map_id: i64, kind: &str) -> i64 {
@@ -44,7 +44,7 @@ async fn make_alert(pool: &PgPool, map_id: i64, kind: &str) -> i64 {
     )
     .fetch_one(pool)
     .await
-    .unwrap()
+    .expect("insert map_alerts")
 }
 
 /// Where the app is served from, as the alert runtime is told.
@@ -66,13 +66,18 @@ impl Inbox {
     /// One that answers every message the same way, taken or not.
     async fn answering(status: StatusCode) -> Inbox {
         let messages: Received = Arc::default();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}/webhook", listener.local_addr().unwrap());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let url = format!(
+            "http://{}/webhook",
+            listener.local_addr().expect("read listener address")
+        );
         let app = Router::new()
             .route("/webhook", post(receive))
-            .with_state((messages.clone(), status));
+            .with_state((Arc::clone(&messages), status));
         tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
+            axum::serve(listener, app).await.expect("serve test app");
         });
         Inbox { url, messages }
     }
@@ -80,7 +85,7 @@ impl Inbox {
     fn descriptions(&self) -> Vec<String> {
         self.messages
             .lock()
-            .unwrap()
+            .expect("mutex poisoned")
             .iter()
             .map(|m| {
                 m["embeds"][0]["description"]
@@ -96,8 +101,8 @@ async fn receive(
     State((messages, status)): State<(Received, StatusCode)>,
     body: String,
 ) -> (StatusCode, &'static str) {
-    let message: Value = serde_json::from_str(&body).unwrap();
-    messages.lock().unwrap().push(message);
+    let message: Value = serde_json::from_str(&body).expect("parse JSON");
+    messages.lock().expect("mutex poisoned").push(message);
     // What Discord says about an embed it will not take.
     let answer = if status == StatusCode::BAD_REQUEST {
         r#"{"message": "Invalid Form Body", "code": 50035}"#
@@ -128,20 +133,20 @@ async fn seed_gates(pool: &PgPool) {
         .bind(name)
         .execute(pool)
         .await
-        .unwrap();
+        .expect("insert solar_systems");
     }
     sqlx::query("insert into categories (id, name) values (1, 'Celestial')")
         .execute(pool)
         .await
-        .unwrap();
+        .expect("insert categories");
     sqlx::query("insert into groups (id, category_id, name) values (10, 1, 'Stargate')")
         .execute(pool)
         .await
-        .unwrap();
+        .expect("insert groups");
     sqlx::query("insert into types (id, group_id, name) values (100, 10, 'Stargate')")
         .execute(pool)
         .await
-        .unwrap();
+        .expect("insert types");
     let line = [SYS_A, SYS_B, SYS_C, SYS_D, SYS_E, SYS_F];
     for (index, pair) in line.windows(2).enumerate() {
         for (gate, (from, to)) in [(pair[0], pair[1]), (pair[1], pair[0])]
@@ -152,12 +157,12 @@ async fn seed_gates(pool: &PgPool) {
                 "insert into stargates (id, solar_system_id, destination_system_id, destination_stargate_id, type_id)
                  values ($1, $2, $3, 0, 100)",
             )
-            .bind((index * 2 + gate + 1) as i64)
+            .bind(i64::try_from(index * 2 + gate + 1).expect("gate id fits i64"))
             .bind(from)
             .bind(to)
             .execute(pool)
             .await
-            .unwrap();
+            .expect("insert stargates");
         }
     }
 }
@@ -185,7 +190,7 @@ async fn proximity_alert(
     )
     .fetch_one(pool)
     .await
-    .unwrap()
+    .expect("insert map_alerts")
 }
 
 async fn place(pool: &PgPool, runtime: &Runtime, actor: Actor, map_id: i64, sys: i64) -> i64 {
@@ -552,9 +557,16 @@ async fn a_switched_off_alert_stops_firing_at_once(pool: PgPool) {
     place(&pool, &runtime, w.owner, w.map_id, SYS_F).await;
     assert!(inbox.descriptions().is_empty(), "F is three gates from C");
 
-    wormholesystems::maps::alerts::set_active(&pool, w.map_id, alert, w.owner.user_id, false, None)
-        .await
-        .unwrap();
+    wormholesystems::maps::alerts::set_active(
+        &pool,
+        w.map_id,
+        alert,
+        w.owner.user_id,
+        wormholesystems::maps::alerts::Toggle::Off,
+        None,
+    )
+    .await
+    .unwrap();
     place(&pool, &runtime, w.owner, w.map_id, SYS_B).await;
     assert!(inbox.descriptions().is_empty(), "the alert is off");
 }

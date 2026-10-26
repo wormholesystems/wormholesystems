@@ -396,7 +396,7 @@ pub async fn create(
         body.target_solar_system_id,
         body.origin_solar_system_id,
         body.max_jumps,
-        body.ship_type.map(|v| v.as_str()),
+        body.ship_type.map(JumpShip::as_str),
         body.jdc_level,
         serde_json::to_value(&body.filters).unwrap_or_else(|_| serde_json::json!([])),
         body.filter_match.as_str(),
@@ -436,7 +436,7 @@ pub async fn update(
         body.target_solar_system_id,
         body.origin_solar_system_id,
         body.max_jumps,
-        body.ship_type.map(|v| v.as_str()),
+        body.ship_type.map(JumpShip::as_str),
         body.jdc_level,
         serde_json::to_value(&body.filters).unwrap_or_else(|_| serde_json::json!([])),
         body.filter_match.as_str(),
@@ -450,6 +450,19 @@ pub async fn update(
     get(pool, map_id, alert_id).await
 }
 
+/// Which way a hand toggle flips an alert.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Toggle {
+    On,
+    Off,
+}
+
+impl From<bool> for Toggle {
+    fn from(is_active: bool) -> Self {
+        if is_active { Toggle::On } else { Toggle::Off }
+    }
+}
+
 /// Turns the alert on or off by hand. Turning it back on clears the reason it stopped.
 /// `via` notes where it was done from, when that was not the settings page.
 pub async fn set_active(
@@ -457,9 +470,10 @@ pub async fn set_active(
     map_id: i64,
     alert_id: i64,
     user_id: i64,
-    is_active: bool,
+    toggle: Toggle,
     via: Option<&str>,
 ) -> Result<MapAlert> {
+    let is_active = toggle == Toggle::On;
     let updated = sqlx::query!(
         "update map_alerts set
              is_active = $3,

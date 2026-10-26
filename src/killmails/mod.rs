@@ -93,11 +93,10 @@ fn extract_detail(esi: &EsiKillmail, zkb: &serde_json::Value) -> Detail {
         victim_alliance_id: victim.alliance_id,
         victim_ship_type_id: victim.ship_type_id,
         total_value: zkb["totalValue"].as_f64(),
-        attacker_count: Some(
-            zkb["attackerCount"]
-                .as_i64()
-                .unwrap_or(esi.attackers.len() as i64) as i32,
-        ),
+        attacker_count: zkb["attackerCount"]
+            .as_i64()
+            .and_then(|n| i32::try_from(n).ok())
+            .or_else(|| i32::try_from(esi.attackers.len()).ok()),
         is_npc: zkb["npc"].as_bool().unwrap_or(false),
         is_solo: zkb["solo"].as_bool().unwrap_or(false),
         final_blow_character_id: final_blow.and_then(|a| a.character_id),
@@ -144,14 +143,24 @@ struct KillmailRow {
     detail: Detail,
 }
 
+/// Where a batch of killmails came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Source {
+    /// The live stream.
+    Live,
+    /// EVE Ref's daily archives.
+    Archive,
+}
+
 /// Insert killmail rows, skipping anything older than the retention window and anything
 /// already stored. Returns how many were new. The one insert statement for both the live
 /// stream and the archive import, batched with `unnest` so a whole archived day fits.
 ///
-/// `live` rows get an `ingest_seq`, which is how the name resolver finds what is new. The
-/// stream is the only live writer and inserts one kill at a time, so the numbers commit in
-/// order and the resolver's high-water mark cannot step over one still in flight.
-async fn insert_rows(pool: &PgPool, rows: &[KillmailRow], live: bool) -> sqlx::Result<u64> {
+/// [`Source::Live`] rows get an `ingest_seq`, which is how the name resolver finds what is
+/// new. The stream is the only live writer and inserts one kill at a time, so the numbers
+/// commit in order and the resolver's high-water mark cannot step over one still in flight.
+async fn insert_rows(pool: &PgPool, rows: &[KillmailRow], source: Source) -> sqlx::Result<u64> {
+    let live = source == Source::Live;
     let mut inserted = 0u64;
     // Fixed arrays rather than one placeholder per value, so the batch is bounded by
     // memory rather than by Postgres's parameter limit.

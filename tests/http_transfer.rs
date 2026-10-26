@@ -24,7 +24,7 @@ fn unreadable(path: &str, cookie: Option<&str>) -> Request<Body> {
     if let Some(cookie) = cookie {
         builder = builder.header(header::COOKIE, cookie);
     }
-    builder.body(body).unwrap()
+    builder.body(body).expect("build request")
 }
 
 #[sqlx::test(migrations = "./migrations")]

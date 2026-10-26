@@ -63,7 +63,7 @@ pub fn install() -> PrometheusHandle {
 
 /// The pool is read at scrape time; everything else was recorded as it happened.
 async fn render(State((handle, pool)): State<(PrometheusHandle, PgPool)>) -> String {
-    let idle = pool.num_idle() as f64;
+    let idle = f64::from(u32::try_from(pool.num_idle()).unwrap_or(u32::MAX));
     gauge!("ws_db_pool_connections", "state" => "idle").set(idle);
     gauge!("ws_db_pool_connections", "state" => "in_use").set(f64::from(pool.size()) - idle);
     gauge!("ws_db_pool_max_connections").set(pool.options().get_max_connections());
@@ -75,8 +75,7 @@ pub async fn track_http(request: Request, next: Next) -> Response {
     let route = request
         .extensions()
         .get::<MatchedPath>()
-        .map(|path| path.as_str().to_string())
-        .unwrap_or_else(|| "unmatched".to_string());
+        .map_or_else(|| "unmatched".to_string(), |path| path.as_str().to_string());
     let method = method_label(request.method());
     let started = Instant::now();
     let response = next.run(request).await;
@@ -128,12 +127,14 @@ pub async fn track_socket(kind: &'static str, socket: impl Future<Output = ()>) 
     socket.await;
 }
 
-/// One pass of a background job: how long it took and whether it failed.
-pub fn job_pass(job: &'static str, took: Duration, failed: bool) {
+/// One pass of a background job: how long it took.
+pub fn job_pass(job: &'static str, took: Duration) {
     histogram!("ws_background_job_duration_seconds", "job" => job).record(took);
-    if failed {
-        counter!("ws_background_job_failures_total", "job" => job).increment(1);
-    }
+}
+
+/// One pass of a background job that failed.
+pub fn job_failed(job: &'static str) {
+    counter!("ws_background_job_failures_total", "job" => job).increment(1);
 }
 
 /// Ticks a job missed because its previous pass was still running.

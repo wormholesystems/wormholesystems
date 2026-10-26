@@ -7,15 +7,15 @@ use cargo_packager_updater::semver::Version;
 use cargo_packager_updater::{Config, Update, UpdaterBuilder};
 use serde::Deserialize;
 
-pub const REPO: &str = "wormholesystems/wormholesystems";
+pub(crate) const REPO: &str = "wormholesystems/wormholesystems";
 const TAG_PREFIX: &str = "desktop-v";
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Set by CI from the repository's `DESKTOP_UPDATER_PUBKEY` variable.
 const PUBLIC_KEY: Option<&str> = option_env!("WS_UPDATER_PUBKEY");
 
 /// A newer release than the one running.
 #[derive(Clone)]
-pub struct Available {
+pub(crate) struct Available {
     pub version: String,
     pub page: String,
     /// Set when this copy can replace itself: a signed bundle exists, and the app runs
@@ -35,7 +35,7 @@ struct Release {
 }
 
 /// Ask GitHub. Blocking, so off the UI thread.
-pub fn check() -> Result<Option<Available>, String> {
+pub(crate) fn check() -> Result<Option<Available>, String> {
     let current: Version = VERSION.parse().map_err(|e| format!("{e}"))?;
     let releases: Vec<Release> = ureq::get(format!(
         "https://api.github.com/repos/{REPO}/releases?per_page=50"
@@ -116,13 +116,13 @@ fn replaceable() -> bool {
 
 /// Download, check the signature and install. On Windows the installer takes over and the
 /// process ends here; elsewhere the caller restarts.
-pub fn install(update: &Update) -> Result<(), String> {
+pub(crate) fn install(update: &Update) -> Result<(), String> {
     update.download_and_install().map_err(|e| format!("{e}"))
 }
 
 /// Start the new version. An AppImage runs from a mount that goes away with this process,
 /// so start the file itself again, a moment later so the shortcuts are free by then.
-pub fn restart(cx: &mut gpui_kit::App) {
+pub(crate) fn restart(cx: &mut gpui_kit::App) {
     if let Some(appimage) = std::env::var_os("APPIMAGE") {
         let started = std::process::Command::new("sh")
             .arg("-c")
@@ -141,22 +141,29 @@ pub fn restart(cx: &mut gpui_kit::App) {
 mod tests {
     use super::*;
 
-    fn release(tag: &str, prerelease: bool) -> Release {
+    fn release(tag: &str) -> Release {
         Release {
             tag_name: tag.into(),
             html_url: format!("https://example.test/{tag}"),
             draft: false,
-            prerelease,
+            prerelease: false,
+        }
+    }
+
+    fn prerelease(tag: &str) -> Release {
+        Release {
+            prerelease: true,
+            ..release(tag)
         }
     }
 
     #[test]
     fn picks_the_newest_desktop_release_and_skips_wsctl() {
         let releases = [
-            release("wsctl-v9.0.0", false),
-            release("desktop-v0.1.0-alpha.2", true),
-            release("desktop-v0.1.0-alpha.3", true),
-            release("desktop-v0.1.0-alpha.1", true),
+            release("wsctl-v9.0.0"),
+            prerelease("desktop-v0.1.0-alpha.2"),
+            prerelease("desktop-v0.1.0-alpha.3"),
+            prerelease("desktop-v0.1.0-alpha.1"),
         ];
         let current: Version = "0.1.0-alpha.1".parse().unwrap();
         let (r, v) = newest(&releases, &current).unwrap();
@@ -167,8 +174,8 @@ mod tests {
     #[test]
     fn a_stable_build_ignores_previews() {
         let releases = [
-            release("desktop-v0.2.0-alpha.1", true),
-            release("desktop-v0.1.1", false),
+            prerelease("desktop-v0.2.0-alpha.1"),
+            release("desktop-v0.1.1"),
         ];
         let current: Version = "0.1.0".parse().unwrap();
         assert_eq!(newest(&releases, &current).unwrap().1.to_string(), "0.1.1");
@@ -178,7 +185,7 @@ mod tests {
 
     #[test]
     fn an_alpha_hears_about_the_stable_release() {
-        let releases = [release("desktop-v0.1.0", false)];
+        let releases = [release("desktop-v0.1.0")];
         let current: Version = "0.1.0-alpha.4".parse().unwrap();
         assert_eq!(newest(&releases, &current).unwrap().1.to_string(), "0.1.0");
     }

@@ -169,7 +169,7 @@ pub(super) async fn apply_restore_systems(tx: &mut Tx<'_>, cmd: RestoreSystems) 
         .emit_all(events));
     }
     let label = format!("restored {}", cmd.label());
-    let count = cmd.systems.len() as i64;
+    let count = cmd.systems.len();
     Ok(Effect::new("systems.restored", label, CommandOutput::None)
         .entries(count)
         .undo_with(inverse)
@@ -204,7 +204,7 @@ pub(super) async fn apply_remove_restored(tx: &mut Tx<'_>, cmd: RemoveRestored) 
     connections::delete(tx, cmd.map_id, &cmd.connection_ids).await?;
     placements::delete(tx, cmd.map_id, &cmd.system_ids).await?;
 
-    let count = (cmd.system_ids.len() + cmd.connection_ids.len() + cmd.signature_ids.len()) as i64;
+    let count = cmd.system_ids.len() + cmd.connection_ids.len() + cmd.signature_ids.len();
     Ok(
         Effect::new("systems.removed", "undid a restore", CommandOutput::None)
             .entries(count)

@@ -25,7 +25,7 @@ async fn scan(pool: &PgPool, actor: Actor, map_id: i64, sys: i64, id: &str) -> i
         },
     )
     .await
-    .unwrap()
+    .expect("add_signature")
     .id
 }
 
@@ -47,17 +47,17 @@ fn jump(map_id: i64, from: i64, to: i64) -> TrackJump {
 async fn systems(pool: &PgPool, actor: Actor, map_id: i64) -> Vec<i64> {
     get_map(pool, actor, GetMap { map_id })
         .await
-        .unwrap()
+        .expect("get_map")
         .systems
         .iter()
-        .filter_map(|s| s.solar_system_id())
+        .filter_map(wormholesystems::maps::MapSystemView::solar_system_id)
         .collect()
 }
 
 async fn connections(pool: &PgPool, actor: Actor, map_id: i64) -> usize {
     get_map(pool, actor, GetMap { map_id })
         .await
-        .unwrap()
+        .expect("get_map")
         .connections
         .len()
 }
@@ -104,7 +104,7 @@ async fn a_jump_places_the_system_connects_it_and_links_the_signature(pool: PgPo
 async fn alias_of(pool: &PgPool, actor: Actor, map_id: i64, sys: i64) -> Option<String> {
     get_map(pool, actor, GetMap { map_id })
         .await
-        .unwrap()
+        .expect("get_map")
         .systems
         .iter()
         .find(|s| s.solar_system_id() == Some(sys))

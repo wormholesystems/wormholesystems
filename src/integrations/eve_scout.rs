@@ -63,9 +63,10 @@ impl EveScoutConnection {
 }
 
 /// The feed, with its last read. One per process, in the app state.
+#[derive(Debug)]
 pub struct EveScout {
     url: String,
-    cache: Mutex<Option<(Instant, Arc<Vec<EveScoutConnection>>)>>,
+    cache: Mutex<Option<(Instant, Arc<[EveScoutConnection]>)>>,
     /// Held while one request refills the cache, so the viewers that find it stale at the
     /// same moment wait for that read instead of each making their own.
     refill: tokio::sync::Mutex<()>,
@@ -83,7 +84,7 @@ impl EveScout {
     /// Every public hole out of both hubs. A failed read is an empty list, cached like any
     /// other, so an outage at EVE Scout costs one attempt a minute rather than one per
     /// viewer.
-    pub async fn connections(&self) -> Arc<Vec<EveScoutConnection>> {
+    pub async fn connections(&self) -> Arc<[EveScoutConnection]> {
         if let Some(edges) = self.fresh() {
             return edges;
         }
@@ -92,19 +93,19 @@ impl EveScout {
         if let Some(edges) = self.fresh() {
             return edges;
         }
-        let edges = Arc::new(match self.fetch().await {
-            Ok(edges) => edges,
+        let edges: Arc<[EveScoutConnection]> = match self.fetch().await {
+            Ok(edges) => edges.into(),
             Err(err) => {
                 tracing::warn!("eve scout: {err}");
-                Vec::new()
+                Arc::default()
             }
-        });
+        };
         *self.cache.lock().expect("cache lock") = Some((Instant::now(), Arc::clone(&edges)));
         edges
     }
 
     /// The last read, while it is still fresh.
-    fn fresh(&self) -> Option<Arc<Vec<EveScoutConnection>>> {
+    fn fresh(&self) -> Option<Arc<[EveScoutConnection]>> {
         self.cache
             .lock()
             .expect("cache lock")
@@ -172,7 +173,10 @@ pub fn parse(sig: &serde_json::Value) -> Option<EveScoutConnection> {
         Some(l) if l.contains("eol") => TimeStatus::Eol,
         Some(_) => TimeStatus::Stable,
         // No life field: derive from the remaining lifetime when present.
-        None => match sig.get("remaining_hours").and_then(|v| v.as_f64()) {
+        None => match sig
+            .get("remaining_hours")
+            .and_then(serde_json::Value::as_f64)
+        {
             Some(h) if h < 1.0 => TimeStatus::Critical,
             Some(h) if h < 4.0 => TimeStatus::Eol,
             _ => TimeStatus::Stable,
@@ -188,7 +192,9 @@ pub fn parse(sig: &serde_json::Value) -> Option<EveScoutConnection> {
         time_status,
         wormhole_type: text("wh_type"),
         max_ship_size: text("max_ship_size"),
-        remaining_hours: sig.get("remaining_hours").and_then(|v| v.as_f64()),
+        remaining_hours: sig
+            .get("remaining_hours")
+            .and_then(serde_json::Value::as_f64),
         updated_at: text("updated_at").or_else(|| text("created_at")),
     })
 }

@@ -5,7 +5,11 @@
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::*;
+use gpui_kit::{
+    AnyWindowHandle, App, AppContext, Bounds, Context, Entity, FontWeight, InteractiveElement,
+    IntoElement, KeyDownEvent, ParentElement, Render, Styled, Subscription, Window, WindowBounds,
+    WindowKind, WindowOptions, div, point, px, size,
+};
 
 use crate::theme::HEADING;
 
@@ -13,9 +17,9 @@ const WIDTH: f32 = 360.0;
 const HEIGHT: f32 = 132.0;
 
 /// What the dialog was closed with: the alias typed, or `None` for Esc.
-pub type Done = Box<dyn Fn(Option<String>, &mut App)>;
+pub(crate) type Done = Box<dyn Fn(Option<String>, &mut App)>;
 
-pub struct AliasDialog {
+pub(crate) struct AliasDialog {
     system: String,
     input: Entity<InputState>,
     done: Option<Done>,
@@ -28,7 +32,7 @@ impl AliasDialog {
         current: String,
         done: Done,
         window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
     ) -> Self {
         let input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -54,7 +58,7 @@ impl AliasDialog {
         }
     }
 
-    fn close(&mut self, value: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+    fn close(&mut self, value: Option<String>, window: &mut Window, cx: &mut Context<'_, Self>) {
         if let Some(done) = self.done.take() {
             done(value, cx);
         }
@@ -63,7 +67,7 @@ impl AliasDialog {
 }
 
 impl Render for AliasDialog {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         div()
             .size_full()
@@ -100,7 +104,7 @@ impl Render for AliasDialog {
 }
 
 /// Open the dialog for `system`, its alias filled in. `done` hears how it was closed.
-pub fn open(
+pub(crate) fn open(
     system: String,
     current: String,
     done: Done,
@@ -109,12 +113,15 @@ pub fn open(
     // Grown with the text size set for the main window.
     let scale = f32::from(cx.theme().font_size) / crate::ui::BASE_FONT;
     let size = size(px(WIDTH * scale), px(HEIGHT * scale));
-    let display = cx.primary_display().map(|d| d.bounds()).unwrap_or_else(|| {
-        Bounds::new(
-            point(px(0.0), px(0.0)),
-            gpui_kit::size(px(1920.0), px(1080.0)),
-        )
-    });
+    let display = cx.primary_display().map_or_else(
+        || {
+            Bounds::new(
+                point(px(0.0), px(0.0)),
+                gpui_kit::size(px(1920.0), px(1080.0)),
+            )
+        },
+        |d| d.bounds(),
+    );
     let options = |kind| WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered_at(
             display.center(),
@@ -151,7 +158,9 @@ pub fn open(
             margin: None,
             keyboard_interactivity: KeyboardInteractivity::Exclusive,
         });
-        if let Ok((handle, _)) = gpui_kit::open_window(options(layer), cx, build(parts.clone())) {
+        if let Ok((handle, _)) =
+            gpui_kit::open_window(options(layer), cx, build(std::rc::Rc::clone(&parts)))
+        {
             return Ok(handle);
         }
     }

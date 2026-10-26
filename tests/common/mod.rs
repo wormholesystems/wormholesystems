@@ -1,10 +1,10 @@
 //! Shared fixtures for the map action tests. Lives in `tests/common/` so it is compiled
 //! as a helper module (not its own test binary); each test file does `mod common;`.
-#![allow(dead_code)]
+#![expect(dead_code, reason = "each test binary uses only some of these helpers")]
 
-pub mod app;
-pub mod catalog;
-pub mod map;
+pub(crate) mod app;
+pub(crate) mod catalog;
+pub(crate) mod map;
 
 use sqlx::PgPool;
 use wormholesystems::allowlist::AffiliationAllowlist;
@@ -14,22 +14,22 @@ use wormholesystems::maps::map::{CreateMap, create_map};
 use wormholesystems::maps::{Actor, Role, SubjectType};
 
 // Three solar systems are seeded so systems can be placed and connected.
-pub const SYS_A: i64 = 30000142;
-pub const SYS_B: i64 = 30000144;
-pub const SYS_C: i64 = 30000145;
+pub(crate) const SYS_A: i64 = 30000142;
+pub(crate) const SYS_B: i64 = 30000144;
+pub(crate) const SYS_C: i64 = 30000145;
 
 /// A region → constellation → three solar systems.
-pub async fn seed_universe(pool: &PgPool) {
+pub(crate) async fn seed_universe(pool: &PgPool) {
     sqlx::query("insert into regions (id, name) values (10000001, 'Test Region')")
         .execute(pool)
         .await
-        .unwrap();
+        .expect("insert regions");
     sqlx::query(
         "insert into constellations (id, region_id, name) values (20000001, 10000001, 'Test Const')",
     )
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert constellations");
     for (id, name) in [
         (SYS_A, "Jita"),
         (SYS_B, "Perimeter"),
@@ -43,32 +43,38 @@ pub async fn seed_universe(pool: &PgPool) {
         .bind(name)
         .execute(pool)
         .await
-        .unwrap();
+        .expect("insert solar_systems");
     }
 }
 
-pub async fn new_user(pool: &PgPool) -> i64 {
+pub(crate) async fn new_user(pool: &PgPool) -> i64 {
     sqlx::query_scalar("insert into users default values returning id")
         .fetch_one(pool)
         .await
-        .unwrap()
+        .expect("insert users")
 }
 
 /// Insert a character (and the corp/alliance it references, to satisfy the FKs).
-pub async fn add_character(pool: &PgPool, user_id: i64, id: i64, corp: i64, alliance: Option<i64>) {
+pub(crate) async fn add_character(
+    pool: &PgPool,
+    user_id: i64,
+    id: i64,
+    corp: i64,
+    alliance: Option<i64>,
+) {
     sqlx::query("insert into corporations (id, name, ticker) values ($1, $2, 'CORP') on conflict (id) do nothing")
         .bind(corp)
         .bind(format!("Corp {corp}"))
         .execute(pool)
         .await
-        .unwrap();
+        .expect("insert corporations");
     if let Some(a) = alliance {
         sqlx::query("insert into alliances (id, name, ticker) values ($1, $2, 'ALLY') on conflict (id) do nothing")
             .bind(a)
             .bind(format!("Alliance {a}"))
             .execute(pool)
             .await
-            .unwrap();
+            .expect("insert alliances");
     }
     sqlx::query(
         "insert into characters (id, user_id, name, owner_hash, corporation_id, alliance_id)
@@ -81,16 +87,16 @@ pub async fn add_character(pool: &PgPool, user_id: i64, id: i64, corp: i64, alli
     .bind(alliance)
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert characters");
 }
 
 /// An owner (character 1001, corp 2001) with a freshly created map, on a seeded universe.
-pub struct World {
+pub(crate) struct World {
     pub owner: Actor,
     pub map_id: i64,
 }
 
-pub async fn world(pool: &PgPool) -> World {
+pub(crate) async fn world(pool: &PgPool) -> World {
     seed_universe(pool).await;
     let user = new_user(pool).await;
     add_character(pool, user, 1001, 2001, None).await;
@@ -108,7 +114,7 @@ pub async fn world(pool: &PgPool) -> World {
         },
     )
     .await
-    .unwrap();
+    .expect("create_map");
     World {
         owner,
         map_id: map.id,
@@ -116,7 +122,7 @@ pub async fn world(pool: &PgPool) -> World {
 }
 
 /// Add a fresh user + character and grant them `role` on the map; return their actor.
-pub async fn member_with_role(
+pub(crate) async fn member_with_role(
     pool: &PgPool,
     granter: Actor,
     map_id: i64,
@@ -138,7 +144,7 @@ pub async fn member_with_role(
         },
     )
     .await
-    .unwrap();
+    .expect("set_access");
     Actor {
         user_id: user,
         character_id: char_id,

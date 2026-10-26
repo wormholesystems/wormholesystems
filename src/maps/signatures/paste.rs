@@ -57,8 +57,8 @@ pub async fn paste_signatures(pool: &PgPool, actor: Actor, cmd: PasteSignatures)
 
 /// What one pasted row writes over an existing signature: the legacy merge rules listed on
 /// [`paste_signatures`]. `pasted_type` is the pasted catalog type, already checked against
-/// the pasted group's category; `kept_type_fits` says whether the existing catalog type
-/// still belongs to the merged group.
+/// the pasted group's category; `fitting_type` is the existing catalog type when it still
+/// belongs to the merged group.
 struct PastedFields {
     group: SignatureGroup,
     type_id: Option<i64>,
@@ -72,7 +72,7 @@ fn merge_paste(
     existing_name: Option<String>,
     pasted: &PastedSignature,
     pasted_type: Option<i64>,
-    kept_type_fits: bool,
+    fitting_type: Option<i64>,
 ) -> PastedFields {
     let group = pasted.group.unwrap_or(existing_group);
     let type_id = if is_wormhole(group) {
@@ -83,7 +83,7 @@ fn merge_paste(
         // A site with only an unmatched raw name clears a stale type.
         None
     } else {
-        existing_type.filter(|_| kept_type_fits)
+        fitting_type
     };
     let name = if is_wormhole(group) {
         existing_name.or_else(|| pasted.name.clone())
@@ -133,24 +133,8 @@ pub(in crate::maps) async fn apply_paste_signatures(
         pasted_at: None,
     };
 
-    // Only a paste moves this: it says when the list last matched a scan, which a hand
-    // edit does not. Undo puts the previous time back with the previous list.
-    let placement = sqlx::query!(
-        "select id, signatures_pasted_at from map_solar_systems
-         where map_id = $1 and solar_system_id = $2
-         for update",
-        cmd.map_id,
-        cmd.solar_system_id,
-    )
-    .fetch_one(&mut **tx)
-    .await?;
-    restore.pasted_at = placement.signatures_pasted_at;
-    sqlx::query!(
-        "update map_solar_systems set signatures_pasted_at = now() where id = $1",
-        placement.id,
-    )
-    .execute(&mut **tx)
-    .await?;
+    let (placement_id, pasted_at) = stamp_pasted(tx, cmd.map_id, cmd.solar_system_id).await?;
+    restore.pasted_at = pasted_at;
 
     // Every catalog type the merge may ask about, pasted or kept, in one lookup.
     let type_ids: Vec<i64> = cmd
@@ -179,46 +163,21 @@ pub(in crate::maps) async fn apply_paste_signatures(
         };
 
         let Some(existing) = current.get_mut(sid) else {
-            // A paste only names what the scanner shows; the hole's state is for somebody
-            // to fill in.
-            let row = store::signatures::insert(
-                tx,
-                cmd.map_id,
-                &NewSignature {
-                    solar_system_id: cmd.solar_system_id,
-                    signature_id: sid,
-                    group: s.group.unwrap_or_default(),
-                    signature_type_id: pasted_type,
-                    name: s.name.as_deref(),
-                    size: None,
-                    mass_status: None,
-                    time_status: None,
-                    connection_id: None,
-                },
-            )
-            .await?;
-            current.insert(
-                row.signature_id,
-                Current {
-                    id: row.id,
-                    group: row.group,
-                    type_id: row.signature_type_id,
-                    name: row.name,
-                },
-            );
+            let (signature_id, inserted) = insert_pasted(tx, &cmd, s, sid, pasted_type).await?;
+            current.insert(signature_id, inserted);
             continue;
         };
 
-        let kept_type_fits = existing.type_id.is_some_and(|kept| {
-            category(kept) == category_id_for(s.group.unwrap_or(existing.group))
-        });
+        let fitting_type = existing
+            .type_id
+            .filter(|&kept| category(kept) == category_id_for(s.group.unwrap_or(existing.group)));
         let merged = merge_paste(
             existing.group,
             existing.type_id,
             existing.name.take(),
             s,
             pasted_type,
-            kept_type_fits,
+            fitting_type,
         );
 
         sqlx::query!(
@@ -240,7 +199,7 @@ pub(in crate::maps) async fn apply_paste_signatures(
         existing.name = merged.name;
     }
 
-    let count = cmd.signatures.len() as i64;
+    let count = cmd.signatures.len();
     Ok(Effect::new(
         "signatures.pasted",
         format!("pasted {count} signatures"),
@@ -254,8 +213,70 @@ pub(in crate::maps) async fn apply_paste_signatures(
     })
     .emit(MapEvent::SystemDetailsChanged {
         map_id: cmd.map_id,
-        map_solar_system_id: placement.id,
+        map_solar_system_id: placement_id,
     }))
+}
+
+/// Mark the system's list as just pasted, returning its placement and the time it held
+/// before. Only a paste moves this: it says when the list last matched a scan, which a
+/// hand edit does not. Undo puts the previous time back with the previous list.
+async fn stamp_pasted(
+    tx: &mut Tx<'_>,
+    map_id: i64,
+    solar_system_id: i64,
+) -> Result<(i64, Option<chrono::DateTime<chrono::Utc>>)> {
+    let placement = sqlx::query!(
+        "select id, signatures_pasted_at from map_solar_systems
+         where map_id = $1 and solar_system_id = $2
+         for update",
+        map_id,
+        solar_system_id,
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    sqlx::query!(
+        "update map_solar_systems set signatures_pasted_at = now() where id = $1",
+        placement.id,
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok((placement.id, placement.signatures_pasted_at))
+}
+
+/// Add a pasted line the system does not have yet. A paste only names what the scanner
+/// shows; the hole's state is for somebody to fill in.
+async fn insert_pasted(
+    tx: &mut Tx<'_>,
+    cmd: &PasteSignatures,
+    s: &PastedSignature,
+    sid: &str,
+    pasted_type: Option<i64>,
+) -> Result<(String, Current)> {
+    let row = store::signatures::insert(
+        tx,
+        cmd.map_id,
+        &NewSignature {
+            solar_system_id: cmd.solar_system_id,
+            signature_id: sid,
+            group: s.group.unwrap_or_default(),
+            signature_type_id: pasted_type,
+            name: s.name.as_deref(),
+            size: None,
+            mass_status: None,
+            time_status: None,
+            connection_id: None,
+        },
+    )
+    .await?;
+    Ok((
+        row.signature_id,
+        Current {
+            id: row.id,
+            group: row.group,
+            type_id: row.signature_type_id,
+            name: row.name,
+        },
+    ))
 }
 
 /// The fields of a signature the merge reads, as the paste has left them so far.
@@ -304,7 +325,7 @@ mod merge_tests {
             Some("K162".into()),
             &pasted(Some(SignatureGroup::Wormhole), Some("Fresh name")),
             Some(200),
-            true,
+            Some(100),
         );
         assert_eq!(merged.type_id, Some(100));
         assert_eq!(merged.name, Some("K162".into()));
@@ -319,7 +340,7 @@ mod merge_tests {
             None,
             &pasted(Some(SignatureGroup::Wormhole), None),
             Some(200),
-            false,
+            None,
         );
         assert_eq!(merged.type_id, Some(200));
     }
@@ -332,7 +353,7 @@ mod merge_tests {
             Some("Old site".into()),
             &pasted(Some(SignatureGroup::Data), Some("New site")),
             Some(200),
-            true,
+            Some(100),
         );
         assert_eq!(merged.type_id, Some(200));
         assert_eq!(merged.name, Some("New site".into()));
@@ -346,7 +367,7 @@ mod merge_tests {
             None,
             &pasted(Some(SignatureGroup::Data), Some("Unmatched name")),
             None,
-            true,
+            Some(100),
         );
         assert_eq!(merged.type_id, None);
         assert_eq!(merged.name, Some("Unmatched name".into()));
@@ -355,9 +376,16 @@ mod merge_tests {
     #[test]
     fn a_bare_repaste_keeps_the_old_type_only_while_it_fits_the_group() {
         let bare = pasted(Some(SignatureGroup::Relic), None);
-        let kept = merge_paste(SignatureGroup::Relic, Some(100), None, &bare, None, true);
+        let kept = merge_paste(
+            SignatureGroup::Relic,
+            Some(100),
+            None,
+            &bare,
+            None,
+            Some(100),
+        );
         assert_eq!(kept.type_id, Some(100));
-        let recategorized = merge_paste(SignatureGroup::Data, Some(100), None, &bare, None, false);
+        let recategorized = merge_paste(SignatureGroup::Data, Some(100), None, &bare, None, None);
         assert_eq!(recategorized.type_id, None);
         assert_eq!(recategorized.group, SignatureGroup::Relic);
     }
@@ -370,7 +398,7 @@ mod merge_tests {
             None,
             &pasted(Some(SignatureGroup::Gas), None),
             None,
-            false,
+            None,
         );
         assert!(merged.clear_link);
         // A paste that names no group at all leaves the link alone.
@@ -380,7 +408,7 @@ mod merge_tests {
             None,
             &pasted(None, None),
             None,
-            true,
+            Some(100),
         );
         assert!(!unnamed.clear_link);
     }

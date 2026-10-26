@@ -21,7 +21,7 @@ const CHARACTER: i64 = 100;
 /// An SSO whose token endpoint refuses every refresh, and how often it was asked.
 async fn refusing_sso() -> (Sso, Arc<AtomicUsize>) {
     let hits = Arc::new(AtomicUsize::new(0));
-    let counter = hits.clone();
+    let counter = Arc::clone(&hits);
     let app = Router::new().route(
         "/token",
         post(move || {
@@ -34,9 +34,14 @@ async fn refusing_sso() -> (Sso, Arc<AtomicUsize>) {
             }
         }),
     );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let base = format!(
+        "http://{}",
+        listener.local_addr().expect("read listener address")
+    );
+    tokio::spawn(async move { axum::serve(listener, app).await.expect("serve test app") });
     let config = SsoConfig {
         client_id: "test".into(),
         client_secret: "test".into(),
@@ -69,7 +74,7 @@ async fn signed_in(pool: &PgPool) -> Actor {
     };
     let user_id = persist_identity(pool, &claims, corp, None, None)
         .await
-        .unwrap();
+        .expect("persist_identity");
     Actor {
         user_id,
         character_id: CHARACTER,
@@ -79,10 +84,10 @@ async fn signed_in(pool: &PgPool) -> Actor {
 async fn needs_login(pool: &PgPool, actor: Actor) -> bool {
     wormholesystems::identity::characters::list(pool, actor)
         .await
-        .unwrap()
+        .expect("list characters")
         .into_iter()
         .find(|c| c.character_id == CHARACTER)
-        .unwrap()
+        .expect("character is listed")
         .needs_login
 }
 
@@ -123,7 +128,7 @@ async fn a_fresh_login_clears_the_mark(pool: PgPool) {
     store
         .save(
             CHARACTER,
-            &token(SystemTime::now() + Duration::from_secs(1200)),
+            &token(SystemTime::now() + Duration::from_mins(20)),
         )
         .await
         .unwrap();

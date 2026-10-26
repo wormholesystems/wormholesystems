@@ -11,7 +11,7 @@ use std::sync::mpsc::{Receiver, channel};
 // macOS has no backend yet, so only `Unknown` is ever made there.
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Focus {
+pub(crate) enum Focus {
     /// An EVE client, with the character logged in on it; `None` on the login screens.
     Eve(Option<String>),
     /// One of this app's windows.
@@ -24,7 +24,7 @@ pub enum Focus {
 impl Focus {
     /// Read a window's class (Hyprland's, empty elsewhere) and title.
     #[cfg_attr(target_os = "macos", allow(dead_code))]
-    pub fn of(class: &str, title: &str) -> Focus {
+    pub(crate) fn of(class: &str, title: &str) -> Focus {
         if title == "WormholeSystems" || class.starts_with("wormholesystems") {
             return Focus::Us;
         }
@@ -39,7 +39,7 @@ impl Focus {
 }
 
 /// Whether this desktop can say which window has focus.
-pub fn supported() -> bool {
+pub(crate) fn supported() -> bool {
     cfg!(target_os = "windows")
         || (cfg!(target_os = "linux") && std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some())
 }
@@ -47,7 +47,7 @@ pub fn supported() -> bool {
 impl Focus {
     /// Whether the overlay belongs on screen with this focus, for these characters (empty
     /// for any).
-    pub fn shows_overlay(&self, characters: &[String]) -> bool {
+    pub(crate) fn shows_overlay(&self, characters: &[String]) -> bool {
         match self {
             Focus::Us | Focus::Unknown => true,
             Focus::Other => false,
@@ -59,27 +59,22 @@ impl Focus {
 
 /// Start watching. The receiver hears every change; nothing at all where focus can't be
 /// told, which reads as [`Focus::Unknown`].
-pub fn watch() -> Receiver<Focus> {
+pub(crate) fn watch() -> Receiver<Focus> {
     let (tx, rx) = channel();
     #[cfg(target_os = "linux")]
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
-        std::thread::spawn(move || hyprland(tx));
+        std::thread::spawn(move || hyprland(&tx));
         return rx;
     }
     #[cfg(target_os = "windows")]
-    {
-        std::thread::spawn(move || windows(tx));
-        return rx;
-    }
-    #[allow(unreachable_code)]
-    {
-        drop(tx);
-        rx
-    }
+    std::thread::spawn(move || windows(tx));
+    #[cfg(not(target_os = "windows"))]
+    drop(tx);
+    rx
 }
 
 #[cfg(target_os = "linux")]
-fn hyprland(tx: Sender<Focus>) {
+fn hyprland(tx: &Sender<Focus>) {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::os::unix::net::UnixStream;
 

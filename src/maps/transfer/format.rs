@@ -339,6 +339,10 @@ pub const SECTION_NAMES: [&str; 6] = [
 
 /// Which sections an export or import touches.
 #[derive(Debug, Clone, Copy, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one independent flag per section, as the transfer form's checkboxes pick them"
+)]
 pub struct SectionSet {
     pub settings: bool,
     pub access: bool,
@@ -387,12 +391,21 @@ pub struct ParsedExport {
     pub sections: Sections,
 }
 
+/// Where an import lands, which decides what it may leave out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportTarget {
+    /// A map made for the import, with nothing on it yet.
+    NewMap,
+    /// A map that already has placements to attach to.
+    ExistingMap,
+}
+
 /// Decode and validate an uploaded export, keeping only the requested sections. Every way
 /// the file can be wrong comes back as `Validation` with a sentence worth showing.
 pub fn parse_export(
     content: &str,
     sections: SectionSet,
-    for_new_map: bool,
+    target: ImportTarget,
 ) -> Result<ParsedExport> {
     let invalid = |msg: String| MapError::Validation(msg);
 
@@ -404,7 +417,7 @@ pub fn parse_export(
             "this file is not a wormholesystems map export".into(),
         ));
     }
-    if value.get("version").and_then(|v| v.as_i64()) != Some(VERSION) {
+    if value.get("version").and_then(serde_json::Value::as_i64) != Some(VERSION) {
         return Err(invalid(
             "this file was exported by an incompatible version of the application".into(),
         ));
@@ -441,35 +454,41 @@ pub fn parse_export(
 
     // A fresh map has no placements, so connections and signatures would have nothing to
     // attach to without the systems that carry them.
-    if for_new_map && !sections.solarsystems && (sections.connections || sections.signatures) {
+    if target == ImportTarget::NewMap
+        && !sections.solarsystems
+        && (sections.connections || sections.signatures)
+    {
         return Err(invalid(
             "importing connections or signatures into a new map requires the solar systems section"
                 .into(),
         ));
     }
 
-    fn section<T: serde::de::DeserializeOwned>(
-        available: &serde_json::Map<String, serde_json::Value>,
-        name: &str,
-        wanted: bool,
-    ) -> Result<Option<T>> {
-        if !wanted {
-            return Ok(None);
-        }
-        serde_json::from_value(available[name].clone())
-            .map(Some)
-            .map_err(|e| {
-                MapError::Validation(format!("the \"{name}\" section contains invalid data: {e}"))
-            })
-    }
-
     let parsed = Sections {
-        settings: section(available, "settings", sections.settings)?,
-        access: section(available, "access", sections.access)?,
-        solarsystems: section(available, "solarsystems", sections.solarsystems)?,
-        connections: section(available, "connections", sections.connections)?,
-        signatures: section(available, "signatures", sections.signatures)?,
-        routes: section(available, "routes", sections.routes)?,
+        settings: sections
+            .settings
+            .then(|| section(available, "settings"))
+            .transpose()?,
+        access: sections
+            .access
+            .then(|| section(available, "access"))
+            .transpose()?,
+        solarsystems: sections
+            .solarsystems
+            .then(|| section(available, "solarsystems"))
+            .transpose()?,
+        connections: sections
+            .connections
+            .then(|| section(available, "connections"))
+            .transpose()?,
+        signatures: sections
+            .signatures
+            .then(|| section(available, "signatures"))
+            .transpose()?,
+        routes: sections
+            .routes
+            .then(|| section(available, "routes"))
+            .transpose()?,
     };
 
     // The owner row never travels; a file claiming one is not one of ours.
@@ -482,5 +501,15 @@ pub fn parse_export(
     Ok(ParsedExport {
         map_name,
         sections: parsed,
+    })
+}
+
+/// Decode one section of the file, already known to be present.
+fn section<T: serde::de::DeserializeOwned>(
+    available: &serde_json::Map<String, serde_json::Value>,
+    name: &str,
+) -> Result<T> {
+    serde_json::from_value(available[name].clone()).map_err(|e| {
+        MapError::Validation(format!("the \"{name}\" section contains invalid data: {e}"))
     })
 }

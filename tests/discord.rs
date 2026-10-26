@@ -14,7 +14,7 @@ async fn link(pool: &PgPool, user_id: i64, discord_id: &str) {
     )
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert discord_accounts");
 }
 
 #[sqlx::test]
@@ -105,7 +105,7 @@ async fn command(pool: &PgPool, context: &str, options: &str) -> String {
         r#"{{"type":2,"data":{{"name":"wh","options":{options},
              "resolved":{{"roles":{{"77":{{"name":"Scouts"}}}}}}}},{context}}}"#
     ))
-    .unwrap();
+    .expect("parse JSON");
     discord::commands::run(&common::app::state(pool), &interaction).await
 }
 

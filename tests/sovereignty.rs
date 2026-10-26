@@ -13,7 +13,7 @@ const ALLIANCE: i64 = 99000001;
 const CORP: i64 = 98000001;
 
 fn systems(json: serde_json::Value) -> Vec<SovereigntySystem> {
-    serde_json::from_value(json).unwrap()
+    serde_json::from_value(json).expect("parse JSON")
 }
 
 async fn holder(pool: &PgPool, system: i64) -> Option<(Option<i64>, DateTime<Utc>)> {
@@ -23,7 +23,7 @@ async fn holder(pool: &PgPool, system: i64) -> Option<(Option<i64>, DateTime<Utc
     .bind(system)
     .fetch_optional(pool)
     .await
-    .unwrap()
+    .expect("query system_sovereignty")
 }
 
 #[sqlx::test]

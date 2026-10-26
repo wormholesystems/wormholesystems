@@ -242,7 +242,15 @@ pub async fn set_alert_active(
 ) -> ApiResult<MapAlert> {
     let user_id = require_manager(&state, &creds, map_id).await?;
     Ok(Json(
-        store::set_active(&state.db, map_id, alert_id, user_id, body.is_active, None).await?,
+        store::set_active(
+            &state.db,
+            map_id,
+            alert_id,
+            user_id,
+            body.is_active.into(),
+            None,
+        )
+        .await?,
     ))
 }
 

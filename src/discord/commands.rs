@@ -4,12 +4,14 @@
 //! list. Every reply is ephemeral and every command needs a linked account, because
 //! everything they answer is about the sender's own maps.
 
+use std::fmt::Write as _;
+
 use serde_json::{Value, json};
 
 use crate::alerts::ships::JumpShip;
 use crate::alerts::{AlertDelivery, AlertKind, AlertMention, filters};
 use crate::app::AppState;
-use crate::maps::alerts::SaveAlert;
+use crate::maps::alerts::{SaveAlert, Toggle};
 use crate::maps::{MapError, Role};
 
 use super::interactions::{CommandData, CommandOption, Interaction, Permission, focused, option};
@@ -25,8 +27,16 @@ pub fn definition() -> Value {
                 "name": "account",
                 "description": "Show which WormholeSystems account this Discord user is linked to"
             },
-            alert_group("alert-dm", "Create an alert delivered to you by direct message", false),
-            alert_group("alert-channel", "Create an alert posted in this channel", true),
+            alert_group(
+                "alert-dm",
+                "Create an alert delivered to you by direct message",
+                AlertDelivery::DiscordDm,
+            ),
+            alert_group(
+                "alert-channel",
+                "Create an alert posted in this channel",
+                AlertDelivery::DiscordChannel,
+            ),
             {
                 "type": 2,
                 "name": "alerts",
@@ -84,7 +94,8 @@ pub fn definition() -> Value {
 /// One destination's worth of alert subcommands. Discord nests a command at most two deep,
 /// so the destination is a group and each kind is a subcommand under it; the channel group
 /// carries the mention options, which a direct message has no use for.
-fn alert_group(name: &str, description: &str, channel: bool) -> Value {
+fn alert_group(name: &str, description: &str, delivery: AlertDelivery) -> Value {
+    let channel = matches!(delivery, AlertDelivery::DiscordChannel);
     let map = json!({
         "type": 3, "name": "map", "description": "Which map",
         "required": true, "autocomplete": true
@@ -204,8 +215,8 @@ pub async fn run(state: &AppState, interaction: &Interaction) -> String {
             create_alert(state, user_id, interaction, data, request).await
         }
         Action::AlertsList { map } => alerts(state, user_id, map).await,
-        Action::AlertsSetActive { alert, active } => {
-            set_active(state, user_id, alert, active).await
+        Action::AlertsSetActive { alert, toggle } => {
+            set_active(state, user_id, alert, toggle).await
         }
         Action::AlertsRemove { alert } => remove(state, user_id, alert).await,
         Action::Route {
@@ -215,6 +226,14 @@ pub async fn run(state: &AppState, interaction: &Interaction) -> String {
         Action::Route { .. } => "Pick a map and a system from the suggestions.".into(),
         Action::Nothing => "Pick one of the subcommands.".into(),
         Action::Unknown(name) => format!("I do not know `{name}`."),
+    }
+}
+
+/// How `/wh alerts enable` and `disable` say which way the alert went.
+fn toggle_label(toggle: Toggle) -> &'static str {
+    match toggle {
+        Toggle::On => "on",
+        Toggle::Off => "off",
     }
 }
 
@@ -231,7 +250,7 @@ enum Action<'a> {
     },
     AlertsSetActive {
         alert: Option<i64>,
-        active: bool,
+        toggle: Toggle,
     },
     AlertsRemove {
         alert: Option<i64>,
@@ -271,7 +290,7 @@ fn parse_alert(group: &CommandOption, delivery: AlertDelivery) -> Action<'_> {
         "killmail" => AlertKind::Killmail,
         other => return Action::Unknown(other),
     };
-    let integer = |name: &str| option(&variant.options, name).and_then(|o| o.integer());
+    let integer = |name: &str| option(&variant.options, name).and_then(CommandOption::integer);
     let string = |name: &str| option(&variant.options, name).and_then(|o| o.string());
     Action::AlertCreate(AlertRequest {
         delivery,
@@ -299,26 +318,26 @@ fn parse(options: &[CommandOption]) -> Action<'_> {
             let Some(action) = sub.options.first() else {
                 return Action::Nothing;
             };
-            let alert = option(&action.options, "alert").and_then(|o| o.integer());
+            let alert = option(&action.options, "alert").and_then(CommandOption::integer);
             match action.name.as_str() {
                 "list" => Action::AlertsList {
                     map: option(&action.options, "map").and_then(|o| o.string()),
                 },
                 "enable" => Action::AlertsSetActive {
                     alert,
-                    active: true,
+                    toggle: Toggle::On,
                 },
                 "disable" => Action::AlertsSetActive {
                     alert,
-                    active: false,
+                    toggle: Toggle::Off,
                 },
                 "remove" => Action::AlertsRemove { alert },
                 other => Action::Unknown(other),
             }
         }
         "route" => Action::Route {
-            map: option(&sub.options, "map").and_then(|o| o.integer()),
-            system: option(&sub.options, "system").and_then(|o| o.integer()),
+            map: option(&sub.options, "map").and_then(CommandOption::integer),
+            system: option(&sub.options, "system").and_then(CommandOption::integer),
         },
         other => Action::Unknown(other),
     }
@@ -373,7 +392,7 @@ fn alert_name(body: &SaveAlert, target: Option<&str>, origin: Option<&str>) -> S
         },
         AlertKind::JumpRange => format!(
             "{} range of {target}",
-            body.ship_type.map(JumpShip::label).unwrap_or("Capital")
+            body.ship_type.map_or("Capital", JumpShip::label)
         ),
         AlertKind::Killmail => format!("Kills within {} jumps of the chain", body.max_jumps),
     }
@@ -440,40 +459,16 @@ async fn create_alert(
     };
 
     let (guild_id, channel_id) = if is_channel {
-        let (Some(guild), Some(channel)) = (&interaction.guild_id, &interaction.channel_id) else {
-            return "Channel alerts are created from inside a server channel.".into();
-        };
-        if !crate::discord::is_snowflake(guild) || !crate::discord::is_snowflake(channel) {
-            return "Channel alerts are created from inside a server channel.".into();
+        match channel_of(interaction, mention) {
+            Ok((guild, channel)) => (Some(guild), Some(channel)),
+            Err(reply) => return reply.into(),
         }
-        if let Some(denied) = denied_in_channel(interaction, mention) {
-            return denied.into();
-        }
-        (Some(guild.clone()), Some(channel.clone()))
     } else {
         (None, None)
     };
-
-    // A direct message reaches only its creator, so seeing the map is enough; a channel
-    // post reaches a server, which is the manager's call, as it is on the settings page.
-    if is_channel {
-        match crate::maps::access::require_role(&state.db, map_id, user_id, Role::Manager).await {
-            Ok(_) => {}
-            Err(MapError::Forbidden) => {
-                return "Only map managers can create channel alerts.".into();
-            }
-            Err(_) => return "You do not have access to that map.".into(),
-        }
-    } else if !crate::maps::access::can_see(&state.db, map_id, user_id).await {
-        return "You do not have access to that map.".into();
-    }
-    let Some(map_name) = sqlx::query_scalar!("select name from maps where id = $1", map_id)
-        .fetch_optional(&state.db)
-        .await
-        .ok()
-        .flatten()
-    else {
-        return "You do not have access to that map.".into();
+    let map_name = match map_for_alert(state, map_id, user_id, request.delivery).await {
+        Ok(name) => name,
+        Err(reply) => return reply.into(),
     };
 
     let target = match (request.kind, request.system) {
@@ -508,8 +503,14 @@ async fn create_alert(
 
     let jumps = match (request.kind, request.jumps) {
         (AlertKind::JumpRange, _) => 0,
-        (_, Some(jumps)) => jumps as i32,
+        (_, Some(jumps)) => match i32::try_from(jumps) {
+            Ok(jumps) => jumps,
+            Err(_) => return "That is too many jumps.".into(),
+        },
         (_, None) => return "Say how many jumps.".into(),
+    };
+    let Ok(jdc_level) = request.jdc.map(i32::try_from).transpose() else {
+        return "That is not a JDC level.".into();
     };
     let mut body = SaveAlert {
         name: String::new(),
@@ -524,7 +525,7 @@ async fn create_alert(
         origin_solar_system_id: origin.as_ref().map(|(id, _)| *id),
         max_jumps: jumps,
         ship_type: request.ship,
-        jdc_level: request.jdc.map(|level| level as i32),
+        jdc_level,
         filters: Vec::new(),
         filter_match: filters::Match::Any,
     };
@@ -544,6 +545,62 @@ async fn create_alert(
         Err(_) => return "I could not save that alert just now.".into(),
     }
 
+    created_reply(&body, target_name, origin_name, &map_name)
+}
+
+/// The guild and channel a channel alert is created in, once the sender may.
+fn channel_of(
+    interaction: &Interaction,
+    mention: AlertMention,
+) -> Result<(String, String), &'static str> {
+    let (Some(guild), Some(channel)) = (&interaction.guild_id, &interaction.channel_id) else {
+        return Err("Channel alerts are created from inside a server channel.");
+    };
+    if !crate::discord::is_snowflake(guild) || !crate::discord::is_snowflake(channel) {
+        return Err("Channel alerts are created from inside a server channel.");
+    }
+    if let Some(denied) = denied_in_channel(interaction, mention) {
+        return Err(denied);
+    }
+    Ok((guild.clone(), channel.clone()))
+}
+
+/// The map's name, when the user may create this kind of alert on it.
+async fn map_for_alert(
+    state: &AppState,
+    map_id: i64,
+    user_id: i64,
+    delivery: AlertDelivery,
+) -> Result<String, &'static str> {
+    // A direct message reaches only its creator, so seeing the map is enough; a channel
+    // post reaches a server, which is the manager's call, as it is on the settings page.
+    if delivery == AlertDelivery::DiscordChannel {
+        match crate::maps::access::require_role(&state.db, map_id, user_id, Role::Manager).await {
+            Ok(_) => {}
+            Err(MapError::Forbidden) => {
+                return Err("Only map managers can create channel alerts.");
+            }
+            Err(_) => return Err("You do not have access to that map."),
+        }
+    } else if !crate::maps::access::can_see(&state.db, map_id, user_id).await {
+        return Err("You do not have access to that map.");
+    }
+    sqlx::query_scalar!("select name from maps where id = $1", map_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .ok_or("You do not have access to that map.")
+}
+
+/// What to say once the alert is saved.
+fn created_reply(
+    body: &SaveAlert,
+    target_name: Option<&str>,
+    origin_name: Option<&str>,
+    map_name: &str,
+) -> String {
+    let jumps = body.max_jumps;
     let target_name = target_name.unwrap_or("a system");
     match (body.kind, origin_name) {
         (AlertKind::Proximity, Some(origin)) => format!(
@@ -555,8 +612,7 @@ async fn create_alert(
         (AlertKind::JumpRange, _) => format!(
             "Alert created for exits within {:.1} ly of **{target_name}** on **{map_name}**.",
             body.ship_type
-                .map(|ship| ship.max_range_ly(body.jdc_level.unwrap_or(0)))
-                .unwrap_or(0.0)
+                .map_or(0.0, |ship| ship.max_range_ly(body.jdc_level.unwrap_or(0)))
         ),
         (AlertKind::Killmail, _) => {
             format!("Alert created for kills within {jumps} jumps of the **{map_name}** chain.")
@@ -592,10 +648,11 @@ async fn alerts(state: &AppState, user_id: i64, map_filter: Option<&str>) -> Str
                 row.disabled_reason.as_deref().unwrap_or("manual")
             )
         };
-        out.push_str(&format!(
-            "• `{}` {} on **{}** ({state_text})\n",
+        let _ = writeln!(
+            out,
+            "• `{}` {} on **{}** ({state_text})",
             row.kind, row.name, row.map_name
-        ));
+        );
     }
     out
 }
@@ -614,7 +671,7 @@ async fn owned(state: &AppState, user_id: i64, alert_id: i64) -> Option<(i64, St
     .map(|row| (row.id, row.name, row.map_id))
 }
 
-async fn set_active(state: &AppState, user_id: i64, alert: Option<i64>, active: bool) -> String {
+async fn set_active(state: &AppState, user_id: i64, alert: Option<i64>, toggle: Toggle) -> String {
     let Some(alert_id) = alert else {
         return "Pick an alert from the suggestions.".into();
     };
@@ -626,12 +683,12 @@ async fn set_active(state: &AppState, user_id: i64, alert: Option<i64>, active: 
         map_id,
         id,
         user_id,
-        active,
+        toggle,
         Some("via Discord"),
     )
     .await
     {
-        Ok(_) => format!("**{name}** is now {}.", if active { "on" } else { "off" }),
+        Ok(_) => format!("**{name}** is now {}.", toggle_label(toggle)),
         Err(err) => store_failed(&name, err),
     }
 }
@@ -690,20 +747,19 @@ async fn route(state: &AppState, user_id: i64, map_id: i64, system_id: i64) -> S
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();
-    let named = |id: i64| {
+    let name_of = |id: i64| {
         names
             .iter()
             .find(|r| r.id == id)
-            .map(|r| r.name.clone())
-            .unwrap_or_else(|| id.to_string())
+            .map_or_else(|| id.to_string(), |r| r.name.clone())
     };
-    let route: Vec<String> = found.route.iter().map(|id| named(*id)).collect();
+    let route: Vec<String> = found.route.iter().map(|id| name_of(*id)).collect();
     format!(
         "**{}** is {} {} from **{}**.\n{}",
-        named(system_id),
+        name_of(system_id),
         found.jumps,
         if found.jumps == 1 { "jump" } else { "jumps" },
-        named(found.from),
+        name_of(found.from),
         route.join(" → ")
     )
 }
@@ -862,7 +918,7 @@ mod tests {
             parse(&enable),
             Action::AlertsSetActive {
                 alert: Some(42),
-                active: true
+                toggle: Toggle::On
             }
         );
 
@@ -874,7 +930,7 @@ mod tests {
             parse(&disable),
             Action::AlertsSetActive {
                 alert: Some(42),
-                active: false
+                toggle: Toggle::Off
             }
         );
 
@@ -1114,7 +1170,7 @@ mod tests {
                 r#"{{"type":2,"guild_id":"1","channel_id":"2","member":{{"permissions":"{permissions}"}}}}"#
             ))
         };
-        let manage_channels = Permission::ManageChannels as u64;
+        let manage_channels = Permission::ManageChannels.bits();
         assert!(denied_in_channel(&with(0), AlertMention::None).is_some());
         assert!(denied_in_channel(&with(manage_channels), AlertMention::None).is_none());
         assert!(denied_in_channel(&with(manage_channels), AlertMention::Creator).is_none());
@@ -1122,14 +1178,14 @@ mod tests {
         assert!(denied_in_channel(&with(manage_channels), AlertMention::Everyone).is_some());
         assert!(
             denied_in_channel(
-                &with(manage_channels | Permission::ManageRoles as u64),
+                &with(manage_channels | Permission::ManageRoles.bits()),
                 AlertMention::Role
             )
             .is_none()
         );
         assert!(
             denied_in_channel(
-                &with(Permission::Administrator as u64),
+                &with(Permission::Administrator.bits()),
                 AlertMention::Everyone
             )
             .is_none()

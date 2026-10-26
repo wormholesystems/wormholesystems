@@ -19,7 +19,7 @@ const NODE_GAP_CELLS: f64 = 1.0;
 
 /// The website's canvas geometry, from `/api/grid-config`.
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
-pub struct Grid {
+pub(crate) struct Grid {
     pub cell_size: f64,
     pub world_width: f64,
     pub world_height: f64,
@@ -51,7 +51,7 @@ fn can_lead_to_class(ty: Option<&SignatureType>, target_class: Option<i64>) -> b
 
 /// A system's signatures sorted for the question "which one was it?", in scanner order.
 #[derive(Debug, Default, Clone)]
-pub struct Candidates {
+pub(crate) struct Candidates {
     /// Unmapped, and the type (if any) can lead to the target's class.
     pub likely: Vec<Signature>,
     /// Unmapped, but typed for a class the target is not. Typed by hand off a paste, so
@@ -61,7 +61,7 @@ pub struct Candidates {
 
 impl Candidates {
     /// Everything that can be picked, numbered from 1 in this order.
-    pub fn numbered(&self) -> impl Iterator<Item = &Signature> {
+    pub(crate) fn numbered(&self) -> impl Iterator<Item = &Signature> {
         self.likely.iter().chain(&self.unlikely)
     }
 }
@@ -69,7 +69,7 @@ impl Candidates {
 /// Sort `signatures` the way the website's jump prompt does. A signature already on a
 /// connection only stays a candidate when that connection still ends in a ghost (in
 /// `unflown`): the jump is what says where it goes.
-pub fn candidates(
+pub(crate) fn candidates(
     signatures: &[Signature],
     types: &HashMap<i64, &SignatureType>,
     target_class: Option<i64>,
@@ -96,7 +96,7 @@ pub fn candidates(
 }
 
 /// The unmapped holes drawn off `origin`, as connection id to ghost placement id.
-pub fn ghosts_from(origin: &PlacedSystem, snapshot: &MapSnapshot) -> HashMap<i64, i64> {
+pub(crate) fn ghosts_from(origin: &PlacedSystem, snapshot: &MapSnapshot) -> HashMap<i64, i64> {
     let ghost_ids: HashSet<i64> = snapshot.ghosts.iter().map(|g| g.id).collect();
     snapshot
         .connections
@@ -116,7 +116,7 @@ pub fn ghosts_from(origin: &PlacedSystem, snapshot: &MapSnapshot) -> HashMap<i64
 
 /// The first free, grid-snapped slot at or after `base`: beside it, then down that column,
 /// keeping a cell of clear space from every placed node.
-pub fn free_position(placed: &[(f64, f64)], base: (f64, f64), g: Grid) -> (f64, f64) {
+pub(crate) fn free_position(placed: &[(f64, f64)], base: (f64, f64), g: Grid) -> (f64, f64) {
     let node_h = 2.0 * g.cell_size;
     let gap = NODE_GAP_CELLS * g.cell_size;
     let step_x = NODE_W + gap;
@@ -135,12 +135,12 @@ pub fn free_position(placed: &[(f64, f64)], base: (f64, f64), g: Grid) -> (f64, 
         return (bx, by);
     }
     for column in 1.. {
-        let x = snap(bx + column as f64 * step_x);
+        let x = snap(bx + f64::from(column) * step_x);
         if x > max_x {
             break;
         }
         for row in 0.. {
-            let y = snap(by + row as f64 * step_y);
+            let y = snap(by + f64::from(row) * step_y);
             if y > max_y {
                 break;
             }
@@ -153,7 +153,7 @@ pub fn free_position(placed: &[(f64, f64)], base: (f64, f64), g: Grid) -> (f64, 
 }
 
 /// Where every placement on the map sits, ghosts included.
-pub fn positions(systems: &[PlacedSystem], ghosts: &[Ghost]) -> Vec<(f64, f64)> {
+pub(crate) fn positions(systems: &[PlacedSystem], ghosts: &[Ghost]) -> Vec<(f64, f64)> {
     systems
         .iter()
         .map(|s| (s.position_x, s.position_y))
@@ -162,7 +162,7 @@ pub fn positions(systems: &[PlacedSystem], ghosts: &[Ghost]) -> Vec<(f64, f64)> 
 }
 
 /// The ship size a hole takes, from the heaviest ship it lets through.
-pub fn size_for_jump_mass(kg: Option<f64>) -> Option<WormholeSize> {
+pub(crate) fn size_for_jump_mass(kg: Option<f64>) -> Option<WormholeSize> {
     let kg = kg.filter(|k| *k > 0.0)?;
     Some(if kg <= 5_000_000.0 {
         WormholeSize::Small
@@ -179,13 +179,13 @@ pub fn size_for_jump_mass(kg: Option<f64>) -> Option<WormholeSize> {
 // `AB`, `ABC`.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AliasScheme {
+pub(crate) enum AliasScheme {
     Numeric,
     Alphabetical,
 }
 
 impl AliasScheme {
-    pub fn parse(text: Option<&str>) -> AliasScheme {
+    pub(crate) fn parse(text: Option<&str>) -> AliasScheme {
         match text {
             Some("alphabetical") => AliasScheme::Alphabetical,
             _ => AliasScheme::Numeric,
@@ -198,7 +198,7 @@ const WORMHOLE_LETTERS: &[u8] = b"ABCDEFGIJKMOQRSTUVWXYZ";
 
 /// The reserved letter for a k-space target, or `None` for a wormhole (or Pochven, which
 /// gets no letter of its own).
-pub fn kspace_letter(class: Option<i64>, security: f64) -> Option<char> {
+pub(crate) fn kspace_letter(class: Option<i64>, security: f64) -> Option<char> {
     let id = class.unwrap_or_else(|| crate::naming::class_from_security(security));
     match class_short(id)? {
         "H" => Some('H'),
@@ -225,7 +225,7 @@ fn lowest_free(used: &HashSet<u32>) -> u32 {
 /// The next child alias of `parent`, given every alias in use. Gaps are filled before the
 /// sequence grows. `kspace` is the target's reserved letter, which only the alphabetical
 /// scheme uses.
-pub fn guess_next_alias(
+pub(crate) fn guess_next_alias(
     parent: Option<&str>,
     aliases: &[String],
     scheme: AliasScheme,
@@ -261,7 +261,7 @@ pub fn guess_next_alias(
             .collect();
         let index = (0..=used.len()).find(|i| !used.contains(i)).unwrap_or(0);
         // Past 22 direct children the sequence repeats rather than blocking the jump.
-        let letter = WORMHOLE_LETTERS[index.min(WORMHOLE_LETTERS.len() - 1)] as char;
+        let letter = char::from(WORMHOLE_LETTERS[index.min(WORMHOLE_LETTERS.len() - 1)]);
         return format!("{prefix}{letter}");
     }
 
@@ -288,7 +288,7 @@ pub fn guess_next_alias(
 
 /// An alias for a system reached by a jump, or `None` when it should go unnamed: a hop
 /// between two unaliased k-space systems is travel, not chain.
-pub fn suggest_alias(
+pub(crate) fn suggest_alias(
     origin: &PlacedSystem,
     target_class: Option<i64>,
     target_security: f64,
@@ -314,7 +314,7 @@ mod tests {
     use super::*;
 
     fn aliases(list: &[&str]) -> Vec<String> {
-        list.iter().map(|s| s.to_string()).collect()
+        list.iter().map(std::string::ToString::to_string).collect()
     }
 
     fn numeric(parent: Option<&str>, list: &[&str]) -> String {

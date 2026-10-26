@@ -5,12 +5,13 @@
 //! where they put it.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 /// Replace the values of matching `KEY=...` lines and keep everything else verbatim. Keys
 /// the file does not already have are appended. A key that is there twice has both lines
 /// replaced: compose reads the last one, a person reading the file finds the first, and
 /// the two should not disagree.
-pub fn patch(current: &str, values: &BTreeMap<String, String>) -> String {
+pub(crate) fn patch(current: &str, values: &BTreeMap<String, String>) -> String {
     let mut seen = std::collections::BTreeSet::new();
     let mut out = String::new();
 
@@ -31,7 +32,7 @@ pub fn patch(current: &str, values: &BTreeMap<String, String>) -> String {
         }
         out.push_str("# Added by wsctl\n");
         for (key, value) in remaining {
-            out.push_str(&format!("{key}={}\n", quote(value)));
+            writeln!(out, "{key}={}", quote(value)).expect("writing to a String cannot fail");
         }
     }
 
@@ -40,7 +41,7 @@ pub fn patch(current: &str, values: &BTreeMap<String, String>) -> String {
 
 /// The value of a `KEY=...` line as compose reads it: the last one when there are several,
 /// quotes and escapes undone.
-pub fn get(env: &str, key: &str) -> Option<String> {
+pub(crate) fn get(env: &str, key: &str) -> Option<String> {
     env.lines()
         .rev()
         .filter_map(parse)
@@ -50,12 +51,16 @@ pub fn get(env: &str, key: &str) -> Option<String> {
 
 /// Drop a key entirely, every line of it. Discord is read as all-or-nothing by the server,
 /// so an empty value left behind would read as "configured" and stop it starting.
-pub fn remove(current: &str, key: &str) -> String {
-    current
+pub(crate) fn remove(current: &str, key: &str) -> String {
+    let mut out = String::new();
+    for line in current
         .lines()
         .filter(|line| parse(line).is_none_or(|(_, k, _)| k != key))
-        .map(|line| format!("{line}\n"))
-        .collect()
+    {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
 }
 
 /// A `KEY=value` line as (`export ` or nothing, key, raw value). Comments and anything else

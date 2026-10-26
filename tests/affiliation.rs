@@ -29,11 +29,16 @@ async fn stub_esi() -> (EsiClient, Batches) {
         .route("/characters/affiliation", post(affiliation))
         .route("/corporations/{id}", get(corporation))
         .route("/alliances/{id}", get(alliance))
-        .with_state(batches.clone());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
+        .with_state(Arc::clone(&batches));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let base = format!(
+        "http://{}",
+        listener.local_addr().expect("read listener address")
+    );
     tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
+        axum::serve(listener, app).await.expect("serve test app");
     });
     (
         EsiClient::with_config(reqwest::Client::new(), base, "2025-08-26"),
@@ -45,7 +50,7 @@ async fn affiliation(
     State(batches): State<Batches>,
     Json(ids): Json<Vec<i64>>,
 ) -> Json<serde_json::Value> {
-    batches.lock().unwrap().push(ids.clone());
+    batches.lock().expect("mutex poisoned").push(ids.clone());
     Json(
         ids.iter()
             .map(|id| {

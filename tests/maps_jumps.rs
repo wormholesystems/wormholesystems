@@ -16,14 +16,14 @@ async fn seed_ship(pool: &PgPool, type_id: i64, name: &str, mass: f64) {
     sqlx::query("insert into categories (id, name, published) values (6, 'Ship', true) on conflict do nothing")
         .execute(pool)
         .await
-        .unwrap();
+        .expect("insert categories");
     sqlx::query(
         "insert into groups (id, category_id, name, published) values (25, 6, 'Frigate', true)
          on conflict do nothing",
     )
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert groups");
     sqlx::query(
         "insert into types (id, group_id, name, published, mass) values ($1, 25, $2, true, $3)",
     )
@@ -32,7 +32,7 @@ async fn seed_ship(pool: &PgPool, type_id: i64, name: &str, mass: f64) {
     .bind(mass)
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert types");
 }
 
 /// Let the owner share their movements on the map.
@@ -45,7 +45,7 @@ async fn allow_tracking(pool: &PgPool, map_id: i64, user_id: i64) {
     .bind(user_id)
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert map_user_settings");
 }
 
 async fn set_ship(pool: &PgPool, character_id: i64, ship_type_id: i64) {
@@ -58,7 +58,7 @@ async fn set_ship(pool: &PgPool, character_id: i64, ship_type_id: i64) {
     .bind(ship_type_id)
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert character_status");
 }
 
 #[sqlx::test]
@@ -298,7 +298,7 @@ async fn transit_is_recorded_only_on_maps_that_take_it(pool: PgPool) {
     let gates = wormholesystems::maps::map::create_map(
         &pool,
         w.owner,
-        &Default::default(),
+        &wormholesystems::allowlist::AffiliationAllowlist::default(),
         wormholesystems::maps::map::CreateMap {
             name: "Gates".into(),
             description: None,
@@ -325,7 +325,7 @@ async fn transit_is_recorded_only_on_maps_that_take_it(pool: PgPool) {
     let viewed = wormholesystems::maps::map::create_map(
         &pool,
         other,
-        &Default::default(),
+        &wormholesystems::allowlist::AffiliationAllowlist::default(),
         wormholesystems::maps::map::CreateMap {
             name: "Theirs".into(),
             description: None,
@@ -423,7 +423,7 @@ async fn jump_rows(pool: &PgPool, map_id: i64) -> serde_json::Value {
     .bind(map_id)
     .fetch_one(pool)
     .await
-    .unwrap()
+    .expect("query map_connection_jumps")
 }
 
 /// Undoing a cleared map puts every jump back on its own id, and forgets a pilot whose

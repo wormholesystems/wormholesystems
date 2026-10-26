@@ -7,12 +7,16 @@
 mod pages;
 
 use std::collections::{HashMap, VecDeque};
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::*;
+use gpui_kit::{
+    AnyWindowHandle, App, AppContext, Context, Entity, FocusHandle, Image, ImageFormat,
+    KeyDownEvent, Subscription, Task, Window,
+};
 
 use crate::alias;
 use crate::api::{Client, MapEntry, MapSnapshot, SignatureCatalog, SignatureEdit};
@@ -25,7 +29,7 @@ use crate::jump::{self, AliasScheme, Grid};
 use crate::naming::{BookmarkContext, BookmarkFormats, BookmarkSystem, format_bookmark};
 use crate::overlay;
 use crate::plan::{
-    JumpContext, LastJump, Plan, aliases, bookmark_for, landed_on, plan_jump, submit,
+    JumpContext, LastJump, LoneGhost, Plan, aliases, bookmark_for, landed_on, plan_jump, submit,
 };
 use crate::scan;
 use crate::sigs::{Ask, Command, Here, Review, Sigs, Tone};
@@ -35,6 +39,8 @@ use crate::ui::{self, Mood, Notice};
 /// How often the map and its signatures are fetched again.
 const REFRESH: Duration = Duration::from_secs(5);
 const LOG_LINES: usize = 60;
+/// Only a poll holds the chat log watcher's lock, and it does not panic holding it.
+const WATCHER_LOCK: &str = "a chat log poll panicked";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page {
@@ -92,7 +98,7 @@ struct LogLine {
     level: Level,
 }
 
-pub struct DesktopApp {
+pub(crate) struct DesktopApp {
     config: Config,
     page: Page,
     sigs: Entity<Sigs>,
@@ -140,16 +146,24 @@ pub struct DesktopApp {
     overlay: Option<AnyWindowHandle>,
     /// A newer release, from the last check.
     update: Option<crate::update::Available>,
-    checking_update: bool,
-    installing_update: bool,
+    updater: Updater,
     /// What the last check said when it found nothing or failed, for Settings.
     update_note: Option<String>,
-    _tasks: Vec<Task<()>>,
+    /// Held so they keep running.
+    tasks: Vec<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
+/// What the updater is doing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Updater {
+    Idle,
+    Checking,
+    Installing,
+}
+
 impl DesktopApp {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<'_, Self>) -> Self {
         let (config, config_problem) = Config::load();
         let tracked = config.tracked.clone();
         theme::set_text_size(config.text_size, cx);
@@ -180,27 +194,7 @@ impl DesktopApp {
             ..Default::default()
         });
 
-        let subscriptions = vec![
-            cx.subscribe_in(
-                &chatlog_dir,
-                window,
-                |this, _, event: &InputEvent, _, cx| {
-                    if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
-                        this.use_chatlog_dir(cx);
-                    }
-                },
-            ),
-            cx.observe(&sigs, |_, _, cx| cx.notify()),
-            cx.subscribe(&sigs, |this, _, command: &Command, cx| {
-                this.command(command.clone(), cx)
-            }),
-            // Follow the system's light or dark when asked to.
-            cx.observe_window_appearance(window, |this, window, cx| {
-                if this.config.appearance == Appearance::System {
-                    theme::apply(Appearance::System, window, cx);
-                }
-            }),
-        ];
+        let subscriptions = Self::subscribe(&chatlog_dir, &sigs, window, cx);
 
         let mut hotkeys = Registry::new();
         let refused = hotkeys.apply(&config.hotkeys);
@@ -243,27 +237,12 @@ impl DesktopApp {
             clipboard,
             overlay: None,
             update: None,
-            checking_update: false,
-            installing_update: false,
+            updater: Updater::Idle,
             update_note: None,
-            _tasks: Vec::new(),
+            tasks: Vec::new(),
             _subscriptions: subscriptions,
         };
-        if let Some(problem) = config_problem {
-            this.note(Level::Problem, problem);
-        }
-        if let Some(problem) = this.hotkeys.problem.clone() {
-            this.note(Level::Problem, problem);
-        }
-        for (action, why) in refused {
-            this.note(Level::Problem, format!("{}: {why}", action.label()));
-        }
-        if this.clipboard.is_none() {
-            this.note(
-                Level::Problem,
-                "No clipboard to copy to on this system".into(),
-            );
-        }
+        this.note_problems(config_problem, refused);
         if let Some(dir) = found {
             this.watch(dir);
         } else {
@@ -272,20 +251,64 @@ impl DesktopApp {
                 "Could not find EVE's chat logs; set the folder in Settings".into(),
             );
         }
-        this._tasks.push(this.chatlog_loop(cx));
-        this._tasks.push(this.hotkey_loop(cx));
-        this._tasks.push(this.focus_loop(cx));
-        this._tasks.push(this.refresh_loop(cx));
-        this._tasks.push(this.update_loop(cx));
-        if !this.config.token.is_empty() {
-            this.connect(cx);
-        } else {
+        this.tasks.push(Self::chatlog_loop(cx));
+        this.tasks.push(Self::hotkey_loop(cx));
+        this.tasks.push(Self::focus_loop(cx));
+        this.tasks.push(Self::refresh_loop(cx));
+        this.tasks.push(Self::update_loop(cx));
+        if this.config.token.is_empty() {
             this.page = Page::Settings;
+        } else {
+            this.connect(cx);
         }
         if open_overlay {
-            this.set_overlay(true, cx);
+            this.open_overlay(cx);
         }
         this
+    }
+
+    fn subscribe(
+        chatlog_dir: &Entity<InputState>,
+        sigs: &Entity<Sigs>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Vec<Subscription> {
+        vec![
+            cx.subscribe_in(chatlog_dir, window, |this, _, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::PressEnter { .. } | InputEvent::Blur) {
+                    this.use_chatlog_dir(cx);
+                }
+            }),
+            cx.observe(sigs, |_, _, cx| cx.notify()),
+            cx.subscribe(sigs, |this, _, command: &Command, cx| {
+                this.command(command.clone(), cx);
+            }),
+            // Follow the system's light or dark when asked to.
+            cx.observe_window_appearance(window, |this, window, cx| {
+                if this.config.appearance == Appearance::System {
+                    theme::apply(Appearance::System, window, cx);
+                }
+            }),
+        ]
+    }
+
+    /// What went wrong while starting up: the settings file, the global keys, the clipboard.
+    fn note_problems(&mut self, config_problem: Option<String>, refused: Vec<(Action, String)>) {
+        if let Some(problem) = config_problem {
+            self.note(Level::Problem, problem);
+        }
+        if let Some(problem) = self.hotkeys.problem.clone() {
+            self.note(Level::Problem, problem);
+        }
+        for (action, why) in refused {
+            self.note(Level::Problem, format!("{}: {why}", action.label()));
+        }
+        if self.clipboard.is_none() {
+            self.note(
+                Level::Problem,
+                "No clipboard to copy to on this system".into(),
+            );
+        }
     }
 
     fn note(&mut self, level: Level, text: String) {
@@ -308,7 +331,7 @@ impl DesktopApp {
     }
 
     /// A map that came back from a change: newer than any refresh still out.
-    fn show_changed(&mut self, snapshot: MapSnapshot, cx: &mut Context<Self>) {
+    fn show_changed(&mut self, snapshot: MapSnapshot, cx: &mut Context<'_, Self>) {
         self.fresh.changed();
         self.sigs.update(cx, |sigs, cx| {
             sigs.snapshot = Some(Arc::new(snapshot));
@@ -333,7 +356,7 @@ impl DesktopApp {
 
     // Account and map.
 
-    fn connect(&mut self, cx: &mut Context<Self>) {
+    fn connect(&mut self, cx: &mut Context<'_, Self>) {
         self.config.server = self.server.read(cx).value().trim().to_string();
         self.config.token = self.token.read(cx).value().trim().to_string();
         self.save();
@@ -371,7 +394,7 @@ impl DesktopApp {
                                 .collect(),
                         );
                         this.catalog = Arc::new(catalog);
-                        let catalog = this.catalog.clone();
+                        let catalog = Arc::clone(&this.catalog);
                         this.sigs.update(cx, |sigs, cx| {
                             sigs.catalog = catalog;
                             cx.notify();
@@ -403,7 +426,7 @@ impl DesktopApp {
         .detach();
     }
 
-    fn sign_out(&mut self, cx: &mut Context<Self>) {
+    fn sign_out(&mut self, cx: &mut Context<'_, Self>) {
         self.config.token.clear();
         self.client = None;
         self.account = None;
@@ -415,7 +438,7 @@ impl DesktopApp {
         cx.notify();
     }
 
-    fn clear_map(&mut self, cx: &mut Context<Self>) {
+    fn clear_map(&mut self, cx: &mut Context<'_, Self>) {
         // Refreshes still out are for the map that was.
         self.fresh.changed();
         self.sigs.update(cx, |sigs, cx| {
@@ -426,7 +449,7 @@ impl DesktopApp {
         });
     }
 
-    fn pick_map(&mut self, id: i64, cx: &mut Context<Self>) {
+    fn pick_map(&mut self, id: i64, cx: &mut Context<'_, Self>) {
         self.config.map_id = Some(id);
         self.last = None;
         self.save();
@@ -438,7 +461,7 @@ impl DesktopApp {
     }
 
     /// Fetch the map and its signatures now.
-    fn refresh(&mut self, cx: &mut Context<Self>) {
+    fn refresh(&mut self, cx: &mut Context<'_, Self>) {
         let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
             return;
         };
@@ -475,13 +498,13 @@ impl DesktopApp {
 
     /// [`Self::refresh`] after changing the map: a refresh already out may have read it
     /// before the change.
-    fn refresh_changed(&mut self, cx: &mut Context<Self>) {
+    fn refresh_changed(&mut self, cx: &mut Context<'_, Self>) {
         self.fresh.changed();
         self.refresh(cx);
     }
 
     /// The website's per-user settings for the map that the app follows.
-    fn load_map_settings(&mut self, cx: &mut Context<Self>) {
+    fn load_map_settings(&mut self, cx: &mut Context<'_, Self>) {
         let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
             return;
         };
@@ -506,11 +529,11 @@ impl DesktopApp {
         .detach();
     }
 
-    fn refresh_loop(&self, cx: &mut Context<Self>) -> Task<()> {
+    fn refresh_loop(cx: &mut Context<'_, Self>) -> Task<()> {
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(REFRESH).await;
-                if this.update(cx, |this, cx| this.refresh(cx)).is_err() {
+                if this.update(cx, DesktopApp::refresh).is_err() {
                     return;
                 }
             }
@@ -525,13 +548,13 @@ impl DesktopApp {
         self.characters.clear();
     }
 
-    fn use_chatlog_dir(&mut self, cx: &mut Context<Self>) {
+    fn use_chatlog_dir(&mut self, cx: &mut Context<'_, Self>) {
         let text = self.chatlog_dir.read(cx).value().trim().to_string();
         let dir = PathBuf::from(&text);
         if self
             .watcher
             .as_ref()
-            .is_some_and(|w| w.lock().unwrap().dir() == dir)
+            .is_some_and(|w| w.lock().expect(WATCHER_LOCK).dir() == dir)
         {
             return;
         }
@@ -546,7 +569,7 @@ impl DesktopApp {
         cx.notify();
     }
 
-    fn chatlog_loop(&self, cx: &mut Context<Self>) -> Task<()> {
+    fn chatlog_loop(cx: &mut Context<'_, Self>) -> Task<()> {
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -558,7 +581,7 @@ impl DesktopApp {
                 let Some(watcher) = watcher else { continue };
                 let polled = cx
                     .background_spawn(async move {
-                        let mut watcher = watcher.lock().unwrap();
+                        let mut watcher = watcher.lock().expect(WATCHER_LOCK);
                         let events = watcher.poll();
                         let mut seen: Vec<(String, String, Option<i64>)> = watcher
                             .locations()
@@ -625,7 +648,7 @@ impl DesktopApp {
     }
 
     /// Follow one character, or `None` for whoever moves.
-    fn track(&mut self, character: Option<String>, cx: &mut Context<Self>) {
+    fn track(&mut self, character: Option<String>, cx: &mut Context<'_, Self>) {
         if self.config.tracked == character {
             return;
         }
@@ -640,7 +663,7 @@ impl DesktopApp {
     }
 
     /// Tell the signatures where you are now.
-    fn locate(&mut self, cx: &mut Context<Self>) {
+    fn locate(&mut self, cx: &mut Context<'_, Self>) {
         let here = self.active.as_ref().and_then(|active| {
             self.characters
                 .iter()
@@ -661,7 +684,7 @@ impl DesktopApp {
 
     // Jumps.
 
-    fn jumped(&mut self, character: String, from: String, to: String, cx: &mut Context<Self>) {
+    fn jumped(&mut self, character: String, from: String, to: String, cx: &mut Context<'_, Self>) {
         self.note(Level::Info, format!("{character}: {from} → {to}"));
         cx.notify();
         // One at a time, in order: the next jump usually starts where this one lands, which
@@ -674,7 +697,13 @@ impl DesktopApp {
     }
 
     /// Work out what a jump means for the map, then map it, ask about it or let it be.
-    fn consider(&mut self, character: String, from: String, to: String, cx: &mut Context<Self>) {
+    fn consider(
+        &mut self,
+        character: String,
+        from: String,
+        to: String,
+        cx: &mut Context<'_, Self>,
+    ) {
         let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
             return;
         };
@@ -695,7 +724,7 @@ impl DesktopApp {
                     Ok(Plan::Known(jump, bookmark)) => this.landed(jump, bookmark, None, cx),
                     Ok(Plan::Mapped(jump, bookmark)) => {
                         let what = format!("Mapped {} from {}", jump.here, jump.back_to);
-                        this.landed(jump, bookmark, Some(what), cx)
+                        this.landed(jump, bookmark, Some(what), cx);
                     }
                     Ok(Plan::Ask(ask)) => return this.ask(*ask, cx),
                     Err(err) => this.note(Level::Problem, format!("Could not map the jump: {err}")),
@@ -711,15 +740,15 @@ impl DesktopApp {
 
     fn jump_context(&self) -> JumpContext {
         JumpContext {
-            catalog: self.catalog.clone(),
-            codes: self.codes.clone(),
+            catalog: Arc::clone(&self.catalog),
+            codes: Arc::clone(&self.codes),
             grid: self.grid,
-            stargates: self.stargates.clone(),
+            stargates: Arc::clone(&self.stargates),
             suggest_alias: self.suggest_alias,
         }
     }
 
-    fn next_jump(&mut self, cx: &mut Context<Self>) {
+    fn next_jump(&mut self, cx: &mut Context<'_, Self>) {
         if self.thinking || self.sigs.read(cx).ask.is_some() {
             return;
         }
@@ -729,7 +758,7 @@ impl DesktopApp {
     }
 
     /// Ask which signature the jump went through, in the panels and with the pick keys.
-    fn ask(&mut self, ask: Ask, cx: &mut Context<Self>) {
+    fn ask(&mut self, ask: Ask, cx: &mut Context<'_, Self>) {
         if let Some(why) = self.hotkeys.set_picks(Some(&self.config.pick_modifiers)) {
             self.note(Level::Problem, format!("Pick keys: {why}"));
         }
@@ -742,13 +771,13 @@ impl DesktopApp {
             cx.notify();
         });
         if self.config.overlay.show_on_jump && self.overlay.is_none() {
-            self.set_overlay(true, cx);
+            self.open_overlay(cx);
         }
         self.note(Level::Info, text);
         cx.notify();
     }
 
-    fn clear_ask(&mut self, cx: &mut Context<Self>) -> Option<Ask> {
+    fn clear_ask(&mut self, cx: &mut Context<'_, Self>) -> Option<Ask> {
         self.hotkeys.set_picks(None);
         self.sigs.update(cx, |sigs, cx| {
             cx.notify();
@@ -757,14 +786,14 @@ impl DesktopApp {
     }
 
     /// Forget every jump not yet mapped: the map they were for is gone.
-    fn drop_jumps(&mut self, cx: &mut Context<Self>) {
+    fn drop_jumps(&mut self, cx: &mut Context<'_, Self>) {
         self.clear_ask(cx);
         self.queued.clear();
     }
 
     /// The answer: the jump went through the option at `index`, or through a hole nobody
     /// scanned.
-    fn pick(&mut self, index: Option<usize>, cx: &mut Context<Self>) {
+    fn pick(&mut self, index: Option<usize>, cx: &mut Context<'_, Self>) {
         let Some(ask) = self.sigs.read(cx).ask.clone() else {
             return;
         };
@@ -778,10 +807,17 @@ impl DesktopApp {
         let Some(client) = self.client() else { return };
         self.clear_ask(cx);
         self.thinking = true;
-        let catalog = self.catalog.clone();
-        let codes = self.codes.clone();
+        let catalog = Arc::clone(&self.catalog);
+        let codes = Arc::clone(&self.codes);
         let work = cx.background_spawn(async move {
-            submit(&client, &catalog, &codes, &ask, picked.as_ref(), false)
+            submit(
+                &client,
+                &catalog,
+                &codes,
+                &ask,
+                picked.as_ref(),
+                LoneGhost::Ignore,
+            )
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
@@ -807,7 +843,7 @@ impl DesktopApp {
         .detach();
     }
 
-    fn skip_jump(&mut self, cx: &mut Context<Self>) {
+    fn skip_jump(&mut self, cx: &mut Context<'_, Self>) {
         if let Some(ask) = self.clear_ask(cx) {
             self.note(
                 Level::Info,
@@ -827,15 +863,20 @@ impl DesktopApp {
         jump: LastJump,
         bookmark: String,
         what: Option<String>,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
     ) {
         let copied = self.config.copy_on_jump && !bookmark.is_empty() && self.copy(&bookmark);
         let mut text = what.map(|w| format!("{w}. ")).unwrap_or_default();
-        text += &if copied {
-            format!("Copied “{bookmark}”, the way back to {}", jump.back_to)
+        if copied {
+            write!(
+                text,
+                "Copied “{bookmark}”, the way back to {}",
+                jump.back_to
+            )
         } else {
-            format!("The way back to {} is “{bookmark}”", jump.back_to)
-        };
+            write!(text, "The way back to {} is “{bookmark}”", jump.back_to)
+        }
+        .expect("writing to a String cannot fail");
         self.tell(Tone::Done, text, cx);
         self.last_bookmark = Some(bookmark);
         self.last = Some(jump);
@@ -843,7 +884,7 @@ impl DesktopApp {
 
     /// Someone mapped the jump being asked about (the website's own prompt, or a fleet
     /// mate): the question is answered.
-    fn mapped_elsewhere(&mut self, snapshot: &MapSnapshot, cx: &mut Context<Self>) {
+    fn mapped_elsewhere(&mut self, snapshot: &MapSnapshot, cx: &mut Context<'_, Self>) {
         let Some(ask) = self.sigs.read(cx).ask.clone() else {
             return;
         };
@@ -869,7 +910,7 @@ impl DesktopApp {
     // Focus.
 
     /// Follow which window has focus, hiding the overlay while it should not be up.
-    fn focus_loop(&self, cx: &mut Context<Self>) -> Task<()> {
+    fn focus_loop(cx: &mut Context<'_, Self>) -> Task<()> {
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -892,32 +933,32 @@ impl DesktopApp {
     // Updates.
 
     /// Look for a new release now, and again every few hours.
-    fn update_loop(&self, cx: &mut Context<Self>) -> Task<()> {
+    fn update_loop(cx: &mut Context<'_, Self>) -> Task<()> {
         cx.spawn(async move |this, cx| {
             loop {
-                if this
-                    .update(cx, |this, cx| this.check_for_update(cx))
-                    .is_err()
-                {
+                if this.update(cx, DesktopApp::check_for_update).is_err() {
                     return;
                 }
                 cx.background_executor()
-                    .timer(Duration::from_secs(6 * 60 * 60))
+                    .timer(Duration::from_hours(6))
                     .await;
             }
         })
     }
 
-    fn check_for_update(&mut self, cx: &mut Context<Self>) {
-        if self.checking_update || self.installing_update {
+    fn check_for_update(&mut self, cx: &mut Context<'_, Self>) {
+        if self.updater != Updater::Idle {
             return;
         }
-        self.checking_update = true;
+        self.updater = Updater::Checking;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let found = cx.background_spawn(async { crate::update::check() }).await;
             this.update(cx, |this, cx| {
-                this.checking_update = false;
+                // An install started meanwhile is still going.
+                if this.updater == Updater::Checking {
+                    this.updater = Updater::Idle;
+                }
                 match found {
                     Ok(Some(available)) => {
                         this.update = Some(available);
@@ -937,7 +978,7 @@ impl DesktopApp {
     }
 
     /// Install in place where this copy can be, else open the release page.
-    fn install_update(&mut self, cx: &mut Context<Self>) {
+    fn install_update(&mut self, cx: &mut Context<'_, Self>) {
         let Some(available) = self.update.clone() else {
             return;
         };
@@ -945,10 +986,10 @@ impl DesktopApp {
             cx.open_url(&available.page);
             return;
         };
-        if self.installing_update {
+        if self.updater == Updater::Installing {
             return;
         }
-        self.installing_update = true;
+        self.updater = Updater::Installing;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let done = cx
@@ -957,7 +998,7 @@ impl DesktopApp {
             this.update(cx, |this, cx| match done {
                 Ok(()) => crate::update::restart(cx),
                 Err(err) => {
-                    this.installing_update = false;
+                    this.updater = Updater::Idle;
                     this.tell(Tone::Problem, format!("Could not update: {err}"), cx);
                     cx.notify();
                 }
@@ -967,7 +1008,7 @@ impl DesktopApp {
         .detach();
     }
 
-    fn apply_focus(&mut self, cx: &mut Context<Self>) {
+    fn apply_focus(&mut self, cx: &mut Context<'_, Self>) {
         let o = &self.config.overlay;
         let hidden = o.only_when_focused && !self.focus.shows_overlay(&o.characters);
         self.sigs.update(cx, |sigs, cx| {
@@ -981,7 +1022,7 @@ impl DesktopApp {
 
     // Shortcuts.
 
-    fn hotkey_loop(&self, cx: &mut Context<Self>) -> Task<()> {
+    fn hotkey_loop(cx: &mut Context<'_, Self>) -> Task<()> {
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -992,7 +1033,7 @@ impl DesktopApp {
                         match press {
                             Press::Action(action) => this.run(action, cx),
                             Press::Pick(0) => this.pick(None, cx),
-                            Press::Pick(n) => this.pick(Some(n as usize - 1), cx),
+                            Press::Pick(n) => this.pick(Some(usize::from(n - 1)), cx),
                         }
                     }
                 });
@@ -1003,11 +1044,11 @@ impl DesktopApp {
         })
     }
 
-    fn run(&mut self, action: Action, cx: &mut Context<Self>) {
+    fn run(&mut self, action: Action, cx: &mut Context<'_, Self>) {
         match action {
             Action::PasteScan => return self.paste(cx),
             Action::DeleteMissing => return self.delete_missing(cx),
-            Action::ToggleOverlay => return self.set_overlay(self.overlay.is_none(), cx),
+            Action::ToggleOverlay => return self.toggle_overlay(cx),
             Action::SetAlias => return self.open_alias(cx),
             _ => {}
         }
@@ -1030,7 +1071,7 @@ impl DesktopApp {
             cx.notify();
             return;
         };
-        let codes = self.codes.clone();
+        let codes = Arc::clone(&self.codes);
         let change = action.change();
         let work = cx.background_spawn(async move {
             if let Some(change) = &change {
@@ -1065,13 +1106,13 @@ impl DesktopApp {
         .detach();
     }
 
-    fn start_capture(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
+    fn start_capture(&mut self, action: Action, window: &mut Window, cx: &mut Context<'_, Self>) {
         self.capturing = Some(action);
         window.focus(&self.capture_focus, cx);
         cx.notify();
     }
 
-    fn captured(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+    fn captured(&mut self, event: &KeyDownEvent, cx: &mut Context<'_, Self>) {
         let Some(action) = self.capturing else { return };
         let key = event.keystroke.key.as_str();
         if key == "escape" {
@@ -1098,7 +1139,7 @@ impl DesktopApp {
         cx.notify();
     }
 
-    fn set_pick_modifiers(&mut self, modifiers: &str, cx: &mut Context<Self>) {
+    fn set_pick_modifiers(&mut self, modifiers: &str, cx: &mut Context<'_, Self>) {
         self.config.pick_modifiers = modifiers.to_string();
         self.save();
         let prefix = hotkeys::pick_prefix(modifiers);
@@ -1122,7 +1163,7 @@ impl DesktopApp {
 
     // Signatures.
 
-    fn command(&mut self, command: Command, cx: &mut Context<Self>) {
+    fn command(&mut self, command: Command, cx: &mut Context<'_, Self>) {
         match command {
             Command::Paste => self.paste(cx),
             Command::DeleteMissing => self.delete_missing(cx),
@@ -1137,7 +1178,7 @@ impl DesktopApp {
                 sigs.review = None;
                 cx.notify();
             }),
-            Command::HideOverlay => self.set_overlay(false, cx),
+            Command::HideOverlay => self.close_overlay(cx),
             Command::Pick(index) => self.pick(index, cx),
             Command::SkipJump => self.skip_jump(cx),
             Command::PlaceOverlay {
@@ -1157,7 +1198,7 @@ impl DesktopApp {
     }
 
     /// Show the outcome in the panels and the log.
-    fn tell(&mut self, tone: Tone, text: String, cx: &mut Context<Self>) {
+    fn tell(&mut self, tone: Tone, text: String, cx: &mut Context<'_, Self>) {
         let level = match tone {
             Tone::Info => Level::Info,
             Tone::Done => Level::Done,
@@ -1209,17 +1250,24 @@ impl DesktopApp {
         .detach();
     }
 
-    fn set_busy(&mut self, busy: bool, cx: &mut Context<Self>) {
+    fn set_busy(&mut self, cx: &mut Context<'_, Self>) {
         self.sigs.update(cx, |sigs, cx| {
-            sigs.busy = busy;
+            sigs.busy = true;
+            cx.notify();
+        });
+    }
+
+    fn set_idle(&mut self, cx: &mut Context<'_, Self>) {
+        self.sigs.update(cx, |sigs, cx| {
+            sigs.busy = false;
             cx.notify();
         });
     }
 
     /// Paste the probe scanner's clipboard into the system you are in.
-    fn paste(&mut self, cx: &mut Context<Self>) {
+    fn paste(&mut self, cx: &mut Context<'_, Self>) {
         if self.config.overlay.show_on_paste && self.overlay.is_none() {
-            self.set_overlay(true, cx);
+            self.open_overlay(cx);
         }
         let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
             return self.tell(Tone::Problem, "Sign in and pick a map first".into(), cx);
@@ -1242,9 +1290,8 @@ impl DesktopApp {
                 cx,
             );
         };
-        let text = match self.clipboard.as_mut().map(|c| c.get_text()) {
-            Some(Ok(text)) => text,
-            _ => return self.tell(Tone::Problem, "The clipboard holds no text".into(), cx),
+        let Some(Ok(text)) = self.clipboard.as_mut().map(arboard::Clipboard::get_text) else {
+            return self.tell(Tone::Problem, "The clipboard holds no text".into(), cx);
         };
         let rows = scan::parse(&text, &self.catalog);
         if rows.is_empty() {
@@ -1255,7 +1302,7 @@ impl DesktopApp {
             );
         }
 
-        self.set_busy(true, cx);
+        self.set_busy(cx);
         let solar_system_id = system.solar_system_id;
         let work = cx.background_spawn(async move {
             // Fresh, so a teammate's paste a moment ago counts as there before this one.
@@ -1271,11 +1318,11 @@ impl DesktopApp {
             let pasted = rows.into_iter().map(|r| r.signature_id).collect();
             anyhow::Ok((before, pasted, after))
         });
-        let name = here.system.clone();
+        let name = here.system;
         cx.spawn(async move |this, cx| {
             let result = work.await;
             this.update(cx, |this, cx| {
-                this.set_busy(false, cx);
+                this.set_idle(cx);
                 match result {
                     Ok((before, pasted, after)) => {
                         let review = Review {
@@ -1293,7 +1340,8 @@ impl DesktopApp {
                         });
                         let mut text = format!("Pasted into {name}: {new} new, {updated} updated");
                         if missing > 0 {
-                            text += &format!(", {missing} missing");
+                            write!(text, ", {missing} missing")
+                                .expect("writing to a String cannot fail");
                         }
                         this.tell(Tone::Done, text, cx);
                     }
@@ -1306,7 +1354,7 @@ impl DesktopApp {
     }
 
     /// Delete what the last paste no longer saw.
-    fn delete_missing(&mut self, cx: &mut Context<Self>) {
+    fn delete_missing(&mut self, cx: &mut Context<'_, Self>) {
         let missing = self.sigs.read(cx).missing();
         if missing.is_empty() {
             return self.tell(Tone::Info, "Nothing missing from the last paste".into(), cx);
@@ -1319,14 +1367,14 @@ impl DesktopApp {
         self.delete(missing, text, cx);
     }
 
-    fn delete(&mut self, keys: Vec<i64>, done: String, cx: &mut Context<Self>) {
+    fn delete(&mut self, keys: Vec<i64>, done: String, cx: &mut Context<'_, Self>) {
         let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
             return;
         };
         if self.sigs.read(cx).busy {
             return;
         }
-        self.set_busy(true, cx);
+        self.set_busy(cx);
         let work = cx.background_spawn(async move {
             client.remove_signatures(map_id, &keys)?;
             client.snapshot(map_id)
@@ -1334,7 +1382,7 @@ impl DesktopApp {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             this.update(cx, |this, cx| {
-                this.set_busy(false, cx);
+                this.set_idle(cx);
                 match result {
                     Ok(after) => {
                         this.show_changed(after, cx);
@@ -1349,7 +1397,7 @@ impl DesktopApp {
     }
 
     /// Change one signature the way the website's row does, then show the map as it is now.
-    fn edit_signature(&mut self, key: i64, edit: SignatureEdit, cx: &mut Context<Self>) {
+    fn edit_signature(&mut self, key: i64, edit: SignatureEdit, cx: &mut Context<'_, Self>) {
         let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
             return;
         };
@@ -1366,7 +1414,7 @@ impl DesktopApp {
             SignatureEdit::PreserveMass { on: true, .. } => "Preserving mass on the connection",
             SignatureEdit::PreserveMass { on: false, .. } => "No longer preserving mass",
         };
-        self.set_busy(true, cx);
+        self.set_busy(cx);
         let work = cx.background_spawn(async move {
             client.edit_signature(map_id, key, &edit)?;
             client.snapshot(map_id)
@@ -1374,7 +1422,7 @@ impl DesktopApp {
         cx.spawn(async move |this, cx| {
             let result = work.await;
             this.update(cx, |this, cx| {
-                this.set_busy(false, cx);
+                this.set_idle(cx);
                 match result {
                     Ok(after) => {
                         this.show_changed(after, cx);
@@ -1392,7 +1440,7 @@ impl DesktopApp {
     /// button does: the far system once someone has been, else the class its type promises.
     /// A hole with no name yet gets the next one in the chain, written onto its far end so
     /// the next copy takes the one after.
-    fn copy_signature_bookmark(&mut self, key: i64, cx: &mut Context<Self>) {
+    fn copy_signature_bookmark(&mut self, key: i64, cx: &mut Context<'_, Self>) {
         let sigs = self.sigs.read(cx);
         let (Some(snapshot), Some(here)) = (sigs.snapshot.clone(), sigs.system().cloned()) else {
             return;
@@ -1481,7 +1529,7 @@ impl DesktopApp {
                 this.update(cx, |this, cx| match result {
                     Ok(after) => this.show_changed(after, cx),
                     Err(err) => {
-                        this.tell(Tone::Problem, format!("Could not name the hole: {err}"), cx)
+                        this.tell(Tone::Problem, format!("Could not name the hole: {err}"), cx);
                     }
                 })
                 .ok();
@@ -1493,7 +1541,7 @@ impl DesktopApp {
     // Aliases.
 
     /// Open the dialog that names the system you are in.
-    fn open_alias(&mut self, cx: &mut Context<Self>) {
+    fn open_alias(&mut self, cx: &mut Context<'_, Self>) {
         if self.alias_window.is_some() {
             return;
         }
@@ -1536,7 +1584,7 @@ impl DesktopApp {
             })
             .ok();
         });
-        match alias::open(system.name.clone(), current, done, cx) {
+        match alias::open(system.name, current, done, cx) {
             Ok(handle) => self.alias_window = Some(handle),
             Err(err) => self.note(
                 Level::Problem,
@@ -1545,7 +1593,13 @@ impl DesktopApp {
         }
     }
 
-    fn save_alias(&mut self, placement: i64, name: String, alias: String, cx: &mut Context<Self>) {
+    fn save_alias(
+        &mut self,
+        placement: i64,
+        name: String,
+        alias: String,
+        cx: &mut Context<'_, Self>,
+    ) {
         let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
             return;
         };
@@ -1558,11 +1612,11 @@ impl DesktopApp {
             this.update(cx, |this, cx| {
                 match result {
                     Ok(()) if alias.is_empty() => {
-                        this.tell(Tone::Done, format!("Cleared the alias of {name}"), cx)
+                        this.tell(Tone::Done, format!("Cleared the alias of {name}"), cx);
                     }
                     Ok(()) => this.tell(Tone::Done, format!("Named {name} {alias}"), cx),
                     Err(err) => {
-                        this.tell(Tone::Problem, format!("Could not name {name}: {err}"), cx)
+                        this.tell(Tone::Problem, format!("Could not name {name}: {err}"), cx);
                     }
                 }
                 this.refresh_changed(cx);
@@ -1573,7 +1627,7 @@ impl DesktopApp {
     }
 
     /// Fetch the portraits of characters the logs know an id for, once each.
-    fn fetch_portraits(&mut self, cx: &mut Context<Self>) {
+    fn fetch_portraits(&mut self, cx: &mut Context<'_, Self>) {
         let mut agent: Option<ureq::Agent> = None;
         for (name, _, id) in &self.characters {
             let Some(id) = *id else { continue };
@@ -1624,7 +1678,7 @@ impl DesktopApp {
         &mut self,
         appearance: Appearance,
         window: &mut Window,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
     ) {
         self.config.appearance = appearance;
         self.save();
@@ -1632,34 +1686,48 @@ impl DesktopApp {
         cx.notify();
     }
 
-    pub fn toggle_overlay(&mut self, cx: &mut Context<Self>) {
-        self.set_overlay(self.overlay.is_none(), cx);
+    pub(crate) fn toggle_overlay(&mut self, cx: &mut Context<'_, Self>) {
+        if self.overlay.is_none() {
+            self.open_overlay(cx);
+        } else {
+            self.close_overlay(cx);
+        }
     }
 
-    fn set_overlay(&mut self, open: bool, cx: &mut Context<Self>) {
-        if let Some(handle) = self.overlay.take() {
-            handle
-                .update(cx, |_, window, _| window.remove_window())
-                .ok();
-        }
-        self.config.overlay.open = open;
+    /// Open the overlay, or open it again to take changed settings.
+    fn open_overlay(&mut self, cx: &mut Context<'_, Self>) {
+        self.remove_overlay(cx);
+        self.config.overlay.open = true;
         self.save();
-        if open {
-            match overlay::open(self.sigs.clone(), &self.config.overlay, cx) {
-                Ok(handle) => self.overlay = Some(handle),
-                Err(err) => {
-                    self.config.overlay.open = false;
-                    self.note(Level::Problem, format!("Could not open the overlay: {err}"));
-                }
+        match overlay::open(self.sigs.clone(), &self.config.overlay, cx) {
+            Ok(handle) => self.overlay = Some(handle),
+            Err(err) => {
+                self.config.overlay.open = false;
+                self.note(Level::Problem, format!("Could not open the overlay: {err}"));
             }
         }
         cx.notify();
     }
 
+    fn close_overlay(&mut self, cx: &mut Context<'_, Self>) {
+        self.remove_overlay(cx);
+        self.config.overlay.open = false;
+        self.save();
+        cx.notify();
+    }
+
+    fn remove_overlay(&mut self, cx: &mut Context<'_, Self>) {
+        if let Some(handle) = self.overlay.take() {
+            handle
+                .update(cx, |_, window, _| window.remove_window())
+                .ok();
+        }
+    }
+
     /// Change an overlay setting; an open overlay is reopened to take it.
     fn edit_overlay(
         &mut self,
-        cx: &mut Context<Self>,
+        cx: &mut Context<'_, Self>,
         edit: impl FnOnce(&mut crate::config::Overlay),
     ) {
         edit(&mut self.config.overlay);
@@ -1670,7 +1738,7 @@ impl DesktopApp {
         });
         self.apply_focus(cx);
         if self.config.overlay.open {
-            self.set_overlay(true, cx);
+            self.open_overlay(cx);
         } else {
             self.save();
         }

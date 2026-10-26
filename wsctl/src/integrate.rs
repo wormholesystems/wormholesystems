@@ -5,25 +5,27 @@
 //! the frontend, and WebSocket upgrades have to pass through. A test holds the list here to
 //! that file, so the two cannot drift apart.
 
+use std::fmt::Write as _;
+
 use console::style;
 
 use crate::config::{Deployment, Direct, Proxy, Router, Site};
 use crate::ui;
 
 /// The paths the API answers. Everything else is the frontend's.
-pub const API_PATHS: [&str; 4] = ["/api/*", "/ws/*", "/auth/*", "/discord/*"];
+pub(crate) const API_PATHS: [&str; 4] = ["/api/*", "/ws/*", "/auth/*", "/discord/*"];
 
-pub const API_HOST: &str = "wormholesystems-api:3000";
-pub const WEB_HOST: &str = "wormholesystems-web:3001";
+pub(crate) const API_HOST: &str = "wormholesystems-api:3000";
+pub(crate) const WEB_HOST: &str = "wormholesystems-web:3001";
 /// The bundled Caddy as the path router, on the network it shares with the proxy.
-pub const ROUTER_HOST: &str = "wormholesystems-router:80";
+pub(crate) const ROUTER_HOST: &str = "wormholesystems-router:80";
 
 /// The largest body the API accepts (a map import, 32MB), plus room for the multipart
 /// framing. nginx refuses anything over 1MB unless told otherwise.
 const MAX_BODY: &str = "33m";
 
 /// A site block for a Caddy that shares the Docker network with the API and the frontend.
-pub fn caddy_split(public_url: &str) -> String {
+pub(crate) fn caddy_split(public_url: &str) -> String {
     format!(
         "{site} {{\n\t@api path {paths}\n\thandle @api {{\n\t\treverse_proxy {API_HOST}\n\t}}\n\thandle {{\n\t\treverse_proxy {WEB_HOST}\n\t}}\n}}\n",
         site = public_url.trim_end_matches('/'),
@@ -32,7 +34,7 @@ pub fn caddy_split(public_url: &str) -> String {
 }
 
 /// A site block for a Caddy that sends the whole site to one upstream.
-pub fn caddy_single(public_url: &str, upstream: &str) -> String {
+pub(crate) fn caddy_single(public_url: &str, upstream: &str) -> String {
     format!(
         "{site} {{\n\treverse_proxy {upstream}\n}}\n",
         site = public_url.trim_end_matches('/'),
@@ -58,7 +60,7 @@ const NGINX_MAP: &str = "map $http_upgrade $connection_upgrade {
 
 /// A server block for an nginx on this machine, splitting the paths itself between the
 /// API's and the frontend's loopback ports.
-pub fn nginx_split(public_url: &str, api_port: u16, web_port: u16) -> String {
+pub(crate) fn nginx_split(public_url: &str, api_port: u16, web_port: u16) -> String {
     let host = host_of(public_url);
     let prefixes = API_PATHS
         .iter()
@@ -90,7 +92,7 @@ server {{
 
 /// A server block for an nginx on this machine that sends everything to the bundled
 /// Caddy's loopback port.
-pub fn nginx_single(public_url: &str, port: u16) -> String {
+pub(crate) fn nginx_single(public_url: &str, port: u16) -> String {
     let host = host_of(public_url);
     format!(
         "{NGINX_MAP}
@@ -114,14 +116,15 @@ server {{
 /// survives updates and wsctl adds it to COMPOSE_FILE. One router per service, the API's
 /// with the path prefixes; Traefik tries the longer rule first, so it wins over the
 /// frontend's catch-all.
-pub fn traefik(public_url: &str, network: &str, services: &[(&str, &str, u16)]) -> String {
+pub(crate) fn traefik(public_url: &str, network: &str, services: &[(&str, &str, u16)]) -> String {
     let host = host_of(public_url);
     let mut out = String::from(
         "# compose.override.yml\n# Coolify's entrypoint is `https` and its resolver `letsencrypt`; a plain Traefik\n# usually calls them `websecure` and whatever its static config names.\nservices:\n",
     );
     for (service, rule, port) in services {
         let name = format!("wormholesystems-{service}");
-        out.push_str(&format!(
+        write!(
+            out,
             "  {service}:
     labels:
       - traefik.enable=true
@@ -133,7 +136,8 @@ pub fn traefik(public_url: &str, network: &str, services: &[(&str, &str, u16)]) 
       - traefik.http.services.{name}.loadbalancer.server.port={port}
 ",
             rule = rule.replace("{host}", host),
-        ));
+        )
+        .expect("writing to a String cannot fail");
     }
     out
 }
@@ -156,7 +160,7 @@ fn host_of(url: &str) -> &str {
     rest.split('/').next().unwrap_or(rest)
 }
 
-pub fn print(deployment: &Deployment) {
+pub(crate) fn print(deployment: &Deployment) {
     match &deployment.proxy {
         Proxy::Caddy(site) => print_caddy(site),
         Proxy::Router(router) => print_router(router),

@@ -22,11 +22,16 @@ async fn stub_esi() -> (EsiClient, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let app = Router::new()
         .route("/universe/names", post(names))
-        .with_state(calls.clone());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
+        .with_state(Arc::clone(&calls));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let base = format!(
+        "http://{}",
+        listener.local_addr().expect("read listener address")
+    );
     tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
+        axum::serve(listener, app).await.expect("serve test app");
     });
     (
         EsiClient::with_config(reqwest::Client::new(), base, "2025-08-26"),
@@ -56,17 +61,25 @@ async fn setup(pool: &PgPool) {
     sqlx::query("insert into zkb_state (id, sequence_id) values (true, 1)")
         .execute(pool)
         .await
-        .unwrap();
+        .expect("insert zkb_state");
     // Already named, so the organisations never need ESI here.
     sqlx::query("insert into corporations (id, name, ticker) values ($1, 'Corp', 'CORP')")
         .bind(CORP)
         .execute(pool)
         .await
-        .unwrap();
+        .expect("insert corporations");
 }
 
-/// A kill as the live stream (`live`) or the archive import would have stored it.
-async fn kill(pool: &PgPool, id: i64, victim: i64, attacker: i64, live: bool) {
+/// Which side stored a kill: the live stream gives it an ingest sequence, the archive
+/// import does not.
+#[derive(Clone, Copy)]
+enum Source {
+    Live,
+    Archive,
+}
+
+/// A kill as the live stream or the archive import would have stored it.
+async fn kill(pool: &PgPool, id: i64, victim: i64, attacker: i64, source: Source) {
     sqlx::query(
         "insert into killmails (id, hash, solar_system_id, time, orgs, victim_character_id,
                                 victim_corporation_id, final_blow_character_id, ingest_seq)
@@ -77,24 +90,24 @@ async fn kill(pool: &PgPool, id: i64, victim: i64, attacker: i64, live: bool) {
     .bind(victim)
     .bind(CORP)
     .bind(attacker)
-    .bind(live)
+    .bind(matches!(source, Source::Live))
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert killmails");
 }
 
 async fn named(pool: &PgPool) -> Vec<i64> {
     sqlx::query_scalar("select id from characters order by id")
         .fetch_all(pool)
         .await
-        .unwrap()
+        .expect("query characters")
 }
 
 async fn mark(pool: &PgPool) -> i64 {
     sqlx::query_scalar("select named_seq from zkb_state")
         .fetch_one(pool)
         .await
-        .unwrap()
+        .expect("query zkb_state")
 }
 
 #[sqlx::test]
@@ -109,9 +122,9 @@ async fn new_kills_are_named_once_and_old_ones_left_alone(pool: PgPool) {
     .execute(&pool)
     .await
     .unwrap();
-    kill(&pool, 1, 11, 12, true).await;
-    kill(&pool, 2, 13, 12, true).await;
-    kill(&pool, 3, 99, 98, false).await;
+    kill(&pool, 1, 11, 12, Source::Live).await;
+    kill(&pool, 2, 13, 12, Source::Live).await;
+    kill(&pool, 3, 99, 98, Source::Archive).await;
 
     let mut resolver = NameResolver::default();
     resolver.pass(&pool, &esi).await;
@@ -139,7 +152,7 @@ async fn new_kills_are_named_once_and_old_ones_left_alone(pool: PgPool) {
     );
 
     // A fresh resolver, as after a restart, carries on from the stored mark.
-    kill(&pool, 4, 14, 12, true).await;
+    kill(&pool, 4, 14, 12, Source::Live).await;
     NameResolver::default().pass(&pool, &esi).await;
     assert_eq!(named(&pool).await, [11, 12, 13, 14]);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
@@ -150,7 +163,7 @@ async fn one_dead_pilot_costs_only_its_own_name(pool: PgPool) {
     setup(&pool).await;
     let (esi, _) = stub_esi().await;
     for id in 1..=8 {
-        kill(&pool, id, 100 + id, DEAD, true).await;
+        kill(&pool, id, 100 + id, DEAD, Source::Live).await;
     }
 
     NameResolver::default().pass(&pool, &esi).await;
@@ -168,7 +181,7 @@ async fn one_dead_pilot_costs_only_its_own_name(pool: PgPool) {
 #[sqlx::test]
 async fn an_unreachable_esi_holds_the_mark_for_a_few_passes(pool: PgPool) {
     setup(&pool).await;
-    kill(&pool, 1, 11, 12, true).await;
+    kill(&pool, 1, 11, 12, Source::Live).await;
     // Nothing listens here, so every call fails without ESI saying anything about the ids.
     let esi = EsiClient::with_config(reqwest::Client::new(), "http://127.0.0.1:9", "2025-08-26");
 

@@ -17,7 +17,7 @@ async fn seed_wormhole_system(pool: &PgPool) {
     )
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert alliances");
 }
 
 async fn insert_kills(pool: &PgPool, count: i64, days: i64, org: Org, start_id: i64) {
@@ -29,11 +29,11 @@ async fn insert_kills(pool: &PgPool, count: i64, days: i64, org: Org, start_id: 
         )
         .bind(start_id + i)
         .bind(WH_SYSTEM)
-        .bind(day_offset as i32 + 1)
-        .bind(serde_json::to_value(vec![org.clone()]).unwrap())
+        .bind(i32::try_from(day_offset + 1).expect("day offset fits i32"))
+        .bind(serde_json::to_value(vec![org.clone()]).expect("serialize JSON"))
         .execute(pool)
         .await
-        .unwrap();
+        .expect("insert killmails");
     }
 }
 

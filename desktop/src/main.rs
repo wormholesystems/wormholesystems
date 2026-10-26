@@ -26,9 +26,18 @@ mod update;
 use std::time::Duration;
 
 use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::*;
+use gpui_kit::{
+    AnyWindowHandle, App, AppContext, Bounds, Entity, Global, TitlebarOptions, WindowBounds,
+    WindowOptions, px, size,
+};
 
 use tray::{Tray, TrayEvent};
+
+/// A line on stderr, the app's only log.
+#[expect(clippy::print_stderr, reason = "stderr is the desktop app's only log")]
+pub(crate) fn log(line: std::fmt::Arguments<'_>) {
+    eprintln!("{line}");
+}
 
 /// What outlives the main window: the app itself, which keeps running in the tray with its
 /// overlay and keys, and the window when one is open.
@@ -71,9 +80,9 @@ fn main() {
                     .timer(Duration::from_millis(100))
                     .await;
                 cx.update(|cx| {
-                    let dark = cx.theme().mode.is_dark();
+                    let mode = cx.theme().mode;
                     if let Some(tray) = cx.global_mut::<Shell>().tray.as_mut() {
-                        tray.set_dark(dark);
+                        tray.set_mode(mode);
                     }
                     let events = cx
                         .global::<Shell>()
@@ -96,7 +105,7 @@ fn on_tray(event: TrayEvent, cx: &mut App) {
         TrayEvent::Open => open_main(cx),
         TrayEvent::ToggleOverlay => {
             if let Some(app) = cx.global::<Shell>().app.clone() {
-                app.update(cx, |app, cx| app.toggle_overlay(cx));
+                app.update(cx, app::DesktopApp::toggle_overlay);
             }
         }
         TrayEvent::Quit => cx.quit(),
@@ -133,14 +142,14 @@ fn open_main(cx: &mut App) {
         Ok((window, app)) => {
             #[cfg(windows)]
             {
-                let dark = cx.theme().mode.is_dark();
-                let _ = window.update(cx, |_, window, _| native::set_window_icon(window, dark));
+                let mode = cx.theme().mode;
+                let _ = window.update(cx, |_, window, _| native::set_window_icon(window, mode));
             }
             cx.activate(true);
             let shell = cx.global_mut::<Shell>();
             shell.window = Some(window);
             shell.app = Some(app);
         }
-        Err(e) => eprintln!("could not open the window: {e:#}"),
+        Err(e) => log(format_args!("could not open the window: {e:#}")),
     }
 }

@@ -78,6 +78,10 @@ pub(crate) async fn reinsert(tx: &mut Tx<'_>, map_id: i64, rows: &[JumpRow]) -> 
     let masses: Vec<i64> = rows.iter().map(|r| r.mass).collect();
     let manual: Vec<bool> = rows.iter().map(|r| r.is_manual).collect();
     let created: Vec<DateTime<Utc>> = rows.iter().map(|r| r.created_at).collect();
+    #[expect(
+        clippy::as_conversions,
+        reason = "sqlx's `as` type override for a typed parameter, not a value conversion"
+    )]
     sqlx::query!(
         "insert into map_connection_jumps
              (id, map_id, connection_id, character_id, from_solar_system_id,

@@ -16,6 +16,7 @@ use tracing_subscriber::registry::LookupSpan;
 const SERVICE_NAME: &str = "wormholesystems-api";
 
 /// Flushes the spans still queued when it is dropped.
+#[derive(Debug)]
 pub struct Tracing(SdkTracerProvider);
 
 impl Drop for Tracing {
@@ -34,6 +35,10 @@ fn configured() -> bool {
 }
 
 /// The exporter and the `tracing` layer that feeds it, when an endpoint is configured.
+#[expect(
+    clippy::print_stderr,
+    reason = "logging is not up yet, so stderr is the only place to say it"
+)]
 pub fn init<S>() -> Option<(Tracing, impl tracing_subscriber::Layer<S> + Send + Sync)>
 where
     S: tracing::Subscriber + for<'a> LookupSpan<'a> + Send + Sync,

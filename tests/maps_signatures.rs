@@ -766,7 +766,7 @@ async fn connection_state(
 ) -> wormholesystems::maps::MapConnection {
     get_map(pool, actor, GetMap { map_id })
         .await
-        .unwrap()
+        .expect("get_map")
         .connections
         .into_iter()
         .find(|c| c.id == connection_id)
@@ -774,9 +774,11 @@ async fn connection_state(
 }
 
 async fn only_signature(pool: &PgPool, actor: Actor, map_id: i64) -> Signature {
-    let mut sigs = list_signatures(pool, actor, map_id).await.unwrap();
+    let mut sigs = list_signatures(pool, actor, map_id)
+        .await
+        .expect("list_signatures");
     assert_eq!(sigs.len(), 1);
-    sigs.pop().unwrap()
+    sigs.pop().expect("one signature listed")
 }
 
 /// Wind a signature's edit stamp back a day.
@@ -785,7 +787,7 @@ async fn backdate(pool: &PgPool, signature_pk: i64) {
         .bind(signature_pk)
         .execute(pool)
         .await
-        .unwrap();
+        .expect("update signatures");
 }
 
 /// Whether the edit stamp has moved since it was wound back.
@@ -796,7 +798,7 @@ async fn touched(pool: &PgPool, signature_pk: i64) -> bool {
     .bind(signature_pk)
     .fetch_one(pool)
     .await
-    .unwrap()
+    .expect("query signatures")
 }
 
 /// Linking and unlinking are edits to the signature like any other, the same as the unlink

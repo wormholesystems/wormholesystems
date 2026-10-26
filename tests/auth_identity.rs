@@ -3,6 +3,7 @@
 //! the session lifecycle. These are pure DB logic, so they're driven directly with a pool.
 
 use sqlx::PgPool;
+use wormholesystems::app::CookieSecurity;
 use wormholesystems::esi::jwt::Claims;
 use wormholesystems::session::{
     Entity, SESSION_DAYS, actor_for_session, create_session, delete_session,
@@ -32,14 +33,14 @@ async fn character_user(pool: &PgPool, character_id: i64) -> i64 {
         .bind(character_id)
         .fetch_one(pool)
         .await
-        .unwrap()
+        .expect("query characters")
 }
 
 async fn user_exists(pool: &PgPool, user_id: i64) -> bool {
     sqlx::query_scalar!("select exists(select 1 from users where id = $1)", user_id)
         .fetch_one(pool)
         .await
-        .unwrap()
+        .expect("query users")
         .unwrap_or(false)
 }
 
@@ -48,7 +49,7 @@ async fn is_preferred(pool: &PgPool, character_id: i64) -> bool {
         .bind(character_id)
         .fetch_one(pool)
         .await
-        .unwrap()
+        .expect("query characters")
 }
 
 #[sqlx::test]
@@ -206,6 +207,11 @@ async fn an_account_with_characters_left_is_not_removed(pool: PgPool) {
 }
 
 /// Days left on a session, rounded.
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    reason = "a rounded day count is far inside i64"
+)]
 async fn days_left(pool: &PgPool, session: &str) -> i64 {
     sqlx::query_scalar::<_, f64>(
         "select extract(epoch from expires_at - now())::float8 / 86400 from sessions where id_hash = $1",
@@ -213,7 +219,7 @@ async fn days_left(pool: &PgPool, session: &str) -> i64 {
     .bind(wormholesystems::tokens::hash(session))
     .fetch_one(pool)
     .await
-    .unwrap()
+    .expect("query sessions")
     .round() as i64
 }
 
@@ -222,17 +228,17 @@ async fn set_days_left(pool: &PgPool, session: &str, days: i64) {
         "update sessions set expires_at = now() + make_interval(days => $2::int) where id_hash = $1",
     )
     .bind(wormholesystems::tokens::hash(session))
-    .bind(days as i32)
+    .bind(i32::try_from(days).expect("days fit i32"))
     .execute(pool)
     .await
-    .unwrap();
+    .expect("update sessions");
 }
 
 /// The cookie a sign-in sets survives a browser restart, for as long as the session can
 /// last, and stays out of reach of scripts and other sites.
 #[test]
 fn the_session_cookie_outlasts_the_browser() {
-    let cookie = wormholesystems::auth::session_cookie("abc".into(), true);
+    let cookie = wormholesystems::auth::session_cookie("abc".into(), CookieSecurity::Https);
     assert_eq!(cookie.name(), "ws_session");
     assert_eq!(cookie.value(), "abc");
     assert_eq!(cookie.max_age(), Some(time::Duration::days(SESSION_DAYS)));
@@ -243,7 +249,7 @@ fn the_session_cookie_outlasts_the_browser() {
         Some(axum_extra::extract::cookie::SameSite::Lax)
     );
     assert_eq!(cookie.secure(), Some(true));
-    let plain = wormholesystems::auth::session_cookie("abc".into(), false);
+    let plain = wormholesystems::auth::session_cookie("abc".into(), CookieSecurity::PlainHttp);
     assert_eq!(
         plain.secure(),
         Some(false),
@@ -485,8 +491,11 @@ async fn a_saved_token_replaces_the_old_one_and_keeps_its_scopes(pool: PgPool) {
     let token = |access: &str, scopes: &[&str]| Token {
         access_token: access.into(),
         refresh_token: "refresh".into(),
-        expires_at: SystemTime::now() + Duration::from_secs(1200),
-        scopes: scopes.iter().map(|s| s.to_string()).collect(),
+        expires_at: SystemTime::now() + Duration::from_mins(20),
+        scopes: scopes
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect(),
     };
 
     store.save(100, &token("first", &["a", "b"])).await.unwrap();

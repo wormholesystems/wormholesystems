@@ -56,40 +56,7 @@ pub async fn track_jump(pool: &sqlx::PgPool, actor: super::Actor, cmd: TrackJump
 }
 
 pub(super) async fn apply_track_jump(tx: &mut Tx<'_>, cmd: TrackJump) -> Result<Effect> {
-    // The origin is where the character was, so it is always a real system; a ghost there
-    // means the placement changed under the jump.
-    let from_system = sqlx::query_scalar!(
-        "select solar_system_id from map_solar_systems where id = $1 and map_id = $2",
-        cmd.from_map_solar_system_id,
-        cmd.map_id,
-    )
-    .fetch_optional(&mut **tx)
-    .await?
-    .flatten()
-    .ok_or(MapError::NotFound)?;
-
-    if from_system == cmd.to_solar_system_id {
-        return Err(MapError::Validation("a jump must change system".into()));
-    }
-
-    // Gate travel never builds a wormhole. The client checks too, off a cached stargate
-    // graph, but this is the copy that decides.
-    let is_gate = sqlx::query_scalar!(
-        "select exists(
-             select 1 from stargates
-             where solar_system_id = $1 and destination_system_id = $2
-         )",
-        from_system,
-        cmd.to_solar_system_id,
-    )
-    .fetch_one(&mut **tx)
-    .await?
-    .unwrap_or(false);
-    if is_gate {
-        return Err(MapError::Conflict(
-            "those systems are connected by a stargate".into(),
-        ));
-    }
+    let from_system = check_origin(tx, &cmd).await?;
 
     // Noted before anything touches it, so undo can put the signature back as it was.
     let before = match cmd.signature_pk {
@@ -114,95 +81,12 @@ pub(super) async fn apply_track_jump(tx: &mut Tx<'_>, cmd: TrackJump) -> Result<
 
     // Already mapped: the only news is which signature it turned out to be.
     if let Some(connection_id) = existing {
-        let Some(signature_pk) = cmd.signature_pk else {
-            return Err(MapError::Conflict(
-                "that connection is already on the map".into(),
-            ));
-        };
-        link(tx, cmd.map_id, signature_pk, connection_id).await?;
-        return Ok(Effect::new(
-            "tracking.linked",
-            "matched a jump to a signature",
-            CommandOutput::None,
-        )
-        .undo_with(MapCommand::Sequence(Sequence {
-            map_id: cmd.map_id,
-            steps: undo_signature(cmd.map_id, before.as_ref()),
-        }))
-        .emit(MapEvent::SignatureChanged {
-            map_id: cmd.map_id,
-            solar_system_id: from_system,
-        })
-        .emit(MapEvent::ConnectionChanged {
-            map_id: cmd.map_id,
-            connection_id,
-        }));
+        return link_existing(tx, &cmd, from_system, connection_id, before.as_ref()).await;
     }
 
-    let target_name = sqlx::query_scalar!(
-        "select name from solar_systems where id = $1",
-        cmd.to_solar_system_id,
-    )
-    .fetch_optional(&mut **tx)
-    .await?
-    .ok_or_else(|| {
-        MapError::Validation(format!("unknown solar system {}", cmd.to_solar_system_id))
-    })?;
+    let (target_name, placed) = target_of(tx, &cmd).await?;
 
-    let placed = sqlx::query_scalar!(
-        "select id from map_solar_systems where map_id = $1 and solar_system_id = $2",
-        cmd.map_id,
-        cmd.to_solar_system_id,
-    )
-    .fetch_optional(&mut **tx)
-    .await?;
-
-    // The client checks too, but this is the copy that decides: a pilot passing through
-    // a trade hub the map keeps off does not put the hub on the chain. Already placed, it
-    // is on the map by somebody's choice and stays reachable.
-    if placed.is_none()
-        && super::ignored::is_ignored_tx(tx, cmd.map_id, cmd.to_solar_system_id).await?
-    {
-        return Err(MapError::Validation(format!(
-            "{target_name} is on this map's ignore list"
-        )));
-    }
-
-    // A system reached by another route is linked to, not duplicated. Renaming it on the
-    // way is part of the jump, so undoing the jump puts the old name back.
-    let mut alias_undo = None;
-    let (to_placement, added) = match placed {
-        Some(id) => {
-            if let Some(alias) = cmd.alias.clone() {
-                let renamed = super::solar_system::apply_set_alias(
-                    tx,
-                    SetAlias {
-                        map_id: cmd.map_id,
-                        map_solar_system_id: id,
-                        alias: Some(alias),
-                    },
-                )
-                .await?;
-                alias_undo = renamed.inverse;
-            }
-            (id, None)
-        }
-        None => {
-            let effect = super::solar_system::apply_add_system(
-                tx,
-                AddSystem {
-                    map_id: cmd.map_id,
-                    solar_system_id: cmd.to_solar_system_id,
-                    x: cmd.x,
-                    y: cmd.y,
-                    alias: cmd.alias.clone(),
-                },
-            )
-            .await?;
-            let system = effect.output.take::<super::MapSolarSystem>()?;
-            (system.id, Some(system.id))
-        }
-    };
+    let (to_placement, added, alias_undo) = place_target(tx, &cmd, placed).await?;
 
     let effect = connect(
         tx,
@@ -218,21 +102,7 @@ pub(super) async fn apply_track_jump(tx: &mut Tx<'_>, cmd: TrackJump) -> Result<
     let connection = effect.output.take::<super::MapConnection>()?;
     let connection_id = connection.id;
 
-    if cmd.mass_status.is_some() || cmd.time_status.is_some() {
-        super::connection::apply_set_connection_status(
-            tx,
-            SetConnectionStatus {
-                map_id: cmd.map_id,
-                connection_id,
-                kind: None,
-                mass_status: cmd.mass_status.map(Some),
-                time_status: cmd.time_status.map(Some),
-                size: None,
-                preserve_mass: None,
-            },
-        )
-        .await?;
-    }
+    set_status(tx, &cmd, connection_id).await?;
 
     if let Some(signature_pk) = cmd.signature_pk {
         link(tx, cmd.map_id, signature_pk, connection_id).await?;
@@ -287,6 +157,173 @@ pub(super) async fn apply_track_jump(tx: &mut Tx<'_>, cmd: TrackJump) -> Result<
     )
     .undo_with(inverse)
     .emit_all(events))
+}
+
+/// Put the mass and lifetime the pilot saw on the new connection, if they said.
+async fn set_status(tx: &mut Tx<'_>, cmd: &TrackJump, connection_id: i64) -> Result<()> {
+    if cmd.mass_status.is_some() || cmd.time_status.is_some() {
+        super::connection::apply_set_connection_status(
+            tx,
+            SetConnectionStatus {
+                map_id: cmd.map_id,
+                connection_id,
+                kind: None,
+                mass_status: cmd.mass_status.map(Some),
+                time_status: cmd.time_status.map(Some),
+                size: None,
+                preserve_mass: None,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// The system the jump left, once it is known to be a real jump: a different system, and
+/// not one a stargate reaches.
+async fn check_origin(tx: &mut Tx<'_>, cmd: &TrackJump) -> Result<i64> {
+    // The origin is where the character was, so it is always a real system; a ghost there
+    // means the placement changed under the jump.
+    let from_system = sqlx::query_scalar!(
+        "select solar_system_id from map_solar_systems where id = $1 and map_id = $2",
+        cmd.from_map_solar_system_id,
+        cmd.map_id,
+    )
+    .fetch_optional(&mut **tx)
+    .await?
+    .flatten()
+    .ok_or(MapError::NotFound)?;
+
+    if from_system == cmd.to_solar_system_id {
+        return Err(MapError::Validation("a jump must change system".into()));
+    }
+
+    // Gate travel never builds a wormhole. The client checks too, off a cached stargate
+    // graph, but this is the copy that decides.
+    let is_gate = sqlx::query_scalar!(
+        "select exists(
+             select 1 from stargates
+             where solar_system_id = $1 and destination_system_id = $2
+         )",
+        from_system,
+        cmd.to_solar_system_id,
+    )
+    .fetch_one(&mut **tx)
+    .await?
+    .unwrap_or(false);
+    if is_gate {
+        return Err(MapError::Conflict(
+            "those systems are connected by a stargate".into(),
+        ));
+    }
+    Ok(from_system)
+}
+
+/// A jump through a connection the map already has: link the signature it came through.
+async fn link_existing(
+    tx: &mut Tx<'_>,
+    cmd: &TrackJump,
+    from_system: i64,
+    connection_id: i64,
+    before: Option<&SignatureState>,
+) -> Result<Effect> {
+    let Some(signature_pk) = cmd.signature_pk else {
+        return Err(MapError::Conflict(
+            "that connection is already on the map".into(),
+        ));
+    };
+    link(tx, cmd.map_id, signature_pk, connection_id).await?;
+    Ok(Effect::new(
+        "tracking.linked",
+        "matched a jump to a signature",
+        CommandOutput::None,
+    )
+    .undo_with(MapCommand::Sequence(Sequence {
+        map_id: cmd.map_id,
+        steps: undo_signature(cmd.map_id, before),
+    }))
+    .emit(MapEvent::SignatureChanged {
+        map_id: cmd.map_id,
+        solar_system_id: from_system,
+    })
+    .emit(MapEvent::ConnectionChanged {
+        map_id: cmd.map_id,
+        connection_id,
+    }))
+}
+
+/// The destination's name and its placement, if the map has one. Refuses a destination
+/// the map keeps off.
+async fn target_of(tx: &mut Tx<'_>, cmd: &TrackJump) -> Result<(String, Option<i64>)> {
+    let target_name = sqlx::query_scalar!(
+        "select name from solar_systems where id = $1",
+        cmd.to_solar_system_id,
+    )
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or_else(|| {
+        MapError::Validation(format!("unknown solar system {}", cmd.to_solar_system_id))
+    })?;
+
+    let placed = sqlx::query_scalar!(
+        "select id from map_solar_systems where map_id = $1 and solar_system_id = $2",
+        cmd.map_id,
+        cmd.to_solar_system_id,
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    // The client checks too, but this is the copy that decides: a pilot passing through
+    // a trade hub the map keeps off does not put the hub on the chain. Already placed, it
+    // is on the map by somebody's choice and stays reachable.
+    if placed.is_none()
+        && super::ignored::is_ignored_tx(tx, cmd.map_id, cmd.to_solar_system_id).await?
+    {
+        return Err(MapError::Validation(format!(
+            "{target_name} is on this map's ignore list"
+        )));
+    }
+    Ok((target_name, placed))
+}
+
+/// The destination's placement, placing it if it is new. Returns the placement, the id
+/// again when this added it, and the undo of any rename.
+async fn place_target(
+    tx: &mut Tx<'_>,
+    cmd: &TrackJump,
+    placed: Option<i64>,
+) -> Result<(i64, Option<i64>, Option<MapCommand>)> {
+    // A system reached by another route is linked to, not duplicated. Renaming it on the
+    // way is part of the jump, so undoing the jump puts the old name back.
+    if let Some(id) = placed {
+        let mut alias_undo = None;
+        if let Some(alias) = cmd.alias.clone() {
+            let renamed = super::solar_system::apply_set_alias(
+                tx,
+                SetAlias {
+                    map_id: cmd.map_id,
+                    map_solar_system_id: id,
+                    alias: Some(alias),
+                },
+            )
+            .await?;
+            alias_undo = renamed.inverse;
+        }
+        return Ok((id, None, alias_undo));
+    }
+    let effect = super::solar_system::apply_add_system(
+        tx,
+        AddSystem {
+            map_id: cmd.map_id,
+            solar_system_id: cmd.to_solar_system_id,
+            x: cmd.x,
+            y: cmd.y,
+            alias: cmd.alias.clone(),
+        },
+    )
+    .await?;
+    let system = effect.output.take::<super::MapSolarSystem>()?;
+    Ok((system.id, Some(system.id), None))
 }
 
 /// What the signature looked like before the jump touched it.

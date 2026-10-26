@@ -323,7 +323,7 @@ pub async fn update_map(pool: &PgPool, actor: Actor, cmd: UpdateMap) -> Result<M
         .ghost_unlinked_wormholes
         .unwrap_or(current.ghost_unlinked_wormholes);
     let layout = cmd.layout.unwrap_or(current.layout);
-    let allow_layout_override = cmd
+    let layout_override_allowed = cmd
         .allow_layout_override
         .unwrap_or(current.allow_layout_override);
     let is_public = cmd.is_public.unwrap_or(current.is_public);
@@ -349,7 +349,7 @@ pub async fn update_map(pool: &PgPool, actor: Actor, cmd: UpdateMap) -> Result<M
             naming.bookmark_return,
             ghost_unlinked_wormholes,
             layout,
-            allow_layout_override,
+            layout_override_allowed,
             is_public,
         )
         .fetch_one(&mut **tx)
@@ -464,6 +464,50 @@ pub async fn read_map(
         .ok_or(MapError::NotFound)?
     );
 
+    let systems = system_views(pool, cmd.map_id).await?;
+
+    let connections = super::connection::connections_with_stats(pool, cmd.map_id, None).await?;
+
+    // Whether the acting character is covered, a different question from whether the user
+    // is. A guest has no character, and nothing to warn about.
+    let character_has_access = match reader.actor {
+        Some(actor) => {
+            sqlx::query_scalar!(
+                r#"select exists(
+                   select 1 from map_access_live a
+                   join characters c on c.id = $2
+                   where a.map_id = $1
+                     and a.subject_id in (c.id, c.corporation_id, c.alliance_id)
+               ) as "has!""#,
+                cmd.map_id,
+                actor.character_id,
+            )
+            .fetch_one(pool)
+            .await?
+        }
+        None => true,
+    };
+
+    let map = if hide_token {
+        Map {
+            share_token: None,
+            ..map
+        }
+    } else {
+        map
+    };
+
+    Ok(MapView {
+        map,
+        role,
+        character_has_access,
+        systems,
+        connections,
+    })
+}
+
+/// Every node on the map as the client draws it, ghosts included.
+async fn system_views(pool: &PgPool, map_id: i64) -> Result<Vec<MapSystemView>> {
     let rows = sqlx::query!(
         r#"select
                mss.id, mss.map_id, mss.solar_system_id, mss.position_x, mss.position_y,
@@ -490,7 +534,7 @@ pub async fn read_map(
            left join system_sovereignty_resolved sov on sov.solar_system_id = ss.id
            where mss.map_id = $1
            order by mss.id"#,
-        cmd.map_id,
+        map_id,
     )
     .fetch_all(pool)
     .await?;
@@ -498,7 +542,7 @@ pub async fn read_map(
     let system_ids: Vec<i64> = rows.iter().filter_map(|r| r.solar_system_id).collect();
     let mut statics_by_system = super::view::statics_for(pool, &system_ids).await?;
 
-    let systems = rows
+    Ok(rows
         .into_iter()
         .map(|row| {
             let sovereignty = sovereignty_of(
@@ -552,46 +596,7 @@ pub async fn read_map(
                 sovereignty,
             }
         })
-        .collect();
-
-    let connections = super::connection::connections_with_stats(pool, cmd.map_id, None).await?;
-
-    // Whether the acting character is covered, a different question from whether the user
-    // is. A guest has no character, and nothing to warn about.
-    let character_has_access = match reader.actor {
-        Some(actor) => {
-            sqlx::query_scalar!(
-                r#"select exists(
-                   select 1 from map_access_live a
-                   join characters c on c.id = $2
-                   where a.map_id = $1
-                     and a.subject_id in (c.id, c.corporation_id, c.alliance_id)
-               ) as "has!""#,
-                cmd.map_id,
-                actor.character_id,
-            )
-            .fetch_one(pool)
-            .await?
-        }
-        None => true,
-    };
-
-    let map = if hide_token {
-        Map {
-            share_token: None,
-            ..map
-        }
-    } else {
-        map
-    };
-
-    Ok(MapView {
-        map,
-        role,
-        character_has_access,
-        systems,
-        connections,
-    })
+        .collect())
 }
 
 /// Mint a share link for the map, replacing any link already out there. Manager+. One link

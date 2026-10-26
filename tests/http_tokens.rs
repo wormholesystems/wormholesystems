@@ -17,7 +17,7 @@ async fn bearer_get(app: Router, path: &str, token: &str) -> TestResponse {
         .uri(path)
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .body(Body::empty())
-        .unwrap();
+        .expect("build request");
     send(app, req).await
 }
 
@@ -34,7 +34,7 @@ async fn bearer_json(
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(body.to_string()))
-        .unwrap();
+        .expect("build request");
     send(app, req).await
 }
 
@@ -49,8 +49,13 @@ async fn mint(pool: &PgPool, cookie: &str, name: &str) -> (i64, String) {
     .await;
     assert_eq!(created.status, StatusCode::OK, "{:?}", created.body);
     (
-        created.body["token"]["id"].as_i64().unwrap(),
-        created.body["plaintext"].as_str().unwrap().to_string(),
+        created.body["token"]["id"]
+            .as_i64()
+            .expect("id is an integer"),
+        created.body["plaintext"]
+            .as_str()
+            .expect("field is a string")
+            .to_string(),
     )
 }
 

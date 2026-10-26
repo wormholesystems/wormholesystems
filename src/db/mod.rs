@@ -25,7 +25,7 @@ pub async fn connect(config: &DatabaseConfig) -> Result<PgPool, sqlx::Error> {
 }
 
 /// Postgres-backed [`TokenStore`].
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PgTokenStore {
     pool: PgPool,
 }
@@ -68,8 +68,7 @@ impl TokenStore for PgTokenStore {
             // A null/absent expiry is treated as already expired (forces a refresh).
             expires_at: row
                 .token_expires_at
-                .map(SystemTime::from)
-                .unwrap_or(SystemTime::UNIX_EPOCH),
+                .map_or(SystemTime::UNIX_EPOCH, SystemTime::from),
             scopes: row.scopes,
         }))
     }

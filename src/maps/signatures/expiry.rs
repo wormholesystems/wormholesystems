@@ -33,7 +33,7 @@ pub async fn expire_signatures(pool: &PgPool) -> Result<Vec<(i64, i64)>> {
 pub fn start_expiry(pool: PgPool) {
     crate::background::spawn_every(
         "signature expiry",
-        std::time::Duration::from_secs(6 * 60 * 60),
+        std::time::Duration::from_hours(6),
         move || {
             let pool = pool.clone();
             async move {

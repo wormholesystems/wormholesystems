@@ -68,7 +68,10 @@ async fn show(
 /// The one part the upload carries. Documentation only: the handler reads the multipart
 /// stream itself.
 #[derive(utoipa::ToSchema)]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "only described in the OpenAPI document, never built"
+)]
 struct BackgroundImageUpload {
     /// PNG, JPEG, GIF or WebP, at most 8 MiB.
     #[schema(value_type = String, format = Binary, content_media_type = "image/*")]
@@ -94,9 +97,13 @@ async fn upload(
     let actor = super::extract::require_role_on_map(&state, &creds, map_id, Role::Viewer).await?;
 
     let mut image = None;
-    while let Some(field) = multipart.next_field().await.map_err(multipart_error)? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|err| multipart_error(&err))?
+    {
         if field.name() == Some("image") {
-            image = Some(field.bytes().await.map_err(multipart_error)?);
+            image = Some(field.bytes().await.map_err(|err| multipart_error(&err))?);
             break;
         }
     }
@@ -138,6 +145,6 @@ async fn remove(
     ))
 }
 
-fn multipart_error(err: axum::extract::multipart::MultipartError) -> ApiError {
+fn multipart_error(err: &axum::extract::multipart::MultipartError) -> ApiError {
     ApiError::bad_request(format!("could not read the upload: {err}"))
 }

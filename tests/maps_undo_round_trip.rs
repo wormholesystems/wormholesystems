@@ -73,15 +73,29 @@ const TABLES: [(&str, &str); 7] = [
     ),
 ];
 
-async fn tables(pool: &PgPool, map_id: i64, ignore_stamp: bool) -> Vec<(&'static str, Value)> {
+/// Whether a snapshot compares the lifetime stamp (`$2` in [`TABLES`]).
+#[derive(Clone, Copy)]
+enum Stamp {
+    Compare,
+    Ignore,
+}
+
+/// Whether the map draws unlinked wormhole scans as ghost nodes.
+#[derive(Clone, Copy)]
+enum Ghosts {
+    Off,
+    On,
+}
+
+async fn tables(pool: &PgPool, map_id: i64, stamp: Stamp) -> Vec<(&'static str, Value)> {
     let mut out = Vec::new();
     for (name, sql) in TABLES {
         let rows: Value = sqlx::query_scalar(sql)
             .bind(map_id)
-            .bind(ignore_stamp)
+            .bind(matches!(stamp, Stamp::Ignore))
             .fetch_one(pool)
             .await
-            .unwrap();
+            .expect("snapshot rows");
         out.push((name, rows));
     }
     out
@@ -97,9 +111,9 @@ fn differences(
 ) -> Vec<String> {
     let rows = |v: &Value| -> Vec<(i64, Value)> {
         v.as_array()
-            .unwrap()
+            .expect("rows are an array")
             .iter()
-            .map(|r| (r["id"].as_i64().unwrap(), r.clone()))
+            .map(|r| (r["id"].as_i64().expect("id is an integer"), r.clone()))
             .collect()
     };
     let mut out = Vec::new();
@@ -110,7 +124,7 @@ fn differences(
                 out.push(format!("{case}: {table} #{id} missing {when}"));
                 continue;
             };
-            for (field, value) in w.as_object().unwrap() {
+            for (field, value) in w.as_object().expect("row is an object") {
                 if g[field] != *value {
                     out.push(format!(
                         "{case}: {table} #{id}.{field} {when}: want {value}, got {}",
@@ -141,7 +155,7 @@ async fn head(pool: &PgPool, map_id: i64) -> Option<i64> {
         .bind(map_id)
         .fetch_one(pool)
         .await
-        .unwrap()
+        .expect("query maps")
 }
 
 async fn id_of(pool: &PgPool, sql: &'static str, map_id: i64) -> i64 {
@@ -149,7 +163,7 @@ async fn id_of(pool: &PgPool, sql: &'static str, map_id: i64) -> i64 {
         .bind(map_id)
         .fetch_one(pool)
         .await
-        .unwrap()
+        .expect("run query")
 }
 
 /// What every case runs against: two placed systems joined by a wormhole with a scan on
@@ -180,12 +194,12 @@ async fn seed_extra_systems(pool: &PgPool) {
         .bind(name)
         .execute(pool)
         .await
-        .unwrap();
+        .expect("insert solar_systems");
     }
 }
 
 /// Build the scene on a fresh map, so no case sees what another left behind.
-async fn scene(pool: &PgPool, actor: Actor, ghosting: bool) -> Scene {
+async fn scene(pool: &PgPool, actor: Actor, ghosts: Ghosts) -> Scene {
     let map_id = create_map(
         pool,
         actor,
@@ -196,9 +210,59 @@ async fn scene(pool: &PgPool, actor: Actor, ghosting: bool) -> Scene {
         },
     )
     .await
-    .unwrap()
+    .expect("create_map")
     .id;
-    let run = |cmd: Value| async move { apply(pool, actor, cmd).await.unwrap() };
+    let run = |cmd: Value| async move { apply(pool, actor, cmd).await.expect("apply") };
+
+    let (a, b, conn) = place_and_join(pool, actor, map_id).await;
+    let (linked, loose, far, data) = scan(pool, actor, map_id).await;
+    run(
+        json!({"command": "link_signature", "map_id": map_id, "signature_pk": linked,
+               "connection_id": conn}),
+    )
+    .await;
+    run(
+        json!({"command": "add_connection_jump", "map_id": map_id, "connection_id": conn,
+               "direction": "outbound", "ship_type_id": null, "mass": 20000000}),
+    )
+    .await;
+    run(json!({"command": "add_ignored_system", "map_id": map_id, "solar_system_id": SYS_E})).await;
+    let jump = id_of(
+        pool,
+        "select id from map_connection_jumps where map_id = $1",
+        map_id,
+    )
+    .await;
+    let watch = id_of(
+        pool,
+        "select min(id) from map_watchlist where map_id = $1",
+        map_id,
+    )
+    .await;
+
+    let ghost = match ghosts {
+        Ghosts::Off => None,
+        Ghosts::On => Some(draw_ghosts(pool, actor, map_id).await),
+    };
+    Scene {
+        map_id,
+        a,
+        b,
+        conn,
+        linked,
+        loose,
+        far,
+        data,
+        jump,
+        watch,
+        ghost,
+    }
+}
+
+/// Place the three systems and join them, the second edge left critical for two hours.
+/// Returns the first two placements and the wormhole between them.
+async fn place_and_join(pool: &PgPool, actor: Actor, map_id: i64) -> (i64, i64, i64) {
+    let run = |cmd: Value| async move { apply(pool, actor, cmd).await.expect("apply") };
 
     let mut placed = Vec::new();
     for (system, x) in [(SYS_A, 0.0), (SYS_B, 200.0), (SYS_D, 400.0)] {
@@ -229,8 +293,18 @@ async fn scene(pool: &PgPool, actor: Actor, ghosting: bool) -> Scene {
         "update map_connections set time_status_updated_at = now() - interval '2 hours'
          where id = $1",
     ] {
-        sqlx::query(sql).bind(stale).execute(pool).await.unwrap();
+        sqlx::query(sql)
+            .bind(stale)
+            .execute(pool)
+            .await
+            .expect("make row stale");
     }
+    (a, b, conn)
+}
+
+/// The four scans: linked, loose, far and data, in that order.
+async fn scan(pool: &PgPool, actor: Actor, map_id: i64) -> (i64, i64, i64, i64) {
+    let run = |cmd: Value| async move { apply(pool, actor, cmd).await.expect("apply") };
 
     let mut scans = Vec::new();
     for (system, sig, group) in [
@@ -247,67 +321,29 @@ async fn scene(pool: &PgPool, actor: Actor, ghosting: bool) -> Scene {
         };
         scans.push(signature.id);
     }
-    let (linked, loose, far, data) = (scans[0], scans[1], scans[2], scans[3]);
-    run(
-        json!({"command": "link_signature", "map_id": map_id, "signature_pk": linked,
-               "connection_id": conn}),
-    )
-    .await;
-    run(
-        json!({"command": "add_connection_jump", "map_id": map_id, "connection_id": conn,
-               "direction": "outbound", "ship_type_id": null, "mass": 20000000}),
-    )
-    .await;
-    run(json!({"command": "add_ignored_system", "map_id": map_id, "solar_system_id": SYS_E})).await;
-    let jump = id_of(
-        pool,
-        "select id from map_connection_jumps where map_id = $1",
-        map_id,
-    )
-    .await;
-    let watch = id_of(
-        pool,
-        "select min(id) from map_watchlist where map_id = $1",
-        map_id,
-    )
-    .await;
+    (scans[0], scans[1], scans[2], scans[3])
+}
 
-    let mut ghost = None;
-    if ghosting {
-        update_map(
-            pool,
-            actor,
-            UpdateMap {
-                map_id,
-                ghost_unlinked_wormholes: Some(true),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        ghost = Some(
-            id_of(
-                pool,
-                "select min(id) from map_solar_systems
-                 where map_id = $1 and solar_system_id is null",
-                map_id,
-            )
-            .await,
-        );
-    }
-    Scene {
+/// Turn ghost nodes on and return the one the loose scan in the first system raised.
+async fn draw_ghosts(pool: &PgPool, actor: Actor, map_id: i64) -> i64 {
+    update_map(
+        pool,
+        actor,
+        UpdateMap {
+            map_id,
+            ghost_unlinked_wormholes: Some(true),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("update_map");
+    id_of(
+        pool,
+        "select min(id) from map_solar_systems
+         where map_id = $1 and solar_system_id is null",
         map_id,
-        a,
-        b,
-        conn,
-        linked,
-        loose,
-        far,
-        data,
-        jump,
-        watch,
-        ghost,
-    }
+    )
+    .await
 }
 
 /// The command a case runs, built against its scene.
@@ -321,16 +357,20 @@ type Case = (&'static str, Command);
 async fn check(
     pool: &PgPool,
     actor: Actor,
-    ghosting: bool,
+    ghosts: Ghosts,
     case: &str,
     cmd: &Command,
 ) -> Vec<String> {
-    let s = scene(pool, actor, ghosting).await;
+    let s = scene(pool, actor, ghosts).await;
     let body = MapIdBody { map_id: s.map_id };
     // An edit's undo re-stamps the lifetime (see `TABLES`).
-    let ignore_stamp =
-        case.starts_with("set_connection_status") || case.starts_with("update_signature");
-    let snap = || tables(pool, s.map_id, ignore_stamp);
+    let stamp = if case.starts_with("set_connection_status") || case.starts_with("update_signature")
+    {
+        Stamp::Ignore
+    } else {
+        Stamp::Compare
+    };
+    let snap = || tables(pool, s.map_id, stamp);
 
     let before = snap().await;
     let head_before = head(pool, s.map_id).await;
@@ -365,19 +405,19 @@ async fn check(
 
 /// Run every case. One listed in [`KNOWN_GAPS`] is expected to fail, and has to come off
 /// the list once it no longer does, so a fix cannot go unnoticed either.
-async fn round_trip(pool: &PgPool, ghosting: bool, cases: &[Case]) {
+async fn round_trip(pool: &PgPool, ghosts: Ghosts, cases: &[Case]) {
     let w = world(pool).await;
     seed_extra_systems(pool).await;
     seed_catalog(pool).await;
     seed_thera(pool).await;
     let mut failures = Vec::new();
     for (case, cmd) in cases {
-        let found = check(pool, w.owner, ghosting, case, cmd).await;
+        let found = check(pool, w.owner, ghosts, case, cmd).await;
         let known = KNOWN_GAPS.iter().any(|(gap, _)| gap == case);
         match (known, found.is_empty()) {
             (false, _) => failures.extend(found),
             (true, true) => {
-                failures.push(format!("{case}: round-trips now, take it off KNOWN_GAPS"))
+                failures.push(format!("{case}: round-trips now, take it off KNOWN_GAPS"));
             }
             (true, false) => {}
         }
@@ -582,10 +622,10 @@ const GHOST_CASES: &[Case] = &[
 
 #[sqlx::test]
 async fn every_command_undoes_and_redoes_to_the_same_tables(pool: PgPool) {
-    round_trip(&pool, false, CASES).await;
+    round_trip(&pool, Ghosts::Off, CASES).await;
 }
 
 #[sqlx::test]
 async fn every_ghost_command_undoes_and_redoes_to_the_same_tables(pool: PgPool) {
-    round_trip(&pool, true, GHOST_CASES).await;
+    round_trip(&pool, Ghosts::On, GHOST_CASES).await;
 }

@@ -3,20 +3,22 @@
 //! (Waybar, KDE, GNOME with the AppIndicator extension); with no tray listening there is
 //! none, and closing the window quits.
 
+use gpui_kit::component::ThemeMode;
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 /// What the tray asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TrayEvent {
+pub(crate) enum TrayEvent {
     Open,
     ToggleOverlay,
     Quit,
 }
 
-pub struct Tray {
+pub(crate) struct Tray {
     icon: TrayIcon,
-    dark: bool,
+    /// The theme the logo is drawn for.
+    mode: ThemeMode,
     open: MenuId,
     overlay: MenuId,
     quit: MenuId,
@@ -24,7 +26,7 @@ pub struct Tray {
 
 impl Tray {
     /// Put the icon up, or `None` where there is no tray to put it in.
-    pub fn new() -> Option<Tray> {
+    pub(crate) fn new() -> Option<Tray> {
         if !host_available() {
             return None;
         }
@@ -39,9 +41,9 @@ impl Tray {
             .with_tooltip("WormholeSystems");
         // The menu bar tints a template icon to fit, light or dark.
         #[cfg(target_os = "macos")]
-        let builder = builder.with_icon_templated(icon(false)?);
+        let builder = builder.with_icon_templated(icon(ThemeMode::Light)?);
         #[cfg(not(target_os = "macos"))]
-        let builder = builder.with_icon(icon(false)?);
+        let builder = builder.with_icon(icon(ThemeMode::Light)?);
         let icon = builder
             // A click opens the window; the menu is on the right button. The menu bar
             // has no right button to speak of, so there a click is the menu.
@@ -50,7 +52,7 @@ impl Tray {
             .ok()?;
         Some(Tray {
             icon,
-            dark: false,
+            mode: ThemeMode::Light,
             open: open.id().clone(),
             overlay: overlay.id().clone(),
             quit: quit.id().clone(),
@@ -59,18 +61,18 @@ impl Tray {
 
     /// Draw the logo white for a dark theme, black for a light one. The menu bar tints its
     /// template itself.
-    pub fn set_dark(&mut self, dark: bool) {
-        if dark == self.dark || cfg!(target_os = "macos") {
+    pub(crate) fn set_mode(&mut self, mode: ThemeMode) {
+        if mode == self.mode || cfg!(target_os = "macos") {
             return;
         }
-        self.dark = dark;
-        if let Some(icon) = icon(dark) {
+        self.mode = mode;
+        if let Some(icon) = icon(mode) {
             let _ = self.icon.set_icon(Some(icon));
         }
     }
 
     /// What happened since the last call.
-    pub fn events(&self) -> Vec<TrayEvent> {
+    pub(crate) fn events(&self) -> Vec<TrayEvent> {
         let mut out = Vec::new();
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             if event.id == self.open {
@@ -98,26 +100,30 @@ impl Tray {
 }
 
 /// The logo alone, white or black.
-fn icon(dark: bool) -> Option<Icon> {
+fn icon(mode: ThemeMode) -> Option<Icon> {
     use resvg::tiny_skia::{Pixmap, Transform};
     use resvg::usvg::{Options, Tree};
 
-    const SIZE: u32 = 64;
-    let fill = if dark { "white" } else { "black" };
+    const SIZE: u16 = 64;
+    let fill = match mode {
+        ThemeMode::Dark => "white",
+        ThemeMode::Light => "black",
+    };
     let svg = std::str::from_utf8(include_bytes!("../assets/logo.svg"))
         .ok()?
         .replace("fill=\"black\"", &format!("fill=\"{fill}\""));
     let tree = Tree::from_str(&svg, &Options::default()).ok()?;
     let (w, h) = (tree.size().width(), tree.size().height());
-    let scale = SIZE as f32 / w.max(h);
-    let mut pixmap = Pixmap::new(SIZE, SIZE)?;
+    let side = f32::from(SIZE);
+    let scale = side / w.max(h);
+    let mut pixmap = Pixmap::new(u32::from(SIZE), u32::from(SIZE))?;
     let transform = Transform::from_row(
         scale,
         0.0,
         0.0,
         scale,
-        (SIZE as f32 - w * scale) / 2.0,
-        (SIZE as f32 - h * scale) / 2.0,
+        (side - w * scale) / 2.0,
+        (side - h * scale) / 2.0,
     );
     resvg::render(&tree, transform, &mut pixmap.as_mut());
     let rgba = pixmap
@@ -128,7 +134,7 @@ fn icon(dark: bool) -> Option<Icon> {
             [c.red(), c.green(), c.blue(), c.alpha()]
         })
         .collect();
-    Icon::from_rgba(rgba, SIZE, SIZE).ok()
+    Icon::from_rgba(rgba, u32::from(SIZE), u32::from(SIZE)).ok()
 }
 
 /// Whether a StatusNotifier host is there to show the icon. The tray library assumes one

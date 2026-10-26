@@ -7,6 +7,7 @@
 //! kills to a worker, which evaluates them and leaves Discord to the delivery worker.
 
 use std::collections::HashMap;
+use std::hash::BuildHasher;
 use std::sync::Arc;
 
 use sqlx::PgPool;
@@ -17,6 +18,7 @@ use super::{Alert, Outgoing, filters};
 use crate::util::security::ccp_round_security;
 
 /// Everything a message needs to say about one kill.
+#[derive(Debug)]
 pub struct Kill {
     pub id: i64,
     pub solar_system_id: i64,
@@ -33,12 +35,12 @@ pub struct Kill {
 
 /// Offer a killmail to the killmail alerts, and claim the ones it fires. `chains` holds the
 /// maps already read in this batch, so a busy minute does not reread a chain per kill.
-pub async fn evaluate(
+pub async fn evaluate<S: BuildHasher>(
     pool: &PgPool,
     universe: &Universe,
     alerts: &[Alert],
     kill: &Kill,
-    chains: &mut HashMap<i64, Option<Arc<Chain>>>,
+    chains: &mut HashMap<i64, Option<Arc<Chain>>, S>,
 ) -> Vec<Outgoing> {
     // Filters are cheap and the route is not, so rule the alert out on its filters first.
     let interested: Vec<&Alert> = alerts
@@ -54,13 +56,12 @@ pub async fn evaluate(
     };
     let mut out = Vec::new();
     for alert in interested {
-        let chain = match chains.get(&alert.map_id) {
-            Some(chain) => chain.clone(),
-            None => {
-                let chain = chain_of(pool, alert.map_id).await.map(Arc::new);
-                chains.insert(alert.map_id, chain.clone());
-                chain
-            }
+        let chain = if let Some(chain) = chains.get(&alert.map_id) {
+            chain.clone()
+        } else {
+            let chain = chain_of(pool, alert.map_id).await.map(Arc::new);
+            chains.insert(alert.map_id, chain.clone());
+            chain
         };
         let Some(chain) = chain else {
             continue;
@@ -106,22 +107,21 @@ fn build(kill: &Kill, system: &System, from: &str, jumps: i32) -> Embed {
     };
 
     let mut fields = vec![
-        Field::new(
+        Field::inline(
             "System",
             format!(
                 "{} ({:.1})",
                 system.name,
                 ccp_round_security(system.security)
             ),
-            true,
         ),
-        Field::new("Jumps", jumps.to_string(), true),
+        Field::inline("Jumps", jumps.to_string()),
     ];
     if let Some(value) = kill.total_value {
-        fields.push(Field::new("Value", isk(value), true));
+        fields.push(Field::inline("Value", isk(value)));
     }
     if let Some(name) = kill.attacker_name.as_deref() {
-        fields.push(Field::new("Final blow", name, true));
+        fields.push(Field::inline("Final blow", name));
     }
     if let Some(count) = kill.attacker_count {
         let label = if kill.is_solo {
@@ -129,7 +129,7 @@ fn build(kill: &Kill, system: &System, from: &str, jumps: i32) -> Embed {
         } else {
             count.to_string()
         };
-        fields.push(Field::new("Attackers", label, true));
+        fields.push(Field::inline("Attackers", label));
     }
 
     Embed {
@@ -163,6 +163,7 @@ fn isk(value: f64) -> String {
     }
 }
 
+#[derive(Debug)]
 pub struct System {
     pub name: String,
     pub security: f64,
@@ -181,6 +182,7 @@ async fn system_name(pool: &PgPool, id: i64) -> sqlx::Result<System> {
     })
 }
 
+#[derive(Debug)]
 pub struct Chain {
     pub systems: Vec<i64>,
     pub edges: Vec<(i64, i64)>,

@@ -12,12 +12,16 @@ use std::path::Path;
 fn source_files() -> Vec<(String, String)> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/api");
     let mut files: Vec<_> = std::fs::read_dir(dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
+        .expect("read fixtures dir")
+        .map(|entry| entry.expect("read dir entry").path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
         .map(|path| {
-            let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            (name, std::fs::read_to_string(&path).unwrap())
+            let name = path
+                .file_name()
+                .expect("file has a name")
+                .to_string_lossy()
+                .into_owned();
+            (name, std::fs::read_to_string(&path).expect("read fixture"))
         })
         .collect();
     files.sort();
@@ -29,7 +33,7 @@ fn source_files() -> Vec<(String, String)> {
 #[test]
 fn the_document_is_written_to_docs() {
     let api = wormholesystems::api::openapi();
-    let json = api.to_pretty_json().unwrap() + "\n";
+    let json = format!("{}\n", api.to_pretty_json().unwrap());
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/openapi.json");
     std::fs::write(&path, json).unwrap();
 

@@ -17,7 +17,7 @@ const METADATA_URL: &str = "https://login.eveonline.com/.well-known/oauth-author
 /// How long the SSO's signing keys are reused before they are fetched again. Every login
 /// and every token refresh validates a JWT, and the keys rarely change; a token signed by a
 /// key we have not seen yet fetches them early regardless.
-const JWKS_TTL: Duration = Duration::from_secs(60 * 60);
+const JWKS_TTL: Duration = Duration::from_hours(1);
 
 /// A token this close to expiry is refreshed before use rather than sent and refused.
 pub const REFRESH_LEEWAY: Duration = Duration::from_secs(30);
@@ -56,6 +56,7 @@ struct TokenResponse {
     refresh_token: String,
 }
 
+#[derive(Debug)]
 pub struct Sso {
     http: reqwest::Client,
     config: SsoConfig,

@@ -25,16 +25,18 @@ pub fn init(contact: &Contact) {
 /// banned, and failing at the first request with a message naming the two variables is
 /// kinder than finding out from CCP.
 pub fn get() -> &'static str {
-    AGENT.get_or_init(|| match Contact::from_env() {
-        Ok(contact) => agent(&contact),
-        Err(_) => panic!(
-            "{} and {} must be set: every request to ESI, zKillboard and EVE Ref carries \
-             them so those services can tell who is running this and reach them. Use the \
-             in-game name of the character who administers this install and an address you \
-             read.",
-            Contact::NAME_VAR,
-            Contact::EMAIL_VAR,
-        ),
+    AGENT.get_or_init(|| {
+        let contact = Contact::from_env().unwrap_or_else(|_| {
+            panic!(
+                "{} and {} must be set: every request to ESI, zKillboard and EVE Ref carries \
+                 them so those services can tell who is running this and reach them. Use the \
+                 in-game name of the character who administers this install and an address you \
+                 read.",
+                Contact::NAME_VAR,
+                Contact::EMAIL_VAR,
+            )
+        });
+        agent(&contact)
     })
 }
 

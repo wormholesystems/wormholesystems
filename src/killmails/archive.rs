@@ -61,9 +61,11 @@ fn read_archive(bytes: &[u8]) -> std::io::Result<Vec<KillmailRow>> {
 
 /// The days in the last `days` that are not imported yet, most recent first.
 async fn missing_days(pool: &PgPool, days: u32) -> Result<Vec<chrono::NaiveDate>, BoxError> {
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs() as i64;
+    let now_secs = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs(),
+    )?;
     let wanted: Vec<chrono::NaiveDate> = (1..=i64::from(days))
         .map(|offset| {
             chrono::DateTime::from_timestamp(now_secs - offset * 86_400, 0)
@@ -116,7 +118,7 @@ async fn import_day(
         day_alliances.extend(k.detail.final_blow_alliance_id);
     }
 
-    let inserted = super::insert_rows(pool, &kills, false).await?;
+    let inserted = super::insert_rows(pool, &kills, super::Source::Archive).await?;
 
     // Organisations one at a time, because their tickers are what a row shows and only the
     // per-entity endpoint returns them. Characters go through the bulk endpoint.
@@ -133,7 +135,7 @@ async fn import_day(
         "insert into killmail_imports (day, killmails) values ($1, $2)
          on conflict (day) do update set killmails = excluded.killmails, imported_at = now()",
         day,
-        kills.len() as i32,
+        i32::try_from(kills.len())?,
     )
     .execute(pool)
     .await?;
@@ -154,9 +156,10 @@ pub async fn backfill(pool: &PgPool, esi: &EsiClient, days: u32) -> Result<(), B
     let missing = missing_days(pool, days).await?;
     tracing::info!("{} of the last {days} days to import", missing.len());
     for day in missing {
-        match import_day(pool, esi, &http, day).await? {
-            Some(summary) => tracing::info!("{day}: {summary}"),
-            None => tracing::info!("{day}: no archive"),
+        if let Some(summary) = import_day(pool, esi, &http, day).await? {
+            tracing::info!("{day}: {summary}");
+        } else {
+            tracing::info!("{day}: no archive");
         }
     }
 

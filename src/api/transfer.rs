@@ -21,8 +21,8 @@ use super::{ApiError, ApiResult};
 use crate::app::AppState;
 use crate::maps::Role;
 use crate::maps::transfer::{
-    ImportSummary, SectionSet, TransferCounts, check_may_import_as_new, export_map, import_map,
-    import_map_as_new, parse_export, transfer_counts,
+    ImportSummary, ImportTarget, SectionSet, TransferCounts, check_may_import_as_new, export_map,
+    import_map, import_map_as_new, parse_export, transfer_counts,
 };
 
 /// Alliance-scale exports run to a few megabytes; comfortably above that, and still a
@@ -155,7 +155,11 @@ async fn import(
     let actor = require_role_on_map(&state, &creds, map_id, Role::Manager).await?;
     let parsed = decode(&state, request, |body: ImportBody| {
         let sections = SectionSet::from_names(&body.sections)?;
-        Ok(parse_export(&body.content, sections, false)?)
+        Ok(parse_export(
+            &body.content,
+            sections,
+            ImportTarget::ExistingMap,
+        )?)
     })
     .await?;
     Ok(Json(import_map(&state.db, actor, map_id, &parsed).await?))
@@ -188,7 +192,10 @@ async fn import_new(
     check_may_import_as_new(&state.db, actor, &state.map_creators).await?;
     let (parsed, name) = decode(&state, request, |body: ImportNewBody| {
         let sections = SectionSet::from_names(&body.sections)?;
-        Ok((parse_export(&body.content, sections, true)?, body.name))
+        Ok((
+            parse_export(&body.content, sections, ImportTarget::NewMap)?,
+            body.name,
+        ))
     })
     .await?;
     Ok(Json(

@@ -17,7 +17,7 @@ use crate::server_status::ServerWatch;
 
 /// How often to refresh sovereignty. It changes slowly (alliance-level territory), so an hour
 /// is gentle on ESI while keeping the map reasonably fresh.
-const INTERVAL: Duration = Duration::from_secs(60 * 60);
+const INTERVAL: Duration = Duration::from_hours(1);
 
 /// Spawn the sync loop. Returns immediately; the loop runs for the process lifetime.
 pub fn start(pool: PgPool, esi: EsiClient, server: ServerWatch) {
@@ -50,7 +50,7 @@ async fn sync_once(pool: &PgPool, esi: &EsiClient) {
         // A system we don't have in the SDE, or an entity that failed to resolve. The
         // next tick retries it.
         Ok(skipped) if skipped > 0 => {
-            tracing::warn!("sovereignty: {skipped} claim(s) skipped, unknown system or holder")
+            tracing::warn!("sovereignty: {skipped} claim(s) skipped, unknown system or holder");
         }
         Ok(_) => {}
         Err(err) => tracing::error!("sovereignty store failed: {err}"),
@@ -76,6 +76,10 @@ async fn resolve_entities(pool: &PgPool, esi: &EsiClient, systems: &[Sovereignty
 /// statements for the whole map rather than one per system, and a row is only rewritten
 /// when its holder actually changed, which on most runs is almost none of them. Claims
 /// naming a system or holder we do not have are left out and counted.
+#[expect(
+    clippy::as_conversions,
+    reason = "`expr as Type` is sqlx's parameter type override, which the macro expands to a cast"
+)]
 pub async fn store(pool: &PgPool, systems: &[SovereigntySystem]) -> Result<i64, sqlx::Error> {
     let mut ids = Vec::new();
     let mut alliances = Vec::new();

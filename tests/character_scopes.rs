@@ -32,7 +32,7 @@ fn token(scopes: &[Scope]) -> Token {
     Token {
         access_token: "access".into(),
         refresh_token: "refresh".into(),
-        expires_at: SystemTime::now() + Duration::from_secs(1200),
+        expires_at: SystemTime::now() + Duration::from_mins(20),
         scopes: scopes.iter().map(|s| s.as_str().to_string()).collect(),
     }
 }
@@ -40,10 +40,10 @@ fn token(scopes: &[Scope]) -> Token {
 async fn missing(pool: &PgPool, actor: Actor, character_id: i64) -> Vec<String> {
     list(pool, actor)
         .await
-        .unwrap()
+        .expect("list characters")
         .into_iter()
         .find(|c| c.character_id == character_id)
-        .unwrap()
+        .expect("character is listed")
         .missing_scopes
 }
 
@@ -73,7 +73,7 @@ async fn each_character_says_which_permissions_it_has_not_granted(pool: PgPool) 
         .unwrap();
     // 300 has no token at all, so it has granted nothing.
 
-    assert!(missing(&pool, actor, 100).await.is_empty());
+    assert_eq!(missing(&pool, actor, 100).await, Vec::<String>::new());
     assert_eq!(
         missing(&pool, actor, 200).await,
         [
@@ -88,9 +88,9 @@ async fn each_character_says_which_permissions_it_has_not_granted(pool: PgPool) 
 
     // Granting the rest clears it.
     store.save(200, &token(&Scope::ALL)).await.unwrap();
-    assert!(missing(&pool, actor, 200).await.is_empty());
+    assert_eq!(missing(&pool, actor, 200).await, Vec::<String>::new());
 
     // Optional permissions are never reported missing.
     store.save(300, &token(&Scope::REQUIRED)).await.unwrap();
-    assert!(missing(&pool, actor, 300).await.is_empty());
+    assert_eq!(missing(&pool, actor, 300).await, Vec::<String>::new());
 }

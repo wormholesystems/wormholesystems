@@ -19,13 +19,11 @@ async fn wait_for(done: impl Fn() -> bool) -> bool {
 #[tokio::test]
 async fn a_job_that_panicked_runs_again_on_the_next_tick() {
     let passes = Arc::new(AtomicUsize::new(0));
-    let counted = passes.clone();
+    let counted = Arc::clone(&passes);
     spawn_every("panics once", Duration::from_millis(20), move || {
         let pass = counted.fetch_add(1, Ordering::SeqCst);
         async move {
-            if pass == 0 {
-                panic!("the first pass falls over");
-            }
+            assert!(pass != 0, "the first pass falls over");
             Ok::<_, std::convert::Infallible>(())
         }
     });
@@ -35,11 +33,12 @@ async fn a_job_that_panicked_runs_again_on_the_next_tick() {
 #[tokio::test]
 async fn a_job_that_panicked_before_its_future_runs_again() {
     let passes = Arc::new(AtomicUsize::new(0));
-    let counted = passes.clone();
+    let counted = Arc::clone(&passes);
     spawn_every("panics building", Duration::from_millis(20), move || {
-        if counted.fetch_add(1, Ordering::SeqCst) == 0 {
-            panic!("no future to run");
-        }
+        assert!(
+            counted.fetch_add(1, Ordering::SeqCst) != 0,
+            "no future to run"
+        );
         std::future::ready(Ok::<_, std::convert::Infallible>(()))
     });
     assert!(wait_for(|| passes.load(Ordering::SeqCst) >= 3).await);
@@ -57,13 +56,11 @@ async fn a_panic_comes_back_as_none_and_an_answer_as_some() {
 #[tokio::test]
 async fn a_supervised_loop_is_started_again_after_a_panic_and_left_once_it_returns() {
     let starts = Arc::new(AtomicUsize::new(0));
-    let counted = starts.clone();
+    let counted = Arc::clone(&starts);
     supervise_with("listener", Duration::from_millis(10), move || {
         let start = counted.fetch_add(1, Ordering::SeqCst);
         async move {
-            if start < 2 {
-                panic!("the feed fell over");
-            }
+            assert!(start >= 2, "the feed fell over");
         }
     });
     assert!(wait_for(|| starts.load(Ordering::SeqCst) == 3).await);
