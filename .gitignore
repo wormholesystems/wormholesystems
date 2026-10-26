@@ -14,6 +14,7 @@
 # Secrets — `.env.example` is committed, real `.env` is not
 .env
 .env.local
+.env.tmp
 
 # An install's own compose changes (see docs/deployment.md)
 /compose.override.yml
