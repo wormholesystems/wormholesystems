@@ -147,6 +147,7 @@ fn never_activate(hwnd: windows_sys::Win32::Foundation::HWND) {
 
     #[expect(
         clippy::as_conversions,
+        clippy::cast_possible_wrap,
         reason = "MA_NOACTIVATE is 3, and LRESULT is the slot a window procedure answers in"
     )]
     const NO_ACTIVATE: LRESULT = MA_NOACTIVATE as LRESULT;
@@ -166,8 +167,8 @@ fn never_activate(hwnd: windows_sys::Win32::Foundation::HWND) {
         clippy::as_conversions,
         reason = "SetWindowLongPtrW takes the new window procedure as a pointer-sized integer"
     )]
-    let ours =
-        proc as unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT as usize as isize;
+    let ours = (proc as unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT as usize)
+        .cast_signed();
     // SAFETY: `hwnd` is live; this only reads its window procedure.
     if unsafe { GetWindowLongPtrW(hwnd, GWLP_WNDPROC) } == ours {
         return;

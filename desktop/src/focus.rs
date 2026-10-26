@@ -9,7 +9,7 @@ use std::sync::mpsc::{Receiver, channel};
 
 /// What has focus.
 #[cfg_attr(
-    target_os = "macos",
+    all(target_os = "macos", not(test)),
     expect(
         dead_code,
         reason = "macOS has no backend yet, so only `Unknown` is ever made there"
@@ -29,7 +29,7 @@ pub(crate) enum Focus {
 impl Focus {
     /// Read a window's class (Hyprland's, empty elsewhere) and title.
     #[cfg_attr(
-        target_os = "macos",
+        all(target_os = "macos", not(test)),
         expect(
             dead_code,
             reason = "only the Hyprland and Windows backends read window titles"
