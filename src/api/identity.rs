@@ -271,6 +271,7 @@ pub struct SetWaypointAllBody {
 fn esi(state: &AppState) -> characters::Esi<'_> {
     characters::Esi {
         sso: &state.sso,
+        tokens: &state.tokens,
         esi: &state.esi,
     }
 }

@@ -206,6 +206,8 @@ async fn finish_login(state: &AppState, jar: CookieJar, query: CallbackQuery) ->
     {
         return server_error(err);
     }
+    // The cached one may lack what was just granted, or hold a refresh token this replaced.
+    state.tokens.forget(claims.character_id).await;
 
     let current = jar.get(session::SESSION_COOKIE).map(|c| c.value());
     let session_id =

@@ -7,7 +7,7 @@ use sqlx::PgPool;
 
 use crate::allowlist::AffiliationAllowlist;
 use crate::db::PgTokenStore;
-use crate::esi::{EsiClient, EsiError, Scope, Sso};
+use crate::esi::{EsiClient, EsiError, Scope, Sso, TokenCache};
 use crate::maps::Actor;
 
 /// Why a character operation was refused.
@@ -299,6 +299,7 @@ pub struct Waypoint {
 /// The two ESI handles a waypoint needs: SSO for the character's token, ESI for the call.
 pub struct Esi<'a> {
     pub sso: &'a Sso,
+    pub tokens: &'a TokenCache,
     pub esi: &'a EsiClient,
 }
 
@@ -378,17 +379,19 @@ async fn send_waypoint(
 ) -> Result<()> {
     let store = PgTokenStore::new(pool.clone());
     let token = esi
-        .sso
-        .access_token(&store, character_id, Scope::WriteWaypoint)
+        .tokens
+        .token(esi.sso, &store, character_id, &[Scope::WriteWaypoint])
         .await
         .map_err(|err| match err {
-            EsiError::MissingScope(_) => CharacterError::MissingScope,
             EsiError::TokenRejected => CharacterError::SignedOut,
             other => CharacterError::Upstream(other),
         })?;
+    if !token.has_scope(Scope::WriteWaypoint) {
+        return Err(CharacterError::MissingScope);
+    }
     esi.esi
         .set_waypoint(
-            &token,
+            &token.access_token,
             waypoint.destination_id,
             waypoint.add_to_beginning,
             waypoint.clear_other_waypoints,

@@ -19,8 +19,6 @@ pub enum EsiError {
     TokenRejected,
     #[error("token validation failed: {0}")]
     Jwt(String),
-    #[error("missing required scope: {0}")]
-    MissingScope(String),
     #[error("token store error: {0}")]
     Store(String),
 }

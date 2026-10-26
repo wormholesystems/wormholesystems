@@ -46,9 +46,12 @@ impl From<sqlx::Error> for EsiError {
 impl TokenStore for PgTokenStore {
     async fn load(&self, character_id: i64) -> EsiResult<Option<Token>> {
         let row = sqlx::query!(
-            "SELECT id, access_token, token_expires_at, refresh_token, rejected_at
-             FROM esi_tokens WHERE character_id = $1
-             ORDER BY updated_at DESC LIMIT 1",
+            r#"SELECT t.access_token, t.token_expires_at, t.refresh_token, t.rejected_at,
+                      array(SELECT s.name FROM esi_token_scopes ts
+                            JOIN esi_scopes s ON s.id = ts.scope_id
+                            WHERE ts.token_id = t.id) AS "scopes!"
+               FROM esi_tokens t WHERE t.character_id = $1
+               ORDER BY t.updated_at DESC LIMIT 1"#,
             character_id
         )
         .fetch_optional(&self.pool)
@@ -59,15 +62,6 @@ impl TokenStore for PgTokenStore {
             return Err(EsiError::TokenRejected);
         }
 
-        let scopes = sqlx::query_scalar!(
-            "SELECT s.name FROM esi_token_scopes ts
-             JOIN esi_scopes s ON s.id = ts.scope_id
-             WHERE ts.token_id = $1",
-            row.id
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
         Ok(Some(Token {
             access_token: row.access_token.unwrap_or_default(),
             refresh_token: row.refresh_token,
@@ -76,7 +70,7 @@ impl TokenStore for PgTokenStore {
                 .token_expires_at
                 .map(SystemTime::from)
                 .unwrap_or(SystemTime::UNIX_EPOCH),
-            scopes,
+            scopes: row.scopes,
         }))
     }
 

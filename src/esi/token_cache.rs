@@ -6,9 +6,11 @@
 //! is about to expire (which is also when it gets refreshed), or, now and then, when it
 //! lacks a scope the caller wants, so a scope granted on a later login is picked up.
 //!
-//! Each character's slot is locked while it is read or refreshed. Two polls of the same
-//! character (the online tier and the location tier) therefore never refresh the same
-//! token side by side, which spent two refreshes on one token and raced their saves.
+//! Each character's slot is locked while it is read or refreshed. Two users of the same
+//! character's token (the two poller tiers, a waypoint, the structure sync) therefore never
+//! refresh it side by side, which spent two refreshes on one token and raced their saves.
+//! That only holds while they all go through the one cache, which is why it lives in
+//! [`AppState`](crate::app::AppState).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -73,11 +75,26 @@ impl TokenCache {
         Ok(token)
     }
 
-    /// Forget characters no longer being polled.
+    /// Drop `character_id`'s cached token, so the next caller loads the one a fresh login
+    /// just stored instead of carrying on with the old one.
+    pub async fn forget(&self, character_id: i64) {
+        let slot = self
+            .slots
+            .lock()
+            .expect("token cache lock")
+            .get(&character_id)
+            .cloned();
+        if let Some(slot) = slot {
+            *slot.lock().await = None;
+        }
+    }
+
+    /// Forget characters no longer being polled. A slot somebody holds right now stays, so
+    /// a second caller cannot get a fresh one and refresh beside them.
     pub fn retain(&self, keep: impl Fn(i64) -> bool) {
         self.slots
             .lock()
             .expect("token cache lock")
-            .retain(|id, _| keep(*id));
+            .retain(|id, slot| keep(*id) || Arc::strong_count(slot) > 1);
     }
 }
