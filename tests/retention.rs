@@ -95,7 +95,7 @@ async fn old_alert_history_and_expired_sessions_go(pool: PgPool) {
     }
     for (id, expires_in_days) in [("old", -1), ("live", 1)] {
         sqlx::query(
-            "insert into sessions (id, user_id, active_character_id, expires_at)
+            "insert into sessions (id_hash, user_id, active_character_id, expires_at)
              values ($1, $2, 1001, now() + make_interval(days => $3))",
         )
         .bind(id)
@@ -114,7 +114,7 @@ async fn old_alert_history_and_expired_sessions_go(pool: PgPool) {
             sessions: 1,
         }
     );
-    let sessions: Vec<String> = sqlx::query_scalar("select id from sessions")
+    let sessions: Vec<String> = sqlx::query_scalar("select id_hash from sessions")
         .fetch_all(&pool)
         .await
         .unwrap();

@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into sessions (id_hash, user_id, active_character_id, expires_at)\n         values ($1, $2,\n                 coalesce((select id from characters where user_id = $2 and is_preferred), $3),\n                 now() + make_interval(days => $4::int))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8",
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "514b6aad0a132b41db758835bd7b807a41d81674d19485b8d660d47b75b037ee"
+}

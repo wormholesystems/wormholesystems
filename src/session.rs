@@ -4,12 +4,17 @@
 //! [authentication.md](../docs/database/authentication.md). The cookie carries only the
 //! opaque session id; the active character is per-session. Expiry is enforced in SQL
 //! (`now()`), so this never needs chrono's clock.
+//!
+//! Only the SHA-256 of a session id is stored (`sessions.id_hash`), as for personal access
+//! tokens. Everything here takes and returns the raw id the cookie carries and hashes it on
+//! the way to the database.
 
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::esi::jwt::Claims;
 use crate::maps::Actor;
+use crate::tokens;
 
 /// Name of the cookie holding the opaque session id.
 pub const SESSION_COOKIE: &str = "ws_session";
@@ -37,16 +42,16 @@ pub async fn actor_for_session(
 ) -> Result<Option<Actor>, sqlx::Error> {
     let row = sqlx::query!(
         "with live as (
-             select id, user_id, active_character_id, expires_at
-             from sessions where id = $1 and expires_at > now()
+             select id_hash, user_id, active_character_id, expires_at
+             from sessions where id_hash = $1 and expires_at > now()
          ), renewed as (
              update sessions set expires_at = now() + make_interval(days => $2::int)
-             where id = (select id from live
+             where id_hash = (select id_hash from live
                          where expires_at < now() + make_interval(days => $2::int - 1))
          )
          select user_id as \"user_id!\", active_character_id as \"active_character_id!\"
          from live",
-        session_id,
+        tokens::hash(session_id),
         SESSION_DAYS as i32,
     )
     .fetch_optional(pool)
@@ -90,11 +95,11 @@ pub async fn create_session(
 ) -> Result<String, sqlx::Error> {
     let id = Uuid::new_v4().to_string();
     sqlx::query!(
-        "insert into sessions (id, user_id, active_character_id, expires_at)
+        "insert into sessions (id_hash, user_id, active_character_id, expires_at)
          values ($1, $2,
                  coalesce((select id from characters where user_id = $2 and is_preferred), $3),
                  now() + make_interval(days => $4::int))",
-        id,
+        tokens::hash(&id),
         user_id,
         character_id,
         SESSION_DAYS as i32,
@@ -119,9 +124,12 @@ pub async fn touch_activity(pool: &PgPool, user_id: i64) -> Result<(), sqlx::Err
 
 /// End a session (logout).
 pub async fn delete_session(pool: &PgPool, session_id: &str) -> Result<(), sqlx::Error> {
-    sqlx::query!("delete from sessions where id = $1", session_id)
-        .execute(pool)
-        .await?;
+    sqlx::query!(
+        "delete from sessions where id_hash = $1",
+        tokens::hash(session_id)
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -134,9 +142,9 @@ pub async fn set_active_character(
 ) -> Result<bool, sqlx::Error> {
     let updated = sqlx::query!(
         "update sessions s set active_character_id = $2
-         where s.id = $1
+         where s.id_hash = $1
            and exists (select 1 from characters c where c.id = $2 and c.user_id = s.user_id)",
-        session_id,
+        tokens::hash(session_id),
         character_id,
     )
     .execute(pool)

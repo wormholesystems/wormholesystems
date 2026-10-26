@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update sessions s set active_character_id = $2\n         where s.id_hash = $1\n           and exists (select 1 from characters c where c.id = $2 and c.user_id = s.user_id)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a9aa39695d0b684bd126fc3645dc190fa7e50ef68713ef69a2c91eb4b4defa47"
+}

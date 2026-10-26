@@ -58,9 +58,9 @@ export async function ensureIdentity(spec: {
 			);
 		}
 		await db.query(
-			`insert into sessions (id, user_id, active_character_id, expires_at)
-			 values ($1, $2, $3, now() + interval '2 hours')
-			 on conflict (id) do update set expires_at = now() + interval '2 hours'`,
+			`insert into sessions (id_hash, user_id, active_character_id, expires_at)
+			 values (encode(sha256($1::text::bytea), 'hex'), $2, $3, now() + interval '2 hours')
+			 on conflict (id_hash) do update set expires_at = now() + interval '2 hours'`,
 			[spec.session, userId, spec.characterId],
 		);
 		return userId;
@@ -218,7 +218,11 @@ export async function ageStaleConnections(mapId: number) {
 /** Make one of a user's characters the acting one, as the character switcher would. */
 export async function setActiveCharacter(characterId: number, session = E2E_SESSION) {
 	await withDb((db) =>
-		db.query('update sessions set active_character_id = $1 where id = $2', [characterId, session]),
+		db.query(
+			`update sessions set active_character_id = $1
+			 where id_hash = encode(sha256($2::text::bytea), 'hex')`,
+			[characterId, session],
+		),
 	);
 }
 
