@@ -74,7 +74,9 @@ past that window, *all* polling for their characters stops.
 **Tier 2 — location + ship, every 5 s.** *Only for characters currently online*, call
 [`GET …/location`](./esi/character-location.md) and
 [`GET …/ship`](./esi/character-ship.md), updating `solar_system_id` +
-station/structure (→ derived `is_docked`) and the `ship_*` fields.
+station/structure (→ derived `is_docked`) and the `ship_*` fields. A pilot docked in a
+structure that has no fresh name is named with their own token, if it carries the optional
+`esi-universe.read_structures.v1` (see [structure names](#structure-names)).
 
 **Transitions**
 
@@ -125,6 +127,28 @@ holds each K-space system — for display on the map.
 
 > **Open — interval.** Refresh cadence for sovereignty (e.g. every few minutes vs.
 > hourly) — slower than presence, but how slow?
+
+## Structure names
+
+Names the structures pilots dock in, for the pilots card. Docking itself never waits on a
+name: `character_status` holds the raw station/structure ids, and the name is a left join.
+
+- **Public structures, hourly.** List them with `GET /universe/structures` (no token), then
+  name up to 1000 per pass with `GET /universe/structures/{id}`, using the token of a random
+  character who granted `esi-universe.read_structures.v1`. Never-named ids go first, then
+  names older than a week.
+- **Private structures, from the poller.** ESI shows one only to characters on its docking
+  list, so the pilot docked inside is asked, with their own token. Retried per pilot and
+  structure: a minute without the permission (so granting it names the structure promptly),
+  a day after a 403/404, five minutes after anything else.
+- The permission is optional: never asked for at sign-in, never warned about. It is granted
+  from the characters settings page.
+
+**Invariants & expected behaviour**
+
+- A structure ESI refused is stamped and left for a day; a name it already had is kept.
+- A pass stops early once ESI says to back off; the rest waits for the next pass.
+- An owner corporation or type we do not have is left out of the row, never fails it.
 
 ## Connection life-cycle
 

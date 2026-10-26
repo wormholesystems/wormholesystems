@@ -3,4 +3,8 @@
 /**
  * One ESI permission and whether the acting character has consented to it.
  */
-export type ScopeStatus = { scope: string, granted: boolean, };
+export type ScopeStatus = { scope: string, granted: boolean, 
+/**
+ * Not asked for at sign-in, and never warned about when missing.
+ */
+optional: boolean, };

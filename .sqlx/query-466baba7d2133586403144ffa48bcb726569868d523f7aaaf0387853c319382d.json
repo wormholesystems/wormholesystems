@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists(\n               select 1 from structures\n               where id = $1 and name is not null\n                 and updated_at > now() - interval '7 days'\n           ) as \"named!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "named!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "466baba7d2133586403144ffa48bcb726569868d523f7aaaf0387853c319382d"
+}

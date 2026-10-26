@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into structures (id, solar_system_id, name, type_id, owner_corporation_id)\n         values ($1, $2, $3, (select id from types where id = $4),\n                 (select id from corporations where id = $5))\n         on conflict (id) do update\n         set solar_system_id = excluded.solar_system_id, name = excluded.name,\n             type_id = excluded.type_id, owner_corporation_id = excluded.owner_corporation_id,\n             updated_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9f19825f0b9a2979c2d4321473f7146a0d9cd76d570b79f666df25e6a8fd6900"
+}

@@ -5,15 +5,31 @@ pub enum Scope {
     ReadShipType,
     ReadOnline,
     WriteWaypoint,
+    /// Optional: names the structure a pilot is docked in. Never asked for at sign-in.
+    ReadStructures,
 }
 
 impl Scope {
-    pub const ALL: [Scope; 4] = [
+    pub const ALL: [Scope; 5] = [
+        Scope::ReadLocation,
+        Scope::ReadShipType,
+        Scope::ReadOnline,
+        Scope::WriteWaypoint,
+        Scope::ReadStructures,
+    ];
+
+    /// What sign-in asks for, and what a character is warned about lacking. The rest are
+    /// granted on purpose, from the settings page.
+    pub const REQUIRED: [Scope; 4] = [
         Scope::ReadLocation,
         Scope::ReadShipType,
         Scope::ReadOnline,
         Scope::WriteWaypoint,
     ];
+
+    pub fn is_optional(self) -> bool {
+        !Scope::REQUIRED.contains(&self)
+    }
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -21,6 +37,7 @@ impl Scope {
             Scope::ReadShipType => "esi-location.read_ship_type.v1",
             Scope::ReadOnline => "esi-location.read_online.v1",
             Scope::WriteWaypoint => "esi-ui.write_waypoint.v1",
+            Scope::ReadStructures => "esi-universe.read_structures.v1",
         }
     }
 

@@ -26,6 +26,9 @@ pub struct MapCharacter {
     pub ship_group_id: Option<i64>,
     /// Docked in a station or structure: on the map, but not on grid.
     pub is_docked: bool,
+    /// The station or structure, by name. `None` in a private structure nobody with the
+    /// structures permission has docked in yet.
+    pub docked_at: Option<String>,
     /// One of the viewer's own characters, so their alts can be told apart at a glance.
     pub is_mine: bool,
 }
@@ -39,6 +42,7 @@ pub async fn characters_on(pool: &PgPool, map_id: i64, viewer: i64) -> Result<Ve
         r#"select c.id as character_id, c.name, co.ticker as corporation_ticker,
                   s.solar_system_id, s.ship_type_id, s.ship_name, t.name as "ship_type?",
                   t.group_id as "ship_group_id?", s.is_docked as "is_docked!",
+                  coalesce(st.name, su.name) as "docked_at?",
                   (c.user_id = $2) as "is_mine!"
            from characters c
            join users u on u.id = c.user_id
@@ -47,6 +51,8 @@ pub async fn characters_on(pool: &PgPool, map_id: i64, viewer: i64) -> Result<Ve
            join character_status s on s.character_id = c.id and s.online
            join corporations co on co.id = c.corporation_id
            left join types t on t.id = s.ship_type_id
+           left join stations st on st.id = s.station_id
+           left join structures su on su.id = s.structure_id
            where exists (
                      select 1 from esi_tokens et
                      join esi_token_scopes ets on ets.token_id = et.id
@@ -76,6 +82,7 @@ pub async fn characters_on(pool: &PgPool, map_id: i64, viewer: i64) -> Result<Ve
             ship_type: r.ship_type,
             ship_group_id: r.ship_group_id,
             is_docked: r.is_docked,
+            docked_at: r.docked_at,
             is_mine: r.is_mine,
         })
         .collect())

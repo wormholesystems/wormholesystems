@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select w.id as \"id!\"\n           from unnest($1::bigint[]) as w(id)\n           left join structures s on s.id = w.id\n           where s.id is null\n              or s.updated_at < now() - case when s.name is null\n                                             then interval '1 day'\n                                             else interval '7 days' end\n           order by s.id is not null, s.updated_at\n           limit $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4a15858d7364ad5616bf460498a662741fe88a524de8f6dddd05148533d84e29"
+}

@@ -3,3 +3,4 @@
 //! which is what a map does with a jump once one is seen.
 
 pub mod poller;
+pub mod structures;

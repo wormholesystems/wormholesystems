@@ -14,6 +14,7 @@ function pilot(name: string, overrides: Partial<MapCharacter> = {}): MapCharacte
 		ship_type: 'Machariel',
 		ship_group_id: 27,
 		is_docked: false,
+		docked_at: null,
 		is_mine: false,
 		...overrides,
 	};

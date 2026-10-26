@@ -213,6 +213,9 @@ async fn start_background(
     // Keep sovereignty (and its alliance/corp entities) current for map display.
     crate::sovereignty::start(db.clone(), esi.clone(), server.clone());
 
+    // Name every public structure, so docked pilots read as more than "a structure".
+    crate::structures::start(db.clone(), sso.clone(), esi.clone(), server.clone());
+
     // Mirror the raidable skyhooks CCP is currently advertising.
     crate::skyhooks::start(
         db.clone(),
