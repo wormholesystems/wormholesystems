@@ -37,6 +37,10 @@ pub struct CreateToken {
     pub expires_in_days: Option<i64>,
 }
 
+/// The furthest out an expiry may be. Further than that is "until revoked", which is
+/// what leaving it out already says, and an unbounded number overflows the date.
+const MAX_EXPIRY_DAYS: i64 = 3650;
+
 impl CreateToken {
     pub fn validate(&self) -> Result<()> {
         if self.name.trim().is_empty() {
@@ -47,6 +51,15 @@ impl CreateToken {
         }
         if self.expires_in_days.is_some_and(|days| days <= 0) {
             return Err(MapError::Validation("expiry must be in the future".into()));
+        }
+        if self
+            .expires_in_days
+            .is_some_and(|days| days > MAX_EXPIRY_DAYS)
+        {
+            return Err(MapError::Validation(
+                "expiry can be at most ten years away; leave it out for a token that lasts until revoked"
+                    .into(),
+            ));
         }
         Ok(())
     }
@@ -90,9 +103,14 @@ pub async fn list(pool: &PgPool, user_id: i64) -> Result<Vec<PersonalAccessToken
 pub async fn create(pool: &PgPool, user_id: i64, cmd: CreateToken) -> Result<CreatedToken> {
     cmd.validate()?;
     let plaintext = generate();
-    let expires_at = cmd
-        .expires_in_days
-        .map(|days| Utc::now() + chrono::Duration::days(days));
+    let expires_at = match cmd.expires_in_days {
+        Some(days) => Some(
+            chrono::TimeDelta::try_days(days)
+                .and_then(|delta| Utc::now().checked_add_signed(delta))
+                .ok_or_else(|| MapError::Validation("expiry is too far away".into()))?,
+        ),
+        None => None,
+    };
     let token = sqlx::query_as!(
         PersonalAccessToken,
         "insert into personal_access_tokens (user_id, name, token_hash, expires_at)
@@ -128,19 +146,29 @@ pub async fn revoke(pool: &PgPool, user_id: i64, token_id: i64) -> Result<()> {
 /// Who a bearer token acts as: the owning user, flying their preferred character. `None`
 /// for a token that is unknown, expired, or belongs to an account with no characters
 /// left, which are all the same thing to the caller.
+///
+/// `last_used_at` moves at most every five minutes. It answers "is this token still in
+/// use", and a script polling a map every few seconds would otherwise write a row each
+/// time, the way sessions renew at most daily for the same reason.
 pub async fn actor_for_token(pool: &PgPool, plaintext: &str) -> Result<Option<Actor>> {
     let row = sqlx::query!(
-        "update personal_access_tokens t
-         set last_used_at = now()
-         from characters c
-         where t.token_hash = $1
-           and (t.expires_at is null or t.expires_at > now())
-           and c.user_id = t.user_id
-           and c.id = (select id from characters
+        r#"with live as (
+               select t.id, t.user_id, t.last_used_at,
+                      (select id from characters
                        where user_id = t.user_id
                        order by is_preferred desc, id
-                       limit 1)
-         returning t.user_id, c.id as character_id",
+                       limit 1) as character_id
+               from personal_access_tokens t
+               where t.token_hash = $1
+                 and (t.expires_at is null or t.expires_at > now())
+           ), touched as (
+               update personal_access_tokens set last_used_at = now()
+               where id = (select id from live
+                           where last_used_at is null
+                              or last_used_at < now() - interval '5 minutes')
+           )
+           select user_id as "user_id!", character_id as "character_id!"
+           from live where character_id is not null"#,
         hash(plaintext),
     )
     .fetch_optional(pool)
@@ -190,5 +218,16 @@ mod tests {
             expires_in_days: Some(30),
         };
         assert!(fine.validate().is_ok());
+        // Past this the date arithmetic would overflow and panic.
+        let absurd = CreateToken {
+            name: "script".into(),
+            expires_in_days: Some(i64::MAX),
+        };
+        assert!(absurd.validate().is_err());
+        let ten_years = CreateToken {
+            name: "script".into(),
+            expires_in_days: Some(MAX_EXPIRY_DAYS),
+        };
+        assert!(ten_years.validate().is_ok());
     }
 }

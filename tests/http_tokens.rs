@@ -119,6 +119,63 @@ async fn a_bearer_token_acts_as_its_user(pool: PgPool) {
 }
 
 #[sqlx::test]
+async fn last_used_moves_at_most_every_five_minutes(pool: PgPool) {
+    let w = world(&pool).await;
+    let cookie = session_cookie(&pool, w.owner).await;
+    let (id, plaintext) = mint(&pool, &cookie, "script").await;
+    let used = |pool: PgPool| async move {
+        sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
+            "select last_used_at from personal_access_tokens where id = $1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    let at = |minutes: i32| {
+        sqlx::query(
+            "update personal_access_tokens
+             set last_used_at = now() - make_interval(mins => $2) where id = $1",
+        )
+        .bind(id)
+        .bind(minutes)
+    };
+
+    // Used two minutes ago: a request leaves it alone.
+    at(2).execute(&pool).await.unwrap();
+    let before = used(pool.clone()).await;
+    assert_eq!(
+        bearer_get(app(&pool), "/api/me", &plaintext).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(used(pool.clone()).await, before);
+
+    // Used ten minutes ago: the request counts.
+    at(10).execute(&pool).await.unwrap();
+    let before = used(pool.clone()).await;
+    assert_eq!(
+        bearer_get(app(&pool), "/api/me", &plaintext).await.status,
+        StatusCode::OK
+    );
+    assert!(used(pool.clone()).await > before);
+}
+
+#[sqlx::test]
+async fn an_expiry_too_far_out_is_refused_not_a_crash(pool: PgPool) {
+    let w = world(&pool).await;
+    let cookie = session_cookie(&pool, w.owner).await;
+    let refused = request_json(
+        app(&pool),
+        "POST",
+        "/api/me/tokens",
+        Some(&cookie),
+        json!({ "name": "script", "expires_in_days": i64::MAX }),
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+}
+
+#[sqlx::test]
 async fn a_bad_token_is_refused_rather_than_treated_as_a_guest(pool: PgPool) {
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;

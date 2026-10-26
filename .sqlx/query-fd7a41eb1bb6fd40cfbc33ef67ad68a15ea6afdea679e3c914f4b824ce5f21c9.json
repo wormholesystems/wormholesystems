@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "with live as (\n               select t.id, t.user_id, t.last_used_at,\n                      (select id from characters\n                       where user_id = t.user_id\n                       order by is_preferred desc, id\n                       limit 1) as character_id\n               from personal_access_tokens t\n               where t.token_hash = $1\n                 and (t.expires_at is null or t.expires_at > now())\n           ), touched as (\n               update personal_access_tokens set last_used_at = now()\n               where id = (select id from live\n                           where last_used_at is null\n                              or last_used_at < now() - interval '5 minutes')\n           )\n           select user_id as \"user_id!\", character_id as \"character_id!\"\n           from live where character_id is not null",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "personal_access_tokens",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "character_id!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "fd7a41eb1bb6fd40cfbc33ef67ad68a15ea6afdea679e3c914f4b824ce5f21c9"
+}
