@@ -335,7 +335,7 @@ pub(super) async fn apply_restore_jump(
     tx: &mut Tx<'_>,
     cmd: RestoreConnectionJump,
 ) -> Result<Effect> {
-    store::jumps::reinsert(tx, cmd.map_id, &cmd.jump).await?;
+    store::jumps::reinsert(tx, cmd.map_id, std::slice::from_ref(&cmd.jump)).await?;
     let mut effect = Effect::new("jumps.logged", "put a jump back", CommandOutput::None).undo_with(
         MapCommand::RemoveConnectionJump(RemoveConnectionJump {
             map_id: cmd.map_id,

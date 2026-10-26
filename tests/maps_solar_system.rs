@@ -857,3 +857,50 @@ async fn clearing_leaves_a_placement_it_did_not_snapshot(pool: PgPool) {
     assert_eq!(clearing.await.unwrap().unwrap(), 2);
     assert_eq!(placed_ids(&pool, w.owner, w.map_id).await, vec![late]);
 }
+
+/// A multi-drag moves every system it names in one write, the last position winning for a
+/// system named twice, and undo and redo move them all back and forth together.
+#[sqlx::test]
+async fn moving_several_systems_undoes_and_redoes_together(pool: PgPool) {
+    let w = world(&pool).await;
+    let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
+    let b = place_at(&pool, w.owner, w.map_id, SYS_B, 100.0).await;
+    let c = place_at(&pool, w.owner, w.map_id, SYS_C, 200.0).await;
+    let to = |id, x, y| SystemMove {
+        map_solar_system_id: id,
+        x,
+        y,
+    };
+    let positions = async || {
+        let mut out = Vec::new();
+        for id in [a, b, c] {
+            out.push(position(&pool, w.owner, w.map_id, id).await);
+        }
+        out
+    };
+
+    move_systems(
+        &pool,
+        w.owner,
+        MoveSystems {
+            map_id: w.map_id,
+            moves: vec![
+                to(c, 1.0, 1.0),
+                to(a, 10.0, 20.0),
+                to(b, 30.0, 40.0),
+                to(c, 50.0, 60.0),
+            ],
+        },
+    )
+    .await
+    .unwrap();
+    let moved = vec![(10.0, 20.0), (30.0, 40.0), (50.0, 60.0)];
+    let start = vec![(0.0, 0.0), (100.0, 0.0), (200.0, 0.0)];
+    assert_eq!(positions().await, moved);
+
+    let body = MapIdBody { map_id: w.map_id };
+    undo(&pool, w.owner, body.clone()).await.unwrap();
+    assert_eq!(positions().await, start);
+    redo(&pool, w.owner, body).await.unwrap();
+    assert_eq!(positions().await, moved);
+}

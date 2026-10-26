@@ -136,19 +136,8 @@ async fn sweep(
 ) -> Result<Effect> {
     // Snapshot the edges before deleting them, then the placements they orphan. Order
     // matters: a placement only looks orphaned once its edges are gone.
-    let mut snapshot = crate::maps::restore::RestoreSystems {
-        map_id,
-        systems: Vec::new(),
-        connections: Vec::new(),
-        signatures: Vec::new(),
-        jumps: Vec::new(),
-    };
-    for edge in &edges {
-        if let Some(one) = crate::maps::restore::capture_connection(tx, map_id, edge.id).await? {
-            snapshot.absorb(one);
-        }
-    }
     let ids: Vec<i64> = edges.iter().map(|e| e.id).collect();
+    let mut snapshot = crate::maps::restore::capture_connections(tx, map_id, &ids).await?;
     connections::delete(tx, map_id, &ids).await?;
 
     let mut endpoints: Vec<i64> = edges

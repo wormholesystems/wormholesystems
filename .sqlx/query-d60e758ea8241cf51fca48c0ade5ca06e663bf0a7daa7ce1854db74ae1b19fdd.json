@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into map_connection_jumps\n             (id, map_id, connection_id, character_id, from_solar_system_id,\n              to_solar_system_id, ship_type_id, ship_name, mass, is_manual, created_at)\n         overriding system value\n         select j.id, $1, j.connection_id, c.id, j.from_id, j.to_id, j.ship_type_id,\n                j.ship_name, j.mass, j.is_manual, j.created_at\n         from unnest($2::bigint[], $3::bigint[], $4::bigint[], $5::bigint[], $6::bigint[],\n                     $7::bigint[], $8::text[], $9::bigint[], $10::boolean[],\n                     $11::timestamptz[])\n              as j(id, connection_id, character_id, from_id, to_id, ship_type_id, ship_name,\n                   mass, is_manual, created_at)\n         left join characters c on c.id = j.character_id\n         on conflict (id) do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8Array",
+        "Int8Array",
+        "Int8Array",
+        "Int8Array",
+        "Int8Array",
+        "Int8Array",
+        "TextArray",
+        "Int8Array",
+        "BoolArray",
+        "TimestamptzArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d60e758ea8241cf51fca48c0ade5ca06e663bf0a7daa7ce1854db74ae1b19fdd"
+}

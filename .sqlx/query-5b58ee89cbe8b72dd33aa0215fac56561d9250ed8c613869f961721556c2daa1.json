@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update map_solar_systems s set position_x = m.x, position_y = m.y\n         from unnest($2::bigint[], $3::float8[], $4::float8[]) as m(id, x, y)\n         where s.id = m.id and s.map_id = $1 and not s.is_pinned",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8Array",
+        "Float8Array",
+        "Float8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5b58ee89cbe8b72dd33aa0215fac56561d9250ed8c613869f961721556c2daa1"
+}

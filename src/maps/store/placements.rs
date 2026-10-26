@@ -226,6 +226,32 @@ pub(crate) async fn move_unpinned(
     Ok(())
 }
 
+/// [`move_unpinned`] for several placements in one statement, keyed by placement id.
+pub(crate) async fn move_many_unpinned(
+    tx: &mut Tx<'_>,
+    map_id: i64,
+    moves: &std::collections::BTreeMap<i64, (f64, f64)>,
+) -> Result<()> {
+    if moves.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<i64> = moves.keys().copied().collect();
+    let xs: Vec<f64> = moves.values().map(|(x, _)| *x).collect();
+    let ys: Vec<f64> = moves.values().map(|(_, y)| *y).collect();
+    sqlx::query!(
+        "update map_solar_systems s set position_x = m.x, position_y = m.y
+         from unnest($2::bigint[], $3::float8[], $4::float8[]) as m(id, x, y)
+         where s.id = m.id and s.map_id = $1 and not s.is_pinned",
+        map_id,
+        &ids,
+        &xs,
+        &ys,
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 /// Take these placements off the map, whatever they are. Their connections and signatures
 /// go with them by the foreign keys.
 pub(crate) async fn delete(tx: &mut Tx<'_>, map_id: i64, ids: &[i64]) -> Result<()> {

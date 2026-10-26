@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id, position_x, position_y from map_solar_systems\n         where map_id = $1 and id = any($2) and not is_pinned",
+  "query": "select id, position_x, position_y from map_solar_systems\n         where map_id = $1 and id = any($2) and not is_pinned\n         order by id\n         for update",
   "describe": {
     "columns": [
       {
@@ -49,5 +49,5 @@
       false
     ]
   },
-  "hash": "11488dd1650c34bbed4d81a8c950448dba8d178a478d2c9c93efa361d0b45ee6"
+  "hash": "0b163b4362baeed22eed81cc67b4eb4d01d0ff66428d4f1a80755cb44a674d74"
 }

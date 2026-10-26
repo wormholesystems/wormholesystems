@@ -745,3 +745,101 @@ async fn an_undone_removal_keeps_its_clocks(pool: PgPool) {
         .unwrap();
     assert_eq!(clocks_of(&pool, "signatures", sig).await, signature_clocks);
 }
+
+/// Every row a sweep can take, as JSON: the placements, the edges, their signatures and
+/// their jumps. `updated_at` is a write stamp, not state.
+async fn swept_rows(pool: &PgPool, map_id: i64) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for sql in [
+        "select coalesce(jsonb_agg(to_jsonb(t) - 'updated_at' order by t.id), '[]')
+         from map_solar_systems t where map_id = $1",
+        "select coalesce(jsonb_agg(to_jsonb(t) - 'updated_at' order by t.id), '[]')
+         from map_connections t where map_id = $1",
+        "select coalesce(jsonb_agg(to_jsonb(t) - 'updated_at' order by t.id), '[]')
+         from signatures t where map_id = $1",
+        "select coalesce(jsonb_agg(to_jsonb(t) - 'updated_at' order by t.id), '[]')
+         from map_connection_jumps t where map_id = $1",
+    ] {
+        out.push(
+            sqlx::query_scalar(sql)
+                .bind(map_id)
+                .fetch_one(pool)
+                .await
+                .unwrap(),
+        );
+    }
+    out
+}
+
+/// A clean that takes several holes at once, each with its signature and jumps, and the
+/// placements they strand, comes back whole in one undo and goes again on redo.
+#[sqlx::test]
+async fn sweeping_several_connections_undoes_as_one(pool: PgPool) {
+    use wormholesystems::maps::connection::{CleanStaleConnections, clean_stale_connections};
+    use wormholesystems::maps::history::{MapIdBody, redo, undo};
+
+    let w = world(&pool).await;
+    seed_wormhole_system(&pool, 31000001, 3).await;
+    seed_wormhole_system(&pool, 31000002, 4).await;
+    let a = place(&pool, w.owner, w.map_id, SYS_A).await;
+    let b = place(&pool, w.owner, w.map_id, SYS_B).await;
+    let j1 = place(&pool, w.owner, w.map_id, 31000001).await;
+    let j2 = place(&pool, w.owner, w.map_id, 31000002).await;
+    let mut dying = Vec::new();
+    for (from, to) in [(a, j1), (b, j2), (a, b)] {
+        dying.push(connect(&pool, w.owner, w.map_id, from, to).await.id);
+    }
+    for (n, conn) in dying.iter().enumerate() {
+        sqlx::query("update map_connections set time_status = 'critical' where id = $1")
+            .bind(conn)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"insert into signatures (map_id, solar_system_id, signature_id, "group", connection_id)
+               values ($1, $2, $3, 'wormhole', $4)"#,
+        )
+        .bind(w.map_id)
+        .bind(SYS_A)
+        .bind(format!("ABC-{n:03}"))
+        .bind(conn)
+        .execute(&pool)
+        .await
+        .unwrap();
+        for mass in [1_000_000_i64, 2_000_000] {
+            sqlx::query(
+                "insert into map_connection_jumps
+                     (map_id, connection_id, character_id, from_solar_system_id,
+                      to_solar_system_id, mass)
+                 values ($1, $2, 1001, $3, $4, $5)",
+            )
+            .bind(w.map_id)
+            .bind(conn)
+            .bind(SYS_A)
+            .bind(SYS_B)
+            .bind(mass)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        marked_ago(&pool, *conn, 2).await;
+    }
+    let before = swept_rows(&pool, w.map_id).await;
+
+    let removed =
+        clean_stale_connections(&pool, w.owner, CleanStaleConnections { map_id: w.map_id })
+            .await
+            .unwrap();
+    assert_eq!(removed, 3);
+    let after = swept_rows(&pool, w.map_id).await;
+    assert_eq!(after[1], serde_json::json!([]), "every edge went");
+    assert_eq!(after[3], serde_json::json!([]), "and their jumps with them");
+
+    let body = MapIdBody { map_id: w.map_id };
+    undo(&pool, w.owner, body.clone()).await.unwrap();
+    assert_eq!(swept_rows(&pool, w.map_id).await, before);
+    redo(&pool, w.owner, body.clone()).await.unwrap();
+    assert_eq!(swept_rows(&pool, w.map_id).await, after);
+    undo(&pool, w.owner, body).await.unwrap();
+    assert_eq!(swept_rows(&pool, w.map_id).await, before);
+}

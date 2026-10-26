@@ -94,23 +94,24 @@ pub(crate) async fn insert(tx: &mut Tx<'_>, map_id: i64, row: &NewConnection) ->
     .await?)
 }
 
-/// One connection as it stands, for a snapshot.
-pub(crate) async fn snapshot(
+/// These connections as they stand, for a snapshot. The ones not on the map are left out.
+pub(crate) async fn snapshot_many(
     tx: &mut Tx<'_>,
     map_id: i64,
-    connection_id: i64,
-) -> Result<Option<ConnectionRow>> {
+    ids: &[i64],
+) -> Result<Vec<ConnectionRow>> {
     Ok(sqlx::query_as!(
         ConnectionRow,
         r#"select id, from_system, to_system, type as kind,
                   mass_status,
                   time_status,
                   size, preserve_mass, created_at as "created_at?", time_status_updated_at
-           from map_connections where id = $1 and map_id = $2"#,
-        connection_id,
+           from map_connections where map_id = $1 and id = any($2)
+           order by id"#,
         map_id,
+        ids,
     )
-    .fetch_optional(&mut **tx)
+    .fetch_all(&mut **tx)
     .await?)
 }
 

@@ -239,20 +239,26 @@ async fn goto_tx(
     if head == target {
         return Err(MapError::Conflict("the map is already there".into()));
     }
-    if let Some(target) = target {
-        // Fails when the step is not on this map, or is an audit row.
-        fetch_step(tx, map_id, target).await?;
-    }
+    // Fails when the step is not on this map, or is an audit row.
+    let target_parent = match target {
+        Some(target) => Some(fetch_step(tx, map_id, target).await?.parent_id),
+        None => None,
+    };
+    let head_parent = match head {
+        Some(head) => Some(fetch_step(tx, map_id, head).await?.parent_id),
+        None => None,
+    };
 
-    let from = ancestors(&mut **tx, map_id, head, None).await?;
-    let to = ancestors(&mut **tx, map_id, target, None).await?;
-    let common = from.iter().find(|id| to.contains(id)).copied();
+    let (rewind, replay) = if head_parent == Some(target) {
+        // Undo: back over the head alone, its parent being the common ancestor.
+        (head.into_iter().collect(), Vec::new())
+    } else if target_parent == Some(head) {
+        // Redo: forward onto a child of the head.
+        (Vec::new(), target.into_iter().collect())
+    } else {
+        path_between(tx, map_id, head, target).await?
+    };
 
-    let rewind: Vec<i64> = from
-        .iter()
-        .take_while(|id| Some(**id) != common)
-        .copied()
-        .collect();
     for id in rewind {
         let step = fetch_step(tx, map_id, id).await?;
         let inverse = step
@@ -269,12 +275,6 @@ async fn goto_tx(
         .await?;
     }
 
-    let mut replay: Vec<i64> = to
-        .iter()
-        .take_while(|id| Some(**id) != common)
-        .copied()
-        .collect();
-    replay.reverse();
     for id in replay {
         let step = fetch_step(tx, map_id, id).await?;
         let forward = step
@@ -291,6 +291,32 @@ async fn goto_tx(
     }
 
     set_head(tx, map_id, target).await
+}
+
+/// The way from `head` to `target` through their nearest common ancestor: the steps to undo,
+/// nearest first, and then the steps to redo, oldest first.
+async fn path_between(
+    tx: &mut Tx<'_>,
+    map_id: i64,
+    head: Option<i64>,
+    target: Option<i64>,
+) -> Result<(Vec<i64>, Vec<i64>)> {
+    let from = ancestors(&mut **tx, map_id, head, None).await?;
+    let to = ancestors(&mut **tx, map_id, target, None).await?;
+    let common = from.iter().find(|id| to.contains(id)).copied();
+
+    let rewind: Vec<i64> = from
+        .iter()
+        .take_while(|id| Some(**id) != common)
+        .copied()
+        .collect();
+    let mut replay: Vec<i64> = to
+        .iter()
+        .take_while(|id| Some(**id) != common)
+        .copied()
+        .collect();
+    replay.reverse();
+    Ok((rewind, replay))
 }
 
 /// Apply one stored direction and hand back the command that reverses it.
