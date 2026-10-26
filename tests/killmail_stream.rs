@@ -5,11 +5,11 @@
 mod common;
 
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use common::{SYS_A, world};
 use serde_json::{Value, json};
@@ -205,6 +205,7 @@ const FAST: Timing = Timing {
     pace: Duration::from_millis(1),
     head_check: Duration::ZERO,
     missing_grace: Duration::from_millis(50),
+    retry: Duration::from_millis(10),
 };
 
 /// Follow `feed` from `cursor` on.
@@ -284,4 +285,71 @@ async fn a_kill_not_yet_there_is_waited_for(pool: PgPool) {
 
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(cursor(&pool).await, 100);
+}
+
+/// Every request the throttling feed saw, and when.
+type Seen = Arc<Mutex<Vec<Instant>>>;
+
+/// A feed that answers its first request with a 429 asking for a second's pause, then
+/// holds kills 101 and 102 under a head of 102.
+async fn throttling_frame(
+    State(seen): State<Seen>,
+    Path(name): Path<String>,
+) -> (StatusCode, HeaderMap, String) {
+    let first = {
+        let mut seen = seen.lock().expect("mutex poisoned");
+        seen.push(Instant::now());
+        seen.len() == 1
+    };
+    let mut headers = HeaderMap::new();
+    if first {
+        headers.insert("retry-after", "1".parse().expect("header value"));
+        return (StatusCode::TOO_MANY_REQUESTS, headers, String::new());
+    }
+    if name == "sequence.json" {
+        return (
+            StatusCode::OK,
+            headers,
+            json!({ "sequence": 102 }).to_string(),
+        );
+    }
+    let seq: i64 = name.trim_end_matches(".json").parse().unwrap_or(0);
+    if (101..=102).contains(&seq) {
+        (StatusCode::OK, headers, kill(seq))
+    } else {
+        (StatusCode::NOT_FOUND, headers, String::new())
+    }
+}
+
+/// A 429 waits as long as `Retry-After` asks, not the much shorter retry for other
+/// failures, and the feed is followed as before once it answers again.
+#[sqlx::test]
+async fn a_429_waits_out_retry_after(pool: PgPool) {
+    world(&pool).await;
+    sqlx::query!(
+        "insert into zkb_state (id, sequence_id) values (true, $1)",
+        100_i64
+    )
+    .execute(&pool)
+    .await
+    .expect("insert zkb_state");
+    let seen = Seen::default();
+    let base = serve(
+        Router::new()
+            .route("/ephemeral/{name}", get(throttling_frame))
+            .with_state(Arc::clone(&seen)),
+    )
+    .await;
+    tokio::spawn(listen(pool.clone(), None, base, FAST));
+
+    assert!(wait_for(async || cursor(&pool).await == 102).await);
+    let pause = {
+        let seen = seen.lock().expect("mutex poisoned");
+        seen[1] - seen[0]
+    };
+    assert!(
+        pause >= Duration::from_secs(1),
+        "asked again after {pause:?}"
+    );
+    assert_eq!(stored(&pool).await, [5101, 5102]);
 }

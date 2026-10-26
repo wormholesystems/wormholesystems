@@ -49,20 +49,116 @@ const WALK_LIMIT: i64 = 100;
 /// failed fetch is retried after 30s, and zKillboard has bad minutes.
 const FAILING_FOR: Duration = Duration::from_mins(15);
 
+/// The longest wait after a 429, whatever `Retry-After` says. R2Z2 bans an address for an
+/// hour, so past that the feed is only being asked again too late.
+const THROTTLED_AT_MOST: Duration = Duration::from_hours(1);
+
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+/// The feed answered 429. Every app on the address counts against the same limit, so this
+/// can come from a neighbour's polling as much as ours.
+#[derive(Debug)]
+struct Throttled {
+    retry_after: Option<Duration>,
+}
+
+impl Display for Throttled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.retry_after {
+            Some(wait) => write!(
+                f,
+                "rate limited by the feed (retry after {}s)",
+                wait.as_secs()
+            ),
+            None => f.write_str("rate limited by the feed"),
+        }
+    }
+}
+
+impl std::error::Error for Throttled {}
+
+/// A response, or the error for its status: [`Throttled`] for a 429.
+fn checked(res: reqwest::Response) -> Result<reqwest::Response, BoxError> {
+    if res.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        let retry_after = res
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(parse_retry_after);
+        return Err(Throttled { retry_after }.into());
+    }
+    Ok(res.error_for_status()?)
+}
+
+/// `Retry-After` as seconds. The HTTP-date form is not worth a date parser here: without
+/// it the wait is the backoff, which is long enough.
+fn parse_retry_after(header: &str) -> Option<Duration> {
+    let seconds: f64 = header.trim().parse().ok()?;
+    // `NaN` and `inf` parse as floats too; `NaN.max(0.0)` would quietly read as zero.
+    if !seconds.is_finite() {
+        return None;
+    }
+    Duration::try_from_secs_f64(seconds.max(0.0)).ok()
+}
+
+/// How long to wait before asking the feed again.
+///
+/// Any failure but a 429 is retried after `retry`. Each 429 in a row doubles that, and the
+/// wait is never shorter than `Retry-After` asks nor longer than [`THROTTLED_AT_MOST`]: one
+/// that keeps coming is a block on the address, and asking every 30 seconds only keeps
+/// it going.
+#[derive(Debug, Default)]
+struct Backoff {
+    throttled: u32,
+}
+
+impl Backoff {
+    fn after(&mut self, err: &BoxError, retry: Duration) -> Duration {
+        let Some(throttled) = err.downcast_ref::<Throttled>() else {
+            self.throttled = 0;
+            return retry;
+        };
+        self.throttled = self.throttled.saturating_add(1);
+        throttled_wait(retry, self.throttled, throttled.retry_after)
+    }
+
+    fn reset(&mut self) {
+        self.throttled = 0;
+    }
+}
+
+/// The wait after the `nth` 429 in a row (from 1).
+fn throttled_wait(retry: Duration, nth: u32, retry_after: Option<Duration>) -> Duration {
+    let doubled = retry.saturating_mul(2u32.saturating_pow(nth - 1));
+    doubled
+        .max(retry_after.unwrap_or_default())
+        .min(THROTTLED_AT_MOST)
+}
 
 /// Log a failed step of the feed: a warning, or the one error once it has kept failing.
 /// The error goes in a field so the reports group as one issue.
-fn failed(streak: &Streak, err: impl Display) {
+fn failed(streak: &Streak, err: impl Display, wait: Duration) {
+    let retry_in = wait.as_secs();
     if streak.record_failure(Instant::now()) {
         tracing::error!(
             error = %err,
+            retry_in,
             "killmail ingest has failed for {} minutes",
             FAILING_FOR.as_secs() / 60
         );
     } else {
-        tracing::warn!(error = %err, "killmail ingest failed, retrying");
+        tracing::warn!(error = %err, retry_in, "killmail ingest failed, retrying");
     }
+}
+
+/// Log a failed step, and wait out the backoff it earned.
+async fn retry_later(streak: &Streak, backoff: &mut Backoff, err: &BoxError, timing: Timing) {
+    let wait = backoff.after(err, timing.retry);
+    if err.is::<Throttled>() {
+        metrics::counter!("ws_killmail_ingest_throttled_total").increment(1);
+    }
+    failed(streak, err, wait);
+    tokio::time::sleep(wait).await;
 }
 
 /// How the feed is paced. Its own type so the tests can run it in milliseconds.
@@ -77,6 +173,8 @@ pub struct Timing {
     pub head_check: Duration,
     /// How long a kill the head already counts may stay missing before it is given up on.
     pub missing_grace: Duration,
+    /// How long to wait after a failed fetch. A 429 waits longer; see [`Backoff`].
+    pub retry: Duration,
 }
 
 impl Default for Timing {
@@ -85,14 +183,16 @@ impl Default for Timing {
             // zKillboard asks for 6 seconds: a kill arrives every 5.5 on average, so
             // polling faster gains nothing.
             idle: Duration::from_secs(6),
-            // R2Z2 bans an address for an hour past 15 requests a second, so catching up
-            // stays well under that.
-            pace: Duration::from_millis(100),
+            // R2Z2 allows 15 requests a second per address and bans it for an hour past
+            // that. Other apps on the same address (a killfeed, say) catch up after an
+            // outage at the same moment we do, so this leaves them most of the budget.
+            pace: Duration::from_millis(250),
             head_check: Duration::from_secs(60),
             // The kill was asked for before it existed, while idling at the head, so a
             // cache in front of the bucket may answer that 404 again for a little while
             // after the file arrived. Five tries before it counts as gone.
             missing_grace: Duration::from_secs(30),
+            retry: Duration::from_secs(30),
         }
     }
 }
@@ -124,6 +224,7 @@ pub async fn listen(
     // The kill that is missing under the head, and since when.
     let mut missing: Option<(i64, Instant)> = None;
     let streak = Streak::new(FAILING_FOR);
+    let mut backoff = Backoff::default();
     loop {
         let last = match cursor {
             Some(seq) => seq,
@@ -133,25 +234,29 @@ pub async fn listen(
                     seq
                 }
                 Err(err) => {
-                    failed(&streak, err);
-                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    retry_later(&streak, &mut backoff, &err, timing).await;
                     continue;
                 }
             },
         };
-        if head.due(timing.head_check) {
-            head.check(&http, &base, last).await;
+        if head.due(timing.head_check)
+            && let Err(err) = head.check(&http, &base, last).await
+        {
+            retry_later(&streak, &mut backoff, &err, timing).await;
+            continue;
         }
         let next = last + 1;
         match ingest(&pool, &http, &base, alerts.as_ref(), next).await {
             Ok(true) => {
                 streak.record_success();
+                backoff.reset();
                 cursor = Some(next);
                 missing = None;
                 tokio::time::sleep(timing.pace).await;
             }
             Ok(false) => {
                 streak.record_success();
+                backoff.reset();
                 // Past the head: it has not happened yet.
                 let Some(to) = head.seq.filter(|&head| next <= head) else {
                     tokio::time::sleep(timing.idle).await;
@@ -174,22 +279,20 @@ pub async fn listen(
                         metrics::counter!("ws_killmail_ingest_skipped_total")
                             .increment(u64::try_from(resume - next).unwrap_or(0));
                         if let Err(err) = advance(&pool, resume - 1).await {
-                            failed(&streak, err);
+                            failed(&streak, err, Duration::ZERO);
                         }
                         cursor = Some(resume - 1);
                         missing = None;
                     }
                     Err(err) => {
                         metrics::counter!("ws_killmail_ingest_errors_total").increment(1);
-                        failed(&streak, err);
-                        tokio::time::sleep(Duration::from_secs(30)).await;
+                        retry_later(&streak, &mut backoff, &err, timing).await;
                     }
                 }
             }
             Err(err) => {
                 metrics::counter!("ws_killmail_ingest_errors_total").increment(1);
-                failed(&streak, err);
-                tokio::time::sleep(Duration::from_secs(30)).await;
+                retry_later(&streak, &mut backoff, &err, timing).await;
             }
         }
     }
@@ -208,14 +311,21 @@ impl Head {
     }
 
     /// Read the head again, and say how far behind it `cursor` is. A failed read keeps
-    /// what was known and waits for the next check.
-    async fn check(&mut self, http: &reqwest::Client, base: &str, cursor: i64) {
+    /// what was known and waits for the next check, except a 429, which is handed back so
+    /// the feed is left alone for a while.
+    async fn check(
+        &mut self,
+        http: &reqwest::Client,
+        base: &str,
+        cursor: i64,
+    ) -> Result<(), BoxError> {
         self.checked = Some(Instant::now());
         match head_of(http, base).await {
             Ok(seq) => self.seq = Some(seq),
+            Err(err) if err.is::<Throttled>() => return Err(err),
             Err(err) => {
                 tracing::warn!("killmail ingest: could not read the head of the feed: {err}");
-                return;
+                return Ok(());
             }
         }
         let behind = self.seq.map_or(0, |head| (head - cursor).max(0));
@@ -223,18 +333,17 @@ impl Head {
         if behind > BEHIND_WARN {
             tracing::warn!("killmail ingest is {behind} kills behind the feed (at {cursor})");
         }
+        Ok(())
     }
 }
 
 /// The last sequence the feed has published.
 async fn head_of(http: &reqwest::Client, base: &str) -> Result<i64, BoxError> {
-    let head: R2Z2Sequence = http
+    let head = http
         .get(format!("{base}/ephemeral/sequence.json"))
         .send()
-        .await?
-        .error_for_status()?
-        .json()
         .await?;
+    let head: R2Z2Sequence = checked(head)?.json().await?;
     Ok(head.sequence)
 }
 
@@ -247,7 +356,7 @@ async fn present(http: &reqwest::Client, base: &str, seq: i64) -> Result<bool, B
     if res.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(false);
     }
-    res.error_for_status()?;
+    checked(res)?;
     Ok(true)
 }
 
@@ -321,7 +430,7 @@ async fn ingest(
     if res.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(false); // not there: not yet, or no longer
     }
-    let body = res.error_for_status()?.text().await?;
+    let body = checked(res)?.text().await?;
     let km = match serde_json::from_str::<R2Z2Killmail>(&body) {
         Ok(km) => km,
         Err(err) => {
@@ -661,5 +770,59 @@ async fn resolve_new(pool: &PgPool, esi: &EsiClient, from: i64, held: &mut u32) 
         if !full {
             return mark;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RETRY: Duration = Duration::from_secs(30);
+
+    #[test]
+    fn each_429_in_a_row_doubles_the_wait_up_to_an_hour() {
+        let waits: Vec<u64> = (1..=9)
+            .map(|nth| throttled_wait(RETRY, nth, None).as_secs())
+            .collect();
+        assert_eq!(waits, [30, 60, 120, 240, 480, 960, 1920, 3600, 3600]);
+        assert_eq!(throttled_wait(RETRY, u32::MAX, None), THROTTLED_AT_MOST);
+    }
+
+    #[test]
+    fn retry_after_lengthens_the_wait_but_never_past_an_hour() {
+        let asked = |secs| Some(Duration::from_secs(secs));
+        assert_eq!(
+            throttled_wait(RETRY, 1, asked(300)),
+            Duration::from_secs(300)
+        );
+        // A shorter Retry-After than the backoff does not cut it short.
+        assert_eq!(throttled_wait(RETRY, 3, asked(5)), Duration::from_secs(120));
+        assert_eq!(throttled_wait(RETRY, 1, asked(86_400)), THROTTLED_AT_MOST);
+    }
+
+    #[test]
+    fn retry_after_is_a_finite_number_of_seconds() {
+        assert_eq!(parse_retry_after("120"), Some(Duration::from_secs(120)));
+        assert_eq!(
+            parse_retry_after(" 1.5 "),
+            Some(Duration::from_millis(1500))
+        );
+        assert_eq!(parse_retry_after("-3"), Some(Duration::ZERO));
+        assert_eq!(parse_retry_after("NaN"), None);
+        assert_eq!(parse_retry_after("Wed, 21 Oct 2026 07:28:00 GMT"), None);
+    }
+
+    #[test]
+    fn a_success_or_another_failure_starts_the_backoff_over() {
+        let throttled: BoxError = Throttled { retry_after: None }.into();
+        let other: BoxError = "connection reset".into();
+        let mut backoff = Backoff::default();
+        assert_eq!(backoff.after(&throttled, RETRY), RETRY);
+        assert_eq!(backoff.after(&throttled, RETRY), RETRY * 2);
+        assert_eq!(backoff.after(&other, RETRY), RETRY);
+        assert_eq!(backoff.after(&throttled, RETRY), RETRY);
+        backoff.after(&throttled, RETRY);
+        backoff.reset();
+        assert_eq!(backoff.after(&throttled, RETRY), RETRY);
     }
 }
