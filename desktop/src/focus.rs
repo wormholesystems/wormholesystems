@@ -8,8 +8,13 @@ use std::sync::mpsc::Sender;
 use std::sync::mpsc::{Receiver, channel};
 
 /// What has focus.
-// macOS has no backend yet, so only `Unknown` is ever made there.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
+#[cfg_attr(
+    target_os = "macos",
+    expect(
+        dead_code,
+        reason = "macOS has no backend yet, so only `Unknown` is ever made there"
+    )
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Focus {
     /// An EVE client, with the character logged in on it; `None` on the login screens.
@@ -23,7 +28,13 @@ pub(crate) enum Focus {
 
 impl Focus {
     /// Read a window's class (Hyprland's, empty elsewhere) and title.
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    #[cfg_attr(
+        target_os = "macos",
+        expect(
+            dead_code,
+            reason = "only the Hyprland and Windows backends read window titles"
+        )
+    )]
     pub(crate) fn of(class: &str, title: &str) -> Focus {
         if title == "WormholeSystems" || class.starts_with("wormholesystems") {
             return Focus::Us;
@@ -67,7 +78,7 @@ pub(crate) fn watch() -> Receiver<Focus> {
         return rx;
     }
     #[cfg(target_os = "windows")]
-    std::thread::spawn(move || windows(tx));
+    std::thread::spawn(move || windows(&tx));
     #[cfg(not(target_os = "windows"))]
     drop(tx);
     rx
@@ -122,21 +133,25 @@ fn hyprland(tx: &Sender<Focus>) {
 }
 
 #[cfg(target_os = "windows")]
-fn windows(tx: Sender<Focus>) {
+fn windows(tx: &Sender<Focus>) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId,
     };
 
     let mut last = None;
     loop {
-        let (title, pid) = unsafe {
-            let hwnd = GetForegroundWindow();
-            let mut buf = [0u16; 256];
-            let n = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
-            let mut pid = 0u32;
-            GetWindowThreadProcessId(hwnd, &mut pid);
-            (String::from_utf16_lossy(&buf[..n.max(0) as usize]), pid)
-        };
+        // SAFETY: takes no arguments; the window it names may close at any moment, which
+        // the calls below tolerate (they then report nothing).
+        let hwnd = unsafe { GetForegroundWindow() };
+        let mut buf = [0u16; 256];
+        let capacity = i32::try_from(buf.len()).expect("the title buffer is 256 units");
+        // SAFETY: `buf` is a local of `capacity` units for the call to write into.
+        let n = unsafe { GetWindowTextW(hwnd, buf.as_mut_ptr(), capacity) };
+        let mut pid = 0u32;
+        // SAFETY: `pid` is a local the call writes the owning process id into.
+        unsafe { GetWindowThreadProcessId(hwnd, &raw mut pid) };
+        let len = usize::try_from(n).unwrap_or(0);
+        let title = String::from_utf16_lossy(&buf[..len]);
         // A click activates the overlay, which has no title: it is still us.
         let focus = if pid == std::process::id() {
             Focus::Us

@@ -22,7 +22,6 @@ use gpui_kit::{
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     ParentElement, Pixels, Point, Render, Size, Stateful, Styled, Subscription, Window,
     WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, canvas, div, point, px,
-    size,
 };
 
 use crate::config::Overlay;
@@ -74,7 +73,7 @@ pub(crate) struct OverlayView {
     click_through: bool,
     /// Follows the cursor while the window lets clicks through; see `sync_native_input`.
     #[cfg(not(target_os = "linux"))]
-    cursor_poll: Option<Task<()>>,
+    cursor_poll: Option<gpui_kit::Task<()>>,
     _observe: Subscription,
 }
 
@@ -194,7 +193,7 @@ impl OverlayView {
     /// while dragging or while the cursor is over the panel, and poll the cursor meanwhile,
     /// since a click-through window hears nothing of it.
     #[cfg(not(target_os = "linux"))]
-    fn sync_native_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn sync_native_input(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         // Read the panel's bounds as last painted, not as the last render saw them: the
         // canvas measures them while painting, after the render, and nothing renders again
         // until something changes.
@@ -427,7 +426,7 @@ pub(crate) fn open(
                 // Anchored to every edge: the compositor makes it the size of the screen.
                 window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                     point(px(0.0), px(0.0)),
-                    size(px(0.0), px(0.0)),
+                    gpui_kit::size(px(0.0), px(0.0)),
                 ))),
                 app_id: Some("wormholesystems-overlay".into()),
                 window_background: WindowBackgroundAppearance::Transparent,
@@ -452,7 +451,7 @@ pub(crate) fn open(
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                 point(screen.origin.x + px(x), screen.origin.y + px(y)),
-                size(px(w), px(h)),
+                gpui_kit::size(px(w), px(h)),
             ))),
             titlebar: None,
             focus: false,
