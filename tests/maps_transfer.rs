@@ -663,6 +663,38 @@ async fn importing_routes_into_a_new_map_replaces_the_seeded_watchlist(pool: PgP
 }
 
 #[sqlx::test]
+async fn a_system_ignored_twice_in_one_file_is_ignored_once(pool: PgPool) {
+    let w = world(&pool).await;
+    let content = format!(
+        r#"{{
+        "format": "wormholesystems-map-export",
+        "version": 1,
+        "map_name": "Twice",
+        "sections": {{
+            "routes": {{
+                "route_solarsystems": [],
+                "ignored_solarsystems": [
+                    {{"solarsystem_id": {SYS_C}}},
+                    {{"solarsystem_id": {SYS_C}}}
+                ]
+            }}
+        }}
+    }}"#
+    );
+    let sections = SectionSet {
+        routes: true,
+        ..Default::default()
+    };
+    let parsed = parse_export(&content, sections, true).unwrap();
+
+    let counts = import_map(&pool, w.owner, w.map_id, &parsed).await.unwrap();
+
+    assert_eq!(counts.routes.created, 1);
+    assert_eq!(counts.routes.updated, 1);
+    assert_eq!(ignored_ids(&pool, w.map_id).await.unwrap(), vec![SYS_C]);
+}
+
+#[sqlx::test]
 async fn export_needs_manager_and_members_are_refused(pool: PgPool) {
     let w = world(&pool).await;
     let member = common::member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Member).await;

@@ -719,7 +719,9 @@ async fn import_routes(
         }
     }
 
-    let ignored: HashSet<i64> = sqlx::query_scalar!(
+    // Grows as the loop inserts, so a file that lists a system twice counts the second as
+    // already there instead of tripping the unique key and failing the whole import.
+    let mut ignored: HashSet<i64> = sqlx::query_scalar!(
         "select solar_system_id from map_ignored_solar_systems where map_id = $1",
         map_id,
     )
@@ -732,7 +734,7 @@ async fn import_routes(
             counts.skipped += 1;
             continue;
         }
-        if ignored.contains(&entry.solarsystem_id) {
+        if !ignored.insert(entry.solarsystem_id) {
             counts.updated += 1;
             continue;
         }

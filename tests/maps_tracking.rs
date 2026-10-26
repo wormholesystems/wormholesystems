@@ -101,6 +101,54 @@ async fn a_jump_places_the_system_connects_it_and_links_the_signature(pool: PgPo
     assert_eq!(linked.connection_id, Some(view.connections[0].id));
 }
 
+async fn alias_of(pool: &PgPool, actor: Actor, map_id: i64, sys: i64) -> Option<String> {
+    get_map(pool, actor, GetMap { map_id })
+        .await
+        .unwrap()
+        .systems
+        .iter()
+        .find(|s| s.solar_system_id() == Some(sys))
+        .and_then(|s| s.alias().map(str::to_string))
+}
+
+#[sqlx::test]
+async fn undoing_a_jump_into_a_placed_system_puts_its_old_name_back(pool: PgPool) {
+    let w = world(&pool).await;
+    let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
+    place_at(&pool, w.owner, w.map_id, SYS_B, 200.0).await;
+
+    track_jump(
+        &pool,
+        w.owner,
+        TrackJump {
+            alias: Some("D2".into()),
+            ..jump(w.map_id, a, SYS_B)
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        alias_of(&pool, w.owner, w.map_id, SYS_B).await.as_deref(),
+        Some("D2")
+    );
+
+    undo(&pool, w.owner, MapIdBody { map_id: w.map_id })
+        .await
+        .unwrap();
+    // The system was there before the jump, so it stays, under the name it had.
+    assert_eq!(systems(&pool, w.owner, w.map_id).await, vec![SYS_A, SYS_B]);
+    assert_eq!(connections(&pool, w.owner, w.map_id).await, 0);
+    assert_eq!(alias_of(&pool, w.owner, w.map_id, SYS_B).await, None);
+
+    redo(&pool, w.owner, MapIdBody { map_id: w.map_id })
+        .await
+        .unwrap();
+    assert_eq!(
+        alias_of(&pool, w.owner, w.map_id, SYS_B).await.as_deref(),
+        Some("D2")
+    );
+}
+
 #[sqlx::test]
 async fn the_whole_jump_is_one_undo(pool: PgPool) {
     let w = world(&pool).await;

@@ -286,8 +286,7 @@ pub async fn remove_jump(
     actor: Actor,
     cmd: RemoveConnectionJump,
 ) -> Result<Option<i64>> {
-    let removed = run(pool, actor, cmd).await?;
-    Ok((removed != 0).then_some(removed as i64))
+    run(pool, actor, cmd).await
 }
 
 pub(super) async fn apply_remove_jump(
@@ -309,7 +308,7 @@ pub(super) async fn apply_remove_jump(
     let mut effect = Effect::new(
         "jumps.removed",
         "removed a jump",
-        CommandOutput::Count(connection_id.unwrap_or(0) as u64),
+        CommandOutput::ConnectionId(connection_id),
     )
     .undo_with(MapCommand::RestoreConnectionJump(RestoreConnectionJump {
         map_id: cmd.map_id,
@@ -456,7 +455,11 @@ pub async fn record_transit(
         return Ok(());
     };
     let mass = match character.ship_type_id {
-        Some(t) => ship_mass(pool, t).await.unwrap_or(0),
+        // Losing the mass understates the hole's, but losing the jump is worse.
+        Some(t) => ship_mass(pool, t).await.unwrap_or_else(|err| {
+            tracing::warn!("jump capture: no mass for ship type {t}: {err}");
+            0
+        }),
         None => 0,
     };
 
