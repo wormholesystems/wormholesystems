@@ -39,7 +39,9 @@ fn thera_holes(map_id: i64, holes: Vec<EveScoutHole>) -> AddEveScoutConnections 
 }
 
 async fn view(pool: &PgPool, actor: Actor, map_id: i64) -> wormholesystems::maps::MapView {
-    get_map(pool, actor, GetMap { map_id }).await.unwrap()
+    get_map(pool, actor, GetMap { map_id })
+        .await
+        .expect("get_map")
 }
 
 #[sqlx::test]
@@ -67,7 +69,7 @@ async fn puts_the_hub_its_holes_and_both_ends_signatures_on_the_map(pool: PgPool
     let mut placed: Vec<i64> = v
         .systems
         .iter()
-        .filter_map(|s| s.solar_system_id())
+        .filter_map(wormholesystems::maps::MapSystemView::solar_system_id)
         .collect();
     placed.sort_unstable();
     assert_eq!(placed, vec![SYS_A, SYS_B, THERA]);
@@ -322,7 +324,7 @@ async fn concurrent_viewers_share_one_read_of_the_feed() {
     let hits = Arc::new(AtomicUsize::new(0));
     let feed = axum::Router::new()
         .route("/signatures", axum::routing::get(signatures))
-        .with_state(hits.clone());
+        .with_state(Arc::clone(&hits));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/signatures", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, feed).await.unwrap() });
@@ -330,7 +332,7 @@ async fn concurrent_viewers_share_one_read_of_the_feed() {
     let scout = Arc::new(EveScout::new(url));
     let reads: Vec<_> = (0..8)
         .map(|_| {
-            let scout = scout.clone();
+            let scout = Arc::clone(&scout);
             tokio::spawn(async move { scout.connections().await })
         })
         .collect();

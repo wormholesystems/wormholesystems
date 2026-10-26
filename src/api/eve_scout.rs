@@ -30,7 +30,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
 )]
 pub async fn eve_scout(
     State(state): State<AppState>,
-) -> ApiResult<std::sync::Arc<Vec<EveScoutConnection>>> {
+) -> ApiResult<std::sync::Arc<[EveScoutConnection]>> {
     Ok(Json(state.eve_scout.connections().await))
 }
 

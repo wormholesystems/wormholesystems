@@ -19,3 +19,6 @@ console = "0.16"
 # does plain blocking reads and works either way.
 inquire = { version = "0.9", default-features = false, features = ["console"] }
 rand = "0.9"
+
+[lints]
+workspace = true

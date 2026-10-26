@@ -16,7 +16,7 @@ async fn flows(pool: &PgPool) -> i64 {
     sqlx::query_scalar("select count(*) from oauth_login_flows")
         .fetch_one(pool)
         .await
-        .unwrap()
+        .expect("query oauth_login_flows")
 }
 
 /// Both callbacks on the real handlers, with Discord configured so its callback gets as
@@ -129,11 +129,11 @@ async fn each_callback_refuses_the_other_ones_state(pool: PgPool) {
 
 /// The `state` a start handler put into the provider URL it redirected to.
 fn state_in(location: &str) -> String {
-    let url = reqwest::Url::parse(location).unwrap();
+    let url = reqwest::Url::parse(location).expect("parse redirect URL");
     url.query_pairs()
         .find(|(k, _)| k == "state")
         .map(|(_, v)| v.into_owned())
-        .unwrap()
+        .expect("redirect has a state param")
 }
 
 /// The `name=value` part of the `Set-Cookie` for `name`.
@@ -141,8 +141,15 @@ fn cookie_pair(set_cookies: &[String], name: &str) -> String {
     set_cookies
         .iter()
         .find(|c| c.starts_with(&format!("{name}=")))
-        .map(|c| c.split(';').next().unwrap().to_string())
-        .unwrap_or_else(|| panic!("no {name} cookie in {set_cookies:?}"))
+        .map_or_else(
+            || panic!("no {name} cookie in {set_cookies:?}"),
+            |c| {
+                c.split(';')
+                    .next()
+                    .expect("split yields at least one part")
+                    .to_string()
+            },
+        )
 }
 
 #[sqlx::test]

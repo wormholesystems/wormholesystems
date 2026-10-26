@@ -15,7 +15,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new().routes(routes!(map_killmails))
 }
 
-#[derive(Deserialize, utoipa::IntoParams)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct KillmailsQuery {
     /// The solar system selected on the map. Only read when the card is set to follow the

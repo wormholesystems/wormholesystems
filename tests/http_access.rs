@@ -20,7 +20,7 @@ async fn no_session_is_401_and_a_session_is_not(pool: PgPool) {
     let cookie = session_cookie(&pool, w.owner).await;
     let signed_in = get(app(&pool), "/api/maps", Some(&cookie)).await;
     assert_eq!(signed_in.status, StatusCode::OK);
-    assert_eq!(signed_in.body.as_array().map(|a| a.len()), Some(1));
+    assert_eq!(signed_in.body.as_array().map(std::vec::Vec::len), Some(1));
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -112,5 +112,5 @@ async fn alerts_are_manager_gated(pool: PgPool) {
 
     let allowed = get(app(&pool), &path, Some(&owner_cookie)).await;
     assert_eq!(allowed.status, StatusCode::OK);
-    assert_eq!(allowed.body.as_array().map(|a| a.len()), Some(0));
+    assert_eq!(allowed.body.as_array().map(std::vec::Vec::len), Some(0));
 }

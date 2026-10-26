@@ -24,7 +24,7 @@ async fn ignore(pool: &PgPool, actor: Actor, map_id: i64, solar_system_id: i64) 
         },
     )
     .await
-    .unwrap();
+    .expect("add_ignored_system");
 }
 
 #[sqlx::test]
@@ -128,13 +128,16 @@ async fn clearing_is_one_step_and_undo_brings_the_list_back(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(count, 2);
-    assert!(ignored_ids(&pool, w.map_id).await.unwrap().is_empty());
+    assert_eq!(
+        ignored_ids(&pool, w.map_id).await.unwrap(),
+        Vec::<i64>::new()
+    );
 
     undo(&pool, w.owner, MapIdBody { map_id: w.map_id })
         .await
         .unwrap();
     let mut back = ignored_ids(&pool, w.map_id).await.unwrap();
-    back.sort();
+    back.sort_unstable();
     assert_eq!(back, vec![SYS_B, SYS_C]);
 
     // One more undo takes the last add away, not the whole list.

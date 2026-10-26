@@ -188,7 +188,7 @@ pub(super) async fn apply_clear(tx: &mut Tx<'_>, cmd: ClearIgnoredSystems) -> Re
     )
     .fetch_all(&mut **tx)
     .await?;
-    let count = removed.len() as u64;
+    let count = u64::try_from(removed.len()).expect("a usize fits in u64");
     let inverse = MapCommand::Sequence(Sequence {
         map_id: cmd.map_id,
         steps: removed

@@ -59,7 +59,7 @@ pub struct Announcement {
 }
 
 /// The raw values, as the environment holds them. Blank counts as absent throughout.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct AnnouncementVars<'a> {
     pub level: Option<&'a str>,
     pub title: Option<&'a str>,

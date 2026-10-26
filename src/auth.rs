@@ -5,14 +5,14 @@ use axum_extra::extract::CookieJar;
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use serde::Deserialize;
 
-use crate::app::AppState;
+use crate::app::{AppState, CookieSecurity};
 use crate::db::PgTokenStore;
 use crate::esi::scopes::Scope;
 use crate::esi::token::TokenStore;
 use crate::oauth_flow::{self, FlowKind};
 use crate::session;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 pub struct LoginQuery {
     /// `?link=true` adds the authenticated character to the currently signed-in user
     /// instead of resolving/creating an account.
@@ -93,7 +93,7 @@ pub async fn login(
     let jar = jar.add(oauth_flow::browser_cookie(
         FlowKind::EveLogin,
         &csrf,
-        state.secure_cookies,
+        state.cookie_security(),
     ));
     (jar, Redirect::to(&url)).into_response()
 }
@@ -102,6 +102,15 @@ pub async fn login(
 pub struct CallbackQuery {
     code: String,
     state: String,
+}
+
+// By hand, so the one-time code stays out of logs.
+impl std::fmt::Debug for CallbackQuery {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CallbackQuery")
+            .field("state", &self.state)
+            .finish_non_exhaustive()
+    }
 }
 
 /// `GET /auth/callback`: validate the handshake, persist the character and token, open a
@@ -162,7 +171,7 @@ async fn finish_login(state: &AppState, jar: CookieJar, query: CallbackQuery) ->
         Some(affiliation.corporation_id),
         affiliation.alliance_id,
     ) {
-        return Redirect::to(refused_destination(flow.link_user_id.is_some())).into_response();
+        return Redirect::to(refused_destination(flow.link_user_id)).into_response();
     }
 
     let corp = match state.esi.corporation(affiliation.corporation_id).await {
@@ -209,14 +218,14 @@ async fn finish_login(state: &AppState, jar: CookieJar, query: CallbackQuery) ->
     // The cached one may lack what was just granted, or hold a refresh token this replaced.
     state.tokens.forget(claims.character_id).await;
 
-    let current = jar.get(session::SESSION_COOKIE).map(|c| c.value());
+    let current = jar.get(session::SESSION_COOKIE).map(Cookie::value);
     let session_id =
         match session::resume_or_create(&state.db, current, user_id, claims.character_id).await {
             Ok(id) => id,
             Err(err) => return server_error(err),
         };
 
-    let cookie = session_cookie(session_id, state.secure_cookies);
+    let cookie = session_cookie(session_id, state.cookie_security());
     let destination = flow.redirect_to.unwrap_or_else(|| "/".to_string());
     (jar.add(cookie), Redirect::to(&destination)).into_response()
 }
@@ -224,21 +233,21 @@ async fn finish_login(state: &AppState, jar: CookieJar, query: CallbackQuery) ->
 /// The cookie that carries a session. It has a lifetime so it outlasts a browser restart:
 /// without one it is a browser-session cookie, gone whenever the browser (or a phone's
 /// tab) closes.
-pub fn session_cookie(session_id: String, secure: bool) -> Cookie<'static> {
+pub fn session_cookie(session_id: String, security: CookieSecurity) -> Cookie<'static> {
     Cookie::build((session::SESSION_COOKIE, session_id))
         .path("/")
         .max_age(time::Duration::days(session::SESSION_DAYS))
         .http_only(true)
         .same_site(SameSite::Lax)
-        .secure(secure)
+        .secure(security == CookieSecurity::Https)
         .build()
 }
 
 /// Where a character the instance does not let in is sent, with a flag the page turns into
 /// an explanation. Adding an alt starts from the characters page and returns there; a
 /// plain login has no page of its own to go back to but the login page.
-fn refused_destination(linking: bool) -> &'static str {
-    if linking {
+fn refused_destination(linking_to: Option<i64>) -> &'static str {
+    if linking_to.is_some() {
         "/settings/characters?refused=1"
     } else {
         "/login?refused=1"

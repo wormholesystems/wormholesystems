@@ -50,7 +50,7 @@ pub struct PlacementRow {
 /// A placement that is not on the map yet. Home, rally and the paste time are earned on the
 /// map, never brought along, so a new row starts without them.
 #[derive(Debug, Clone, Copy)]
-pub struct NewPlacement<'a> {
+pub(crate) struct NewPlacement<'a> {
     pub solar_system_id: Option<i64>,
     pub position_x: f64,
     pub position_y: f64,
@@ -62,7 +62,7 @@ pub struct NewPlacement<'a> {
 
 impl<'a> NewPlacement<'a> {
     /// A system somebody placed.
-    pub fn system(solar_system_id: i64, x: f64, y: f64, alias: Option<&'a str>) -> Self {
+    pub(crate) fn system(solar_system_id: i64, x: f64, y: f64, alias: Option<&'a str>) -> Self {
         NewPlacement {
             solar_system_id: Some(solar_system_id),
             position_x: x,
@@ -75,7 +75,7 @@ impl<'a> NewPlacement<'a> {
     }
 
     /// The far side of a scanned hole, naming the scan and the placement it hangs off.
-    pub fn ghost(
+    pub(crate) fn ghost(
         signature_pk: i64,
         hangs_off_id: i64,
         x: f64,

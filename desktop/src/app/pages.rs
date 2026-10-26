@@ -4,15 +4,19 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::*;
+use gpui_kit::{
+    AnyElement, App, Context, Div, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement,
+    KeyDownEvent, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Svg,
+    Window, div, img, px, svg,
+};
 
-use super::{DesktopApp, Level, Page};
-use crate::config::{Corner, OverlaySize};
+use super::{DesktopApp, Level, Page, Updater};
+use crate::config::{Corner, Overlay, OverlaySize};
 use crate::focus::{self, Focus};
 use crate::hotkeys::{self, Action, PICK_MODIFIERS};
 use crate::sigs;
 use crate::theme::{self, Appearance, HEADING};
-use crate::ui::{self, Kind, rpx};
+use crate::ui::{self, ButtonState, Kind, rpx};
 
 const SIDEBAR: f32 = 220.0;
 /// The text size choices, in percent.
@@ -63,8 +67,8 @@ fn segmented<T: Copy + PartialEq + 'static>(
     id: &'static str,
     choices: &[(T, &'static str)],
     current: T,
-    cx: &mut Context<DesktopApp>,
-    pick: impl Fn(&mut DesktopApp, T, &mut Window, &mut Context<DesktopApp>) + Clone + 'static,
+    cx: &mut Context<'_, DesktopApp>,
+    pick: impl Fn(&mut DesktopApp, T, &mut Window, &mut Context<'_, DesktopApp>) + Clone + 'static,
 ) -> Div {
     let mut row = div().flex().flex_wrap().gap_1();
     for (i, &(value, label)) in choices.iter().enumerate() {
@@ -77,10 +81,10 @@ fn segmented<T: Copy + PartialEq + 'static>(
         let theme = cx.theme().clone();
         row = row.child(
             ui::button(
-                ElementId::NamedInteger(id.into(), i as u64),
+                ElementId::from((id, i)),
                 label,
                 kind,
-                true,
+                ButtonState::Enabled,
                 &theme,
             )
             .on_click(cx.listener(move |this, _, window, cx| pick(this, value, window, cx))),
@@ -89,11 +93,24 @@ fn segmented<T: Copy + PartialEq + 'static>(
     row
 }
 
+/// A settings row: the label, and its control at the far end.
+fn setting_row(label: &'static str, control: AnyElement) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_4()
+        .text_sm()
+        .child(label)
+        .child(control)
+}
+
 impl DesktopApp {
     /// The sidebar card that says a new version is out.
-    fn update_card(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<Div> {
+    fn update_card(&self, theme: &Theme, cx: &mut Context<'_, Self>) -> Option<Div> {
         let available = self.update.as_ref()?;
-        let label = if self.installing_update {
+        let installing = self.updater == Updater::Installing;
+        let label = if installing {
             "Updating…"
         } else if available.installer.is_some() {
             "Update and restart"
@@ -125,7 +142,7 @@ impl DesktopApp {
                         "update-install",
                         label,
                         Kind::Primary,
-                        !self.installing_update,
+                        ButtonState::from(!installing),
                         theme,
                     )
                     .on_click(cx.listener(|this, _, _, cx| this.install_update(cx))),
@@ -133,17 +150,33 @@ impl DesktopApp {
         )
     }
 
-    fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn sidebar(&self, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let update_card = self.update_card(&theme, cx);
-        let map_name = self
-            .sigs
-            .read(cx)
-            .snapshot
-            .as_ref()
-            .map(|s| s.map.name.clone());
+        let nav = self.nav(&theme, cx);
+        let status = self.status(&theme, cx);
+        let tools = self.tools(&theme, cx);
 
-        let brand = div()
+        div()
+            .w(rpx(SIDEBAR))
+            .h_full()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .bg(theme.sidebar)
+            .border_r_1()
+            .border_color(theme.sidebar_border)
+            .text_color(theme.sidebar_foreground)
+            .child(Self::brand(&theme))
+            .child(nav)
+            .child(div().flex_1())
+            .children(update_card)
+            .child(status)
+            .child(tools)
+    }
+
+    fn brand(theme: &Theme) -> Div {
+        div()
             .h(rpx(56.0))
             .px_4()
             .flex()
@@ -173,8 +206,10 @@ impl DesktopApp {
                     .text_color(theme.primary)
                     .text_size(rpx(9.0))
                     .child(stage()),
-            );
+            )
+    }
 
+    fn nav(&self, theme: &Theme, cx: &mut Context<'_, Self>) -> Div {
         let mut nav = div().flex().flex_col().py_3();
         for page in Page::ALL {
             let active = self.page == page;
@@ -231,10 +266,12 @@ impl DesktopApp {
                     ),
             );
         }
+        nav
+    }
 
-        // Who pastes and jumps go to: the tracked character, else whoever moved last.
-        let pilot = self
-            .config
+    /// Who pastes and jumps go to: the tracked character, else whoever moved last.
+    fn pilot(&self, theme: &Theme) -> Option<Div> {
+        self.config
             .tracked
             .clone()
             .or_else(|| self.active.clone())
@@ -284,11 +321,20 @@ impl DesktopApp {
                                     .child(system.unwrap_or_else(|| "Not logged in".into())),
                             ),
                     )
-            });
+            })
+    }
 
-        // The account itself is under Settings; here only whether it is signed in, and the map.
+    /// The account itself is under Settings; here only whether it is signed in, and the map.
+    fn status(&self, theme: &Theme, cx: &App) -> Div {
+        let map_name = self
+            .sigs
+            .read(cx)
+            .snapshot
+            .as_ref()
+            .map(|s| s.map.name.clone());
+        let pilot = self.pilot(theme);
         let signed_in = self.account.is_some();
-        let status = div()
+        div()
             .px_4()
             .py_3()
             .flex()
@@ -320,8 +366,10 @@ impl DesktopApp {
                     } else {
                         "Signed out".into()
                     })),
-            );
+            )
+    }
 
+    fn tools(&self, theme: &Theme, cx: &mut Context<'_, Self>) -> Div {
         let overlay_open = self.overlay.is_some();
         let appearance = self.config.appearance;
         let tool = |id: &'static str, path: &'static str, label: &'static str, on: bool| {
@@ -345,7 +393,7 @@ impl DesktopApp {
                 .child(icon(path, 14.0, color))
                 .child(label)
         };
-        let tools = div()
+        div()
             .flex()
             .border_t_1()
             .border_color(theme.sidebar_border)
@@ -356,33 +404,22 @@ impl DesktopApp {
                     "Overlay",
                     overlay_open,
                 )
-                .on_click(cx.listener(move |this, _, _, cx| this.set_overlay(!overlay_open, cx))),
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if overlay_open {
+                        this.close_overlay(cx);
+                    } else {
+                        this.open_overlay(cx);
+                    }
+                })),
             )
             .child(div().w(px(1.0)).bg(theme.sidebar_border))
             .child(
                 tool("toggle-theme", appearance.icon(), appearance.label(), false).on_click(
                     cx.listener(move |this, _, window, cx| {
-                        this.set_appearance(appearance.next(), window, cx)
+                        this.set_appearance(appearance.next(), window, cx);
                     }),
                 ),
-            );
-
-        div()
-            .w(rpx(SIDEBAR))
-            .h_full()
-            .flex_none()
-            .flex()
-            .flex_col()
-            .bg(theme.sidebar)
-            .border_r_1()
-            .border_color(theme.sidebar_border)
-            .text_color(theme.sidebar_foreground)
-            .child(brand)
-            .child(nav)
-            .child(div().flex_1())
-            .children(update_card)
-            .child(status)
-            .child(tools)
+            )
     }
 
     fn header(&self, theme: &Theme, cx: &App) -> Div {
@@ -421,7 +458,7 @@ impl DesktopApp {
             })
     }
 
-    fn signatures_page(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn signatures_page(&self, cx: &mut Context<'_, Self>) -> AnyElement {
         let theme = cx.theme().clone();
         if self.account.is_none() {
             return div()
@@ -466,12 +503,12 @@ impl DesktopApp {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .child(sigs::panel(&self.sigs, false, cx)),
+                    .child(sigs::panel(&self.sigs, sigs::Place::Page, cx)),
             )
             .into_any_element()
     }
 
-    fn activity_page(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn activity_page(&self, cx: &mut Context<'_, Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let last = div()
             .flex()
@@ -532,7 +569,7 @@ impl DesktopApp {
             .into_any_element()
     }
 
-    fn shortcuts_page(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn shortcuts_page(&self, cx: &mut Context<'_, Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let target = match &self.last {
             Some(last) => format!(
@@ -557,8 +594,7 @@ impl DesktopApp {
                     .hotkeys
                     .get(&action)
                     .filter(|h| !h.is_empty())
-                    .map(|h| hotkeys::display(h))
-                    .unwrap_or_else(|| "Not set".into())
+                    .map_or_else(|| "Not set".into(), |h| hotkeys::display(h))
             };
             let button = ui::button(
                 SharedString::from(format!("hotkey-{action:?}")),
@@ -568,7 +604,7 @@ impl DesktopApp {
                 } else {
                     Kind::Normal
                 },
-                true,
+                ButtonState::Enabled,
                 &theme,
             )
             .on_click(
@@ -625,11 +661,33 @@ impl DesktopApp {
             .into_any_element()
     }
 
-    fn settings_page(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn settings_page(&self, cx: &mut Context<'_, Self>) -> AnyElement {
         let theme = cx.theme().clone();
+        let account = self.account_panel(&theme, cx);
+        let maps = self.maps_panel(&theme, cx);
+        let logs = self.logs_panel(&theme, cx);
+        let overlay = self.overlay_panel(&theme, cx);
+        let looks = self.looks_panel(&theme, cx);
+        let about = self.about_panel(&theme, cx);
 
-        let account = if let Some(name) = &self.account {
-            panel("Account", &theme).child(
+        div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .p_6()
+            .max_w(rpx(720.0))
+            .child(account)
+            .children(maps)
+            .child(logs)
+            .child(overlay)
+            .child(looks)
+            .child(about)
+            .into_any_element()
+    }
+
+    fn account_panel(&self, theme: &Theme, cx: &mut Context<'_, Self>) -> Div {
+        if let Some(name) = &self.account {
+            panel("Account", theme).child(
                 div()
                     .flex()
                     .items_center()
@@ -643,25 +701,39 @@ impl DesktopApp {
                             .flex()
                             .gap_1()
                             .child(
-                                ui::button("settings", "Manage tokens", Kind::Normal, true, &theme)
-                                    .on_click(cx.listener(|this, _, _, cx| {
+                                ui::button(
+                                    "settings",
+                                    "Manage tokens",
+                                    Kind::Normal,
+                                    ButtonState::Enabled,
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
                                         cx.open_url(&website(
                                             &this.config.server,
                                             "/settings/tokens",
-                                        ))
-                                    })),
+                                        ));
+                                    },
+                                )),
                             )
                             .child(
-                                ui::button("sign-out", "Sign out", Kind::Normal, true, &theme)
-                                    .on_click(cx.listener(|this, _, _, cx| this.sign_out(cx))),
+                                ui::button(
+                                    "sign-out",
+                                    "Sign out",
+                                    Kind::Normal,
+                                    ButtonState::Enabled,
+                                    theme,
+                                )
+                                .on_click(cx.listener(|this, _, _, cx| this.sign_out(cx))),
                             ),
                     ),
             )
         } else {
-            panel("Account", &theme)
+            panel("Account", theme)
                 .child(muted(
                     "Make a token on the website under Settings, Tokens, and paste it here.",
-                    &theme,
+                    theme,
                 ))
                 .child(Input::new(&self.server))
                 .child(Input::new(&self.token).mask_toggle())
@@ -678,22 +750,30 @@ impl DesktopApp {
                                     "Sign in"
                                 },
                                 Kind::Primary,
-                                !self.connecting,
-                                &theme,
+                                ButtonState::from(!self.connecting),
+                                theme,
                             )
                             .on_click(cx.listener(|this, _, _, cx| this.connect(cx))),
                         )
                         .child(
-                            ui::button("get-token", "Make a token", Kind::Normal, true, &theme)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    let server = this.server.read(cx).value().to_string();
-                                    cx.open_url(&website(&server, "/settings/tokens"))
-                                })),
+                            ui::button(
+                                "get-token",
+                                "Make a token",
+                                Kind::Normal,
+                                ButtonState::Enabled,
+                                theme,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let server = this.server.read(cx).value().to_string();
+                                cx.open_url(&website(&server, "/settings/tokens"));
+                            })),
                         ),
                 )
-        };
+        }
+    }
 
-        let maps = (!self.maps.is_empty()).then(|| {
+    fn maps_panel(&self, theme: &Theme, cx: &mut Context<'_, Self>) -> Option<Div> {
+        (!self.maps.is_empty()).then(|| {
             let mut row = div().flex().flex_wrap().gap_1();
             for map in &self.maps {
                 let id = map.id;
@@ -704,23 +784,25 @@ impl DesktopApp {
                 };
                 row = row.child(
                     ui::button(
-                        ElementId::Integer(id as u64),
+                        ElementId::Integer(id.cast_unsigned()),
                         map.name.clone(),
                         kind,
-                        true,
-                        &theme,
+                        ButtonState::Enabled,
+                        theme,
                     )
                     .on_click(cx.listener(move |this, _, _, cx| this.pick_map(id, cx))),
                 );
             }
-            panel("Map", &theme).child(row)
-        });
+            panel("Map", theme).child(row)
+        })
+    }
 
-        let mut logs = panel("EVE chat logs", &theme).child(Input::new(&self.chatlog_dir));
+    fn logs_panel(&self, theme: &Theme, cx: &mut Context<'_, Self>) -> Div {
+        let mut logs = panel("EVE chat logs", theme).child(Input::new(&self.chatlog_dir));
         if self.watcher.is_some() && self.characters.is_empty() {
             logs = logs.child(muted(
                 "No Local logs yet. Log in a character, and keep \"Log Chat to File\" on in EVE's chat settings.",
-                &theme,
+                theme,
             ));
         }
         if !self.characters.is_empty() || self.config.tracked.is_some() {
@@ -742,8 +824,8 @@ impl DesktopApp {
                     } else {
                         Kind::Normal
                     },
-                    true,
-                    &theme,
+                    ButtonState::Enabled,
+                    theme,
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.track(None, cx))),
             );
@@ -751,11 +833,11 @@ impl DesktopApp {
                 let picked = self.config.tracked.as_ref() == Some(&name);
                 chips = chips.child(
                     ui::character(
-                        ElementId::NamedInteger("track-char".into(), i as u64),
+                        ElementId::from(("track-char", i)),
                         name.clone(),
                         self.portrait(&name),
                         if picked { Kind::Selected } else { Kind::Normal },
-                        &theme,
+                        theme,
                     )
                     .on_click(
                         cx.listener(move |this, _, _, cx| this.track(Some(name.clone()), cx)),
@@ -772,21 +854,11 @@ impl DesktopApp {
                     .child(chips)
                     .child(muted(
                         "Pastes go to this character's system, and only their jumps are mapped.",
-                        &theme,
+                        theme,
                     )),
             );
         }
-        let row = |label: &'static str, control: AnyElement| {
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap_4()
-                .text_sm()
-                .child(label)
-                .child(control)
-        };
-        logs = logs.child(row(
+        logs = logs.child(setting_row(
             "Copy the bookmark back on every jump",
             Switch::new("copy-on-jump")
                 .checked(self.config.copy_on_jump)
@@ -797,42 +869,51 @@ impl DesktopApp {
                 }))
                 .into_any_element(),
         ));
+        logs
+    }
 
+    fn overlay_panel(&self, theme: &Theme, cx: &mut Context<'_, Self>) -> Div {
         let o = self.config.overlay.clone();
-        let overlay = panel("Overlay", &theme)
+        let overlay = panel("Overlay", theme)
             .child(muted(
                 "The signatures in a panel that stays above the game. Drag it by its title and size it by the grip in its corner. It takes clicks but never the keyboard.",
-                &theme,
+                theme,
             ))
-            .child(row(
+            .child(setting_row(
                 "Show the overlay",
                 Switch::new("overlay-open")
                     .checked(self.overlay.is_some())
                     .on_click(
-                        cx.listener(|this, checked: &bool, _, cx| this.set_overlay(*checked, cx)),
+                        cx.listener(|this, checked: &bool, _, cx| {
+                            if *checked {
+                                this.open_overlay(cx);
+                            } else {
+                                this.close_overlay(cx);
+                            }
+                        }),
                     )
                     .into_any_element(),
             ))
-            .child(row(
+            .child(setting_row(
                 "Position and size",
-                ui::button("overlay-reset", "Reset", Kind::Normal, true, &theme)
+                ui::button("overlay-reset", "Reset", Kind::Normal, ButtonState::Enabled, theme)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.edit_overlay(cx, |o| {
                             o.corner = Corner::TopRight;
                             o.size = OverlaySize::Medium;
                             (o.x, o.y, o.width, o.height) = (None, None, None, None);
-                        })
+                        });
                     }))
                     .into_any_element(),
             ))
-            .child(row(
+            .child(setting_row(
                 "Text size",
                 segmented("overlay-text-size", TEXT_SIZES, o.text_size, cx, |this, v, _, cx| {
-                    this.edit_overlay(cx, |o| o.text_size = v)
+                    this.edit_overlay(cx, |o| o.text_size = v);
                 })
                 .into_any_element(),
             ))
-            .child(row(
+            .child(setting_row(
                 "Background",
                 segmented(
                     "opacity",
@@ -843,113 +924,126 @@ impl DesktopApp {
                 )
                 .into_any_element(),
             ))
-            .child(row(
+            .child(setting_row(
                 "Show it when a jump needs its signature",
                 Switch::new("overlay-on-jump")
                     .checked(o.show_on_jump)
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                         let checked = *checked;
-                        this.edit_overlay(cx, |o| o.show_on_jump = checked)
+                        this.edit_overlay(cx, |o| o.show_on_jump = checked);
                     }))
                     .into_any_element(),
             ))
-            .child(row(
+            .child(setting_row(
                 "Show it when a scan is pasted",
                 Switch::new("overlay-on-paste")
                     .checked(o.show_on_paste)
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                         let checked = *checked;
-                        this.edit_overlay(cx, |o| o.show_on_paste = checked)
+                        this.edit_overlay(cx, |o| o.show_on_paste = checked);
                     }))
                     .into_any_element(),
             ));
 
-        let mut overlay = overlay.child(row(
+        let mut overlay = overlay.child(setting_row(
             "Only while EVE or this app has focus",
             Switch::new("overlay-focused")
                 .checked(o.only_when_focused)
                 .on_click(cx.listener(|this, checked: &bool, _, cx| {
                     let checked = *checked;
-                    this.edit_overlay(cx, |o| o.only_when_focused = checked)
+                    this.edit_overlay(cx, |o| o.only_when_focused = checked);
                 }))
                 .into_any_element(),
         ));
         if o.only_when_focused && !focus::supported() {
             overlay = overlay.child(muted(
                 "This desktop does not say which window has focus, so the overlay stays up. It works on Hyprland and Windows.",
-                &theme,
+                theme,
             ));
         }
         if o.only_when_focused {
-            // Everyone the chat logs know, and anyone picked before who is not logged in now.
-            let mut names: Vec<String> =
-                self.characters.iter().map(|(c, _, _)| c.clone()).collect();
-            for c in &o.characters {
-                if !names.contains(c) {
-                    names.push(c.clone());
-                }
-            }
-            names.sort();
-            let mut chips = div().flex().flex_wrap().gap_1().child(
-                ui::button(
-                    "overlay-any",
-                    "Any character",
-                    if o.characters.is_empty() {
-                        Kind::Selected
-                    } else {
-                        Kind::Normal
-                    },
-                    true,
-                    &theme,
-                )
-                .on_click(
-                    cx.listener(|this, _, _, cx| this.edit_overlay(cx, |o| o.characters.clear())),
-                ),
-            );
-            for (i, name) in names.into_iter().enumerate() {
-                let picked = o.characters.contains(&name);
-                chips = chips.child(
-                    ui::character(
-                        ElementId::NamedInteger("overlay-char".into(), i as u64),
-                        name.clone(),
-                        self.portrait(&name),
-                        if picked { Kind::Selected } else { Kind::Normal },
-                        &theme,
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        let name = name.clone();
-                        this.edit_overlay(cx, |o| {
-                            if let Some(i) = o.characters.iter().position(|c| *c == name) {
-                                o.characters.remove(i);
-                            } else {
-                                o.characters.push(name);
-                            }
-                        })
-                    })),
-                );
-            }
-            let now = match &self.focus {
-                Focus::Eve(Some(name)) => format!("In front now: {name}'s client."),
-                Focus::Eve(None) => "In front now: EVE, no character yet.".into(),
-                Focus::Us => "In front now: this app.".into(),
-                Focus::Other => "In front now: another app, so the overlay is hidden.".into(),
-                Focus::Unknown => String::new(),
-            };
-            overlay = overlay
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .text_sm()
-                        .child("For these characters")
-                        .child(chips),
-                )
-                .when(!now.is_empty(), |d| d.child(muted(now, &theme)));
+            overlay = self.overlay_characters(overlay, &o, theme, cx);
         }
+        overlay
+    }
 
-        let looks = panel("Appearance", &theme)
-            .child(row(
+    /// Which characters' clients the overlay shows for, added to its `panel`.
+    fn overlay_characters(
+        &self,
+        panel: Div,
+        o: &Overlay,
+        theme: &Theme,
+        cx: &mut Context<'_, Self>,
+    ) -> Div {
+        // Everyone the chat logs know, and anyone picked before who is not logged in now.
+        let mut names: Vec<String> = self.characters.iter().map(|(c, _, _)| c.clone()).collect();
+        for c in &o.characters {
+            if !names.contains(c) {
+                names.push(c.clone());
+            }
+        }
+        names.sort();
+        let mut chips = div().flex().flex_wrap().gap_1().child(
+            ui::button(
+                "overlay-any",
+                "Any character",
+                if o.characters.is_empty() {
+                    Kind::Selected
+                } else {
+                    Kind::Normal
+                },
+                ButtonState::Enabled,
+                theme,
+            )
+            .on_click(
+                cx.listener(|this, _, _, cx| this.edit_overlay(cx, |o| o.characters.clear())),
+            ),
+        );
+        for (i, name) in names.into_iter().enumerate() {
+            let picked = o.characters.contains(&name);
+            chips = chips.child(
+                ui::character(
+                    ElementId::from(("overlay-char", i)),
+                    name.clone(),
+                    self.portrait(&name),
+                    if picked { Kind::Selected } else { Kind::Normal },
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let name = name.clone();
+                    this.edit_overlay(cx, |o| {
+                        if let Some(i) = o.characters.iter().position(|c| *c == name) {
+                            o.characters.remove(i);
+                        } else {
+                            o.characters.push(name);
+                        }
+                    });
+                })),
+            );
+        }
+        let now = match &self.focus {
+            Focus::Eve(Some(name)) => format!("In front now: {name}'s client."),
+            Focus::Eve(None) => "In front now: EVE, no character yet.".into(),
+            Focus::Us => "In front now: this app.".into(),
+            Focus::Other => "In front now: another app, so the overlay is hidden.".into(),
+            Focus::Unknown => String::new(),
+        };
+        panel
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .text_sm()
+                    .child("For these characters")
+                    .child(chips),
+            )
+            .when(!now.is_empty(), |d| d.child(muted(now, theme)))
+    }
+
+    fn looks_panel(&self, theme: &Theme, cx: &mut Context<'_, Self>) -> Div {
+        panel("Appearance", theme)
+            .child(setting_row(
                 "Theme",
                 segmented(
                     "appearance",
@@ -960,11 +1054,11 @@ impl DesktopApp {
                     ],
                     self.config.appearance,
                     cx,
-                    |this, a, window, cx| this.set_appearance(a, window, cx),
+                    super::DesktopApp::set_appearance,
                 )
                 .into_any_element(),
             ))
-            .child(row(
+            .child(setting_row(
                 "Text size",
                 segmented(
                     "text-size",
@@ -979,16 +1073,18 @@ impl DesktopApp {
                     },
                 )
                 .into_any_element(),
-            ));
+            ))
+    }
 
-        let status = if self.checking_update {
+    fn about_panel(&self, theme: &Theme, cx: &mut Context<'_, Self>) -> Div {
+        let status = if self.updater == Updater::Checking {
             "Checking…".to_string()
         } else if let Some(available) = &self.update {
             format!("Version {} is out.", available.version)
         } else {
             self.update_note.clone().unwrap_or_default()
         };
-        let about = panel("Version", &theme).child(
+        panel("Version", theme).child(
             div()
                 .flex()
                 .items_center()
@@ -1001,52 +1097,41 @@ impl DesktopApp {
                         .flex_col()
                         .gap_1()
                         .child(format!("WormholeSystems {}", crate::update::VERSION))
-                        .when(!status.is_empty(), |d| d.child(muted(status, &theme))),
+                        .when(!status.is_empty(), |d| d.child(muted(status, theme))),
                 )
                 .child(
                     div()
                         .flex()
                         .gap_1()
                         .child(
-                            ui::button("source", "Source code", Kind::Normal, true, &theme)
-                                .on_click(|_, _, cx| {
-                                    cx.open_url(&format!(
-                                        "https://github.com/{}",
-                                        crate::update::REPO
-                                    ))
-                                }),
+                            ui::button(
+                                "source",
+                                "Source code",
+                                Kind::Normal,
+                                ButtonState::Enabled,
+                                theme,
+                            )
+                            .on_click(|_, _, cx| {
+                                cx.open_url(&format!("https://github.com/{}", crate::update::REPO));
+                            }),
                         )
                         .child(
                             ui::button(
                                 "update-check",
                                 "Check now",
                                 Kind::Normal,
-                                !self.checking_update && !self.installing_update,
-                                &theme,
+                                ButtonState::from(self.updater == Updater::Idle),
+                                theme,
                             )
                             .on_click(cx.listener(|this, _, _, cx| this.check_for_update(cx))),
                         ),
                 ),
-        );
-
-        div()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .p_6()
-            .max_w(rpx(720.0))
-            .child(account)
-            .children(maps)
-            .child(logs)
-            .child(overlay)
-            .child(looks)
-            .child(about)
-            .into_any_element()
+        )
     }
 }
 
 impl Render for DesktopApp {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let page = match self.page {
             Page::Signatures => self.signatures_page(cx),

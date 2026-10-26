@@ -36,7 +36,7 @@ async fn locate(pool: &PgPool, id: i64) -> Option<Located> {
         security: row.security_status,
         position: (row.pos_x?, row.pos_y?, row.pos_z?),
         // 7/8/9 are the k-space bands WormholeSystems assigns; anything else is a hole of some kind.
-        is_wormhole: !matches!(row.wormhole_class_id, Some(7) | Some(8) | Some(9) | None),
+        is_wormhole: !matches!(row.wormhole_class_id, Some(7..=9) | None),
     })
 }
 
@@ -106,22 +106,20 @@ fn build(exit: &Located, target: &Located, ship: JumpShip, jdc: i32, distance: f
         )),
         color: security_color(exit.security),
         fields: vec![
-            Field::new(
+            Field::inline(
                 "Exit",
                 format!("{} ({:.1})", exit.name, ccp_round_security(exit.security)),
-                true,
             ),
-            Field::new("Distance", format!("{distance:.2} ly"), true),
-            Field::new(
+            Field::inline("Distance", format!("{distance:.2} ly")),
+            Field::inline(
                 "Ship",
                 format!(
                     "{} (JDC {jdc}): {:.1} ly max",
                     ship.label(),
                     ship.max_range_ly(jdc)
                 ),
-                true,
             ),
-            Field::new("Range map", format!("[Dotlan]({dotlan})"), false),
+            Field::full_width("Range map", format!("[Dotlan]({dotlan})")),
         ],
         thumbnail: None,
         footer: None,

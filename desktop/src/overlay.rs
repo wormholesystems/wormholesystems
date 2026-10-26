@@ -15,9 +15,14 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::component::{ActiveTheme as _, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::*;
+use gpui_kit::{
+    AnyElement, AnyWindowHandle, App, AppContext, Bounds, Context, Div, Entity, Hsla,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ParentElement, Pixels, Point, Render, Size, Stateful, Styled, Subscription, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, canvas, div, point, px,
+};
 
 use crate::config::Overlay;
 #[cfg(not(target_os = "linux"))]
@@ -56,7 +61,7 @@ struct Drag {
     guides: Vec<snap::Guide>,
 }
 
-pub struct OverlayView {
+pub(crate) struct OverlayView {
     sigs: Entity<Sigs>,
     surface: Surface,
     drag: Option<Drag>,
@@ -68,12 +73,12 @@ pub struct OverlayView {
     click_through: bool,
     /// Follows the cursor while the window lets clicks through; see `sync_native_input`.
     #[cfg(not(target_os = "linux"))]
-    cursor_poll: Option<Task<()>>,
+    cursor_poll: Option<gpui_kit::Task<()>>,
     _observe: Subscription,
 }
 
 impl OverlayView {
-    fn new(sigs: Entity<Sigs>, surface: Surface, cx: &mut Context<Self>) -> Self {
+    fn new(sigs: Entity<Sigs>, surface: Surface, cx: &mut Context<'_, Self>) -> Self {
         let observe = cx.observe(&sigs, |_, _, cx| cx.notify());
         OverlayView {
             sigs,
@@ -140,7 +145,7 @@ impl OverlayView {
     }
 
     /// Where a drag ended goes to the app, which keeps it in the settings.
-    fn finish_drag(&mut self, cx: &mut Context<Self>) {
+    fn finish_drag(&mut self, cx: &mut Context<'_, Self>) {
         let Some(drag) = self.drag.take() else { return };
         let r = drag.current;
         let command = Command::PlaceOverlay {
@@ -188,7 +193,7 @@ impl OverlayView {
     /// while dragging or while the cursor is over the panel, and poll the cursor meanwhile,
     /// since a click-through window hears nothing of it.
     #[cfg(not(target_os = "linux"))]
-    fn sync_native_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn sync_native_input(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         // Read the panel's bounds as last painted, not as the last render saw them: the
         // canvas measures them while painting, after the render, and nothing renders again
         // until something changes.
@@ -207,7 +212,14 @@ impl OverlayView {
                 panel.into_iter().chain(popup).any(|r| r.contains(&p))
             });
         if input == self.click_through {
-            native::set_click_through(window, !input);
+            native::set_clicks(
+                window,
+                if input {
+                    native::Clicks::Taken
+                } else {
+                    native::Clicks::PassThrough
+                },
+            );
             self.click_through = !input;
         }
         if self.cursor_poll.is_none() {
@@ -250,11 +262,65 @@ fn guide_line(g: snap::Guide, screen: Size<Pixels>, color: Hsla) -> AnyElement {
     .into_any_element()
 }
 
+impl OverlayView {
+    /// The panel where it floats at `r`, with `base` its background: dragged by its title,
+    /// resized by its grip, and measured for the input region.
+    fn floating(
+        &self,
+        base: Div,
+        r: snap::Rect,
+        theme: &Theme,
+        cx: &mut Context<'_, Self>,
+    ) -> Stateful<Div> {
+        let this = cx.entity().downgrade();
+        let grab: sigs::Grab = Box::new(move |event, _, cx| {
+            this.update(cx, |this, cx| {
+                this.start_drag(DragMode::Move, event.position, r);
+                cx.notify();
+            })
+            .ok();
+        });
+        let measured = Rc::clone(&self.measured);
+        base.id("overlay-panel")
+            .absolute()
+            .left(px(r.x))
+            .top(px(r.y))
+            .w(px(r.w))
+            .h(px(r.h))
+            .when(self.drag.is_some(), |d| d.border_color(theme.primary))
+            .child(crate::ui::top_line(theme))
+            .child(sigs::panel_with(
+                &self.sigs,
+                sigs::Place::Overlay,
+                Some(grab),
+                cx,
+            ))
+            .child(
+                canvas(
+                    move |bounds, _, _| *measured.borrow_mut() = Some(bounds),
+                    |_, (), _, _| {},
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            )
+            .child(resize_grip(theme.muted_foreground).on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.start_drag(DragMode::Resize, event.position, r);
+                    cx.notify();
+                }),
+            ))
+    }
+}
+
 impl Render for OverlayView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
         let settings = self.sigs.read(cx).overlay.clone();
-        let opacity = settings.opacity as f32 / 100.0;
+        let opacity = f32::from(settings.opacity) / 100.0;
         // Its own window, outside the kit's root, so the text size is set here.
         window.set_rem_size(px(crate::ui::scaled_font(settings.text_size)));
         let chrome = |d: Div| {
@@ -267,7 +333,7 @@ impl Render for OverlayView {
 
         if self.surface == Surface::Panel {
             return chrome(div().size_full())
-                .child(sigs::panel(&self.sigs, true, cx))
+                .child(sigs::panel(&self.sigs, sigs::Place::Overlay, cx))
                 .into_any_element();
         }
 
@@ -287,43 +353,7 @@ impl Render for OverlayView {
         let screen = (f32::from(viewport.width), f32::from(viewport.height));
         let r = self.rect(&settings, screen);
 
-        let this = cx.entity().downgrade();
-        let grab: sigs::Grab = Box::new(move |event, _, cx| {
-            this.update(cx, |this, cx| {
-                this.start_drag(DragMode::Move, event.position, r);
-                cx.notify();
-            })
-            .ok();
-        });
-        let measured = Rc::clone(&self.measured);
-        let panel = chrome(div())
-            .id("overlay-panel")
-            .absolute()
-            .left(px(r.x))
-            .top(px(r.y))
-            .w(px(r.w))
-            .h(px(r.h))
-            .when(self.drag.is_some(), |d| d.border_color(theme.primary))
-            .child(crate::ui::top_line(&theme))
-            .child(sigs::panel_with(&self.sigs, true, Some(grab), cx))
-            .child(
-                canvas(
-                    move |bounds, _, _| *measured.borrow_mut() = Some(bounds),
-                    |_, (), _, _| {},
-                )
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full(),
-            )
-            .child(resize_grip(theme.muted_foreground).on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                    cx.stop_propagation();
-                    this.start_drag(DragMode::Resize, event.position, r);
-                    cx.notify();
-                }),
-            ));
+        let panel = self.floating(chrome(div()), r, &theme, cx);
 
         let popup = {
             let sigs = self.sigs.read(cx);
@@ -368,18 +398,21 @@ impl Render for OverlayView {
 }
 
 /// Open the overlay as `settings` describe it.
-pub fn open(
+pub(crate) fn open(
     sigs: Entity<Sigs>,
     settings: &Overlay,
     cx: &mut App,
 ) -> anyhow::Result<AnyWindowHandle> {
     let display = cx.primary_display();
-    let screen = display.as_ref().map(|d| d.bounds()).unwrap_or_else(|| {
-        Bounds::new(
-            point(px(0.0), px(0.0)),
-            gpui_kit::size(px(1920.0), px(1080.0)),
-        )
-    });
+    let screen = display.as_ref().map_or_else(
+        || {
+            Bounds::new(
+                point(px(0.0), px(0.0)),
+                gpui_kit::size(px(1920.0), px(1080.0)),
+            )
+        },
+        |d| d.bounds(),
+    );
     let build = |sigs: Entity<Sigs>, surface: Surface| {
         move |_: &mut Window, cx: &mut App| cx.new(|cx| OverlayView::new(sigs, surface, cx))
     };
@@ -393,7 +426,7 @@ pub fn open(
                 // Anchored to every edge: the compositor makes it the size of the screen.
                 window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                     point(px(0.0), px(0.0)),
-                    size(px(0.0), px(0.0)),
+                    gpui_kit::size(px(0.0), px(0.0)),
                 ))),
                 app_id: Some("wormholesystems-overlay".into()),
                 window_background: WindowBackgroundAppearance::Transparent,
@@ -418,7 +451,7 @@ pub fn open(
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                 point(screen.origin.x + px(x), screen.origin.y + px(y)),
-                size(px(w), px(h)),
+                gpui_kit::size(px(w), px(h)),
             ))),
             titlebar: None,
             focus: false,
@@ -451,7 +484,7 @@ pub fn open(
             ..Default::default()
         };
         let handle = cx.open_window(options, |window, cx| {
-            native::set_click_through(window, true);
+            native::set_clicks(window, native::Clicks::PassThrough);
             build(sigs, Surface::Screen)(window, cx)
         })?;
         Ok(handle.into())

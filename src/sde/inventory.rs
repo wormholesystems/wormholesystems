@@ -43,6 +43,10 @@ pub struct Type {
 /// `groups.jsonl`
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "mirrors the SDE file, whose flags are independent booleans"
+)]
 pub struct Group {
     #[serde(rename = "_key")]
     pub id: i64,

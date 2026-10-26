@@ -17,7 +17,7 @@ async fn alert(pool: &PgPool, map_id: i64) -> i64 {
     .bind(map_id)
     .fetch_one(pool)
     .await
-    .unwrap()
+    .expect("insert map_alerts")
 }
 
 async fn delivery(pool: &PgPool, alert_id: i64, key: &str, days_old: i32) {
@@ -30,14 +30,14 @@ async fn delivery(pool: &PgPool, alert_id: i64, key: &str, days_old: i32) {
     .bind(days_old)
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert map_alert_deliveries");
 }
 
 async fn keys(pool: &PgPool) -> Vec<String> {
     sqlx::query_scalar("select dedup_key from map_alert_deliveries order by dedup_key")
         .fetch_all(pool)
         .await
-        .unwrap()
+        .expect("query map_alert_deliveries")
 }
 
 #[sqlx::test]

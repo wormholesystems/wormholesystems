@@ -33,6 +33,7 @@ pub struct LatestBuild {
 }
 
 /// Downloads SDE builds from CCP's static-data endpoint.
+#[derive(Debug)]
 pub struct Downloader {
     client: Client,
 }

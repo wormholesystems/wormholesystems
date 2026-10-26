@@ -52,16 +52,21 @@ fn kill(seq: i64) -> String {
 async fn receive(State(inbox): State<Arc<Mutex<Vec<Value>>>>, body: String) -> StatusCode {
     inbox
         .lock()
-        .unwrap()
-        .push(serde_json::from_str(&body).unwrap());
+        .expect("mutex poisoned")
+        .push(serde_json::from_str(&body).expect("parse JSON"));
     StatusCode::NO_CONTENT
 }
 
 async fn serve(app: Router) -> String {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let base = format!(
+        "http://{}",
+        listener.local_addr().expect("read listener address")
+    );
     tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
+        axum::serve(listener, app).await.expect("serve test app");
     });
     base
 }
@@ -97,7 +102,7 @@ async fn kills_are_stored_back_to_back_and_alerted_on(pool: PgPool) {
     let discord = serve(
         Router::new()
             .route("/webhook", post(receive))
-            .with_state(inbox.clone()),
+            .with_state(Arc::clone(&inbox)),
     )
     .await;
     let webhook = sqlx::query_scalar!(
@@ -211,7 +216,7 @@ async fn follow(pool: &PgPool, cursor: i64, feed: Feed, timing: Timing) {
     )
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert zkb_state");
     let base = serve(
         Router::new()
             .route("/ephemeral/{name}", get(feed_frame))
@@ -225,14 +230,14 @@ async fn cursor(pool: &PgPool) -> i64 {
     sqlx::query_scalar!("select sequence_id from zkb_state")
         .fetch_one(pool)
         .await
-        .unwrap()
+        .expect("query zkb_state")
 }
 
 async fn stored(pool: &PgPool) -> Vec<i64> {
     sqlx::query_scalar!("select id from killmails order by id")
         .fetch_all(pool)
         .await
-        .unwrap()
+        .expect("query killmails")
 }
 
 /// Down for longer than the feed keeps its files: everything after the cursor 404s. The

@@ -16,7 +16,7 @@ use crate::api::{MassStatus, StatusChange, TimeStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Action {
+pub(crate) enum Action {
     PasteScan,
     DeleteMissing,
     ToggleOverlay,
@@ -30,7 +30,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 10] = [
+    pub(crate) const ALL: [Action; 10] = [
         Action::PasteScan,
         Action::DeleteMissing,
         Action::ToggleOverlay,
@@ -43,7 +43,7 @@ impl Action {
         Action::LifeStable,
     ];
 
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Action::PasteScan => "Paste the scan in the clipboard",
             Action::DeleteMissing => "Delete what the scan no longer sees",
@@ -59,7 +59,7 @@ impl Action {
     }
 
     /// What the action changes on the connection; `None` for one that does not.
-    pub fn change(self) -> Option<StatusChange> {
+    pub(crate) fn change(self) -> Option<StatusChange> {
         let mass = |m| StatusChange {
             mass_status: Some(m),
             ..Default::default()
@@ -83,7 +83,7 @@ impl Action {
     }
 
     /// Control+Alt, which the game leaves alone, plus a letter that says what it does.
-    pub fn defaults() -> BTreeMap<Action, String> {
+    pub(crate) fn defaults() -> BTreeMap<Action, String> {
         [
             (Action::PasteScan, "control+alt+KeyV"),
             (Action::DeleteMissing, "control+alt+KeyD"),
@@ -102,7 +102,7 @@ impl Action {
 
 /// What the digit keys that pick a jump's signature are held with. They are only taken
 /// while a jump is waiting for an answer, so even bare digits leave the game alone otherwise.
-pub const PICK_MODIFIERS: [(&str, &str); 4] = [
+pub(crate) const PICK_MODIFIERS: [(&str, &str); 4] = [
     ("control+alt", "Ctrl+Alt+1"),
     ("alt", "Alt+1"),
     ("control+shift", "Ctrl+Shift+1"),
@@ -119,14 +119,14 @@ fn pick_key(modifiers: &str, digit: u8) -> String {
 }
 
 /// How the pick keys read, without the digit: `Ctrl+Alt+`, or nothing for bare digits.
-pub fn pick_prefix(modifiers: &str) -> String {
+pub(crate) fn pick_prefix(modifiers: &str) -> String {
     let shown = display(&pick_key(modifiers, 1));
     shown.strip_suffix('1').unwrap_or(&shown).to_string()
 }
 
 /// A shortcut that went off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Press {
+pub(crate) enum Press {
     Action(Action),
     /// A digit while a jump waits for its signature: 1 to 9 pick, 0 says none of them.
     Pick(u8),
@@ -134,7 +134,7 @@ pub enum Press {
 
 /// A key press in the app's window as a shortcut, or `None` when it cannot be one: a bare
 /// modifier, or a key without Control, Alt or the platform key (F-keys excepted).
-pub fn from_keystroke(keystroke: &gpui_kit::Keystroke) -> Option<String> {
+pub(crate) fn from_keystroke(keystroke: &gpui_kit::Keystroke) -> Option<String> {
     let m = &keystroke.modifiers;
     let key = keystroke.key.to_lowercase();
     let code = match key.as_str() {
@@ -192,7 +192,7 @@ pub fn from_keystroke(keystroke: &gpui_kit::Keystroke) -> Option<String> {
 }
 
 /// `control+alt+KeyR` as people write it: `Ctrl+Alt+R`.
-pub fn display(hotkey: &str) -> String {
+pub(crate) fn display(hotkey: &str) -> String {
     hotkey
         .split('+')
         .map(|part| match part.to_lowercase().as_str() {
@@ -222,7 +222,7 @@ pub fn display(hotkey: &str) -> String {
 }
 
 /// The shortcuts registered with the system right now.
-pub struct Registry {
+pub(crate) struct Registry {
     manager: Option<GlobalHotKeyManager>,
     bound: Vec<(HotKey, Action)>,
     picks: Vec<(HotKey, u8)>,
@@ -232,7 +232,7 @@ pub struct Registry {
 
 impl Registry {
     /// Must run on the main thread, which is where GPUI calls the app from.
-    pub fn new() -> Registry {
+    pub(crate) fn new() -> Registry {
         match GlobalHotKeyManager::new() {
             Ok(manager) => Registry {
                 manager: Some(manager),
@@ -251,7 +251,7 @@ impl Registry {
 
     /// Replace what is registered with `bindings`. Returns the ones the system refused,
     /// usually because another program holds them.
-    pub fn apply(&mut self, bindings: &BTreeMap<Action, String>) -> Vec<(Action, String)> {
+    pub(crate) fn apply(&mut self, bindings: &BTreeMap<Action, String>) -> Vec<(Action, String)> {
         let Some(manager) = &self.manager else {
             return Vec::new();
         };
@@ -278,7 +278,7 @@ impl Registry {
 
     /// Take the digit keys held with `modifiers` while a jump waits for its signature, or
     /// give them back with `None`. Returns why the system refused, if it did.
-    pub fn set_picks(&mut self, modifiers: Option<&str>) -> Option<String> {
+    pub(crate) fn set_picks(&mut self, modifiers: Option<&str>) -> Option<String> {
         let manager = self.manager.as_ref()?;
         for (hotkey, _) in self.picks.drain(..) {
             let _ = manager.unregister(hotkey);
@@ -303,7 +303,7 @@ impl Registry {
     }
 
     /// The shortcuts pressed since the last call.
-    pub fn pressed(&self) -> Vec<Press> {
+    pub(crate) fn pressed(&self) -> Vec<Press> {
         let mut out = Vec::new();
         while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
             if event.state() != HotKeyState::Pressed {

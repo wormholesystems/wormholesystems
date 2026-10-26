@@ -40,6 +40,12 @@ pub struct Telemetry {
     _otel: Option<otel::Tracing>,
 }
 
+impl std::fmt::Debug for Telemetry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Telemetry").finish_non_exhaustive()
+    }
+}
+
 /// Install the subscriber and whichever hooks are configured. Logs go to stderr, so the few
 /// subcommands whose stdout is read by a script (`sde-status`) keep it to themselves.
 /// `RUST_LOG` narrows or widens it per module; unset means `info`.
@@ -121,10 +127,12 @@ pub type TraceLayer = tower_http::trace::TraceLayer<
 /// The request span around the router: [`request_span`], with the status recorded on it.
 /// No events of its own: a failure is the handler's to log, with what it knows.
 pub fn trace_layer() -> TraceLayer {
+    let make_span: fn(&_) -> _ = request_span;
+    let on_response: fn(&_, _, &_) = record_status;
     tower_http::trace::TraceLayer::new_for_http()
-        .make_span_with(request_span as fn(&_) -> _)
+        .make_span_with(make_span)
         .on_request(())
-        .on_response(record_status as fn(&_, _, &_))
+        .on_response(on_response)
         .on_body_chunk(())
         .on_eos(())
         .on_failure(())

@@ -8,27 +8,31 @@ use std::time::Duration;
 
 use gpui_kit::component::Theme;
 use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::*;
+use gpui_kit::{
+    Animation, AnimationExt, AnyElement, Div, ElementId, Image, InteractiveElement, IntoElement,
+    ParentElement, Rems, SharedString, Stateful, StatefulInteractiveElement, Styled, div,
+    ease_out_quint, img, linear_color_stop, linear_gradient, px, rems, svg,
+};
 
 use crate::theme::{self, HEADING};
 
 /// The base font size the sizes here are written against.
-pub const BASE_FONT: f32 = 16.0;
+pub(crate) const BASE_FONT: f32 = 16.0;
 
 /// The base font size at `percent`, kept to sizes the layout holds up at.
-pub fn scaled_font(percent: u8) -> f32 {
-    BASE_FONT * percent.clamp(75, 150) as f32 / 100.0
+pub(crate) fn scaled_font(percent: u8) -> f32 {
+    BASE_FONT * f32::from(percent.clamp(75, 150)) / 100.0
 }
 
 /// `value` pixels at the base font size, growing and shrinking with the window's font size
 /// setting like the text does.
-pub fn rpx(value: f32) -> Rems {
+pub(crate) fn rpx(value: f32) -> Rems {
     rems(value / BASE_FONT)
 }
 
 /// What a button is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
+pub(crate) enum Kind {
     /// The one thing to do here: tinted with the accent, like EVE's "Place Buy Order".
     Primary,
     Normal,
@@ -37,21 +41,40 @@ pub enum Kind {
     Danger,
 }
 
+/// Whether a button takes clicks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ButtonState {
+    Enabled,
+    /// Dimmed, and no hover.
+    Disabled,
+}
+
+impl From<bool> for ButtonState {
+    /// Enabled when `enabled`.
+    fn from(enabled: bool) -> Self {
+        if enabled {
+            Self::Enabled
+        } else {
+            Self::Disabled
+        }
+    }
+}
+
 /// A flat button with a hairline outline. The caller adds `on_click`; a disabled one is
 /// dimmed and takes no clicks.
-pub fn button(
+pub(crate) fn button(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
     kind: Kind,
-    enabled: bool,
+    state: ButtonState,
     theme: &Theme,
 ) -> Stateful<Div> {
-    frame(id, kind, enabled, theme).child(label.into())
+    frame(id, kind, state, theme).child(label.into())
 }
 
 /// A button for a character: their portrait, then their name. Until the portrait is in,
 /// a dim square holds its place.
-pub fn character(
+pub(crate) fn character(
     id: impl Into<ElementId>,
     name: impl Into<SharedString>,
     portrait: Option<Arc<Image>>,
@@ -67,14 +90,14 @@ pub fn character(
             .bg(theme.foreground.opacity(0.08))
             .into_any_element(),
     };
-    frame(id, kind, true, theme)
+    frame(id, kind, ButtonState::Enabled, theme)
         .pl(rpx(3.0))
         .gap(rpx(6.0))
         .child(picture)
         .child(name.into())
 }
 
-fn frame(id: impl Into<ElementId>, kind: Kind, enabled: bool, theme: &Theme) -> Stateful<Div> {
+fn frame(id: impl Into<ElementId>, kind: Kind, state: ButtonState, theme: &Theme) -> Stateful<Div> {
     let accent = theme.primary;
     let white = theme.foreground;
     let (text, border, fill) = match kind {
@@ -124,19 +147,17 @@ fn frame(id: impl Into<ElementId>, kind: Kind, enabled: bool, theme: &Theme) -> 
                     .bg(accent),
             )
         })
-        .map(|d| {
-            if enabled {
-                d.cursor_pointer()
-                    .hover(move |s| s.border_color(hover.opacity(0.6)).bg(hover.opacity(0.12)))
-                    .active(move |s| s.bg(hover.opacity(0.22)))
-            } else {
-                d.opacity(0.4)
-            }
+        .map(|d| match state {
+            ButtonState::Enabled => d
+                .cursor_pointer()
+                .hover(move |s| s.border_color(hover.opacity(0.6)).bg(hover.opacity(0.12)))
+                .active(move |s| s.bg(hover.opacity(0.22))),
+            ButtonState::Disabled => d.opacity(0.4),
         })
 }
 
 /// A framed section, like a Photon window: a quiet title, then the children, padded.
-pub fn section(title: impl Into<SharedString>, theme: &Theme) -> Div {
+pub(crate) fn section(title: impl Into<SharedString>, theme: &Theme) -> Div {
     div()
         .flex_none()
         .relative()
@@ -154,7 +175,7 @@ pub fn section(title: impl Into<SharedString>, theme: &Theme) -> Div {
 }
 
 /// The thin accent line along a frame's top edge.
-pub fn top_line(theme: &Theme) -> Div {
+pub(crate) fn top_line(theme: &Theme) -> Div {
     div()
         .absolute()
         .top(px(-1.0))
@@ -169,7 +190,7 @@ pub fn top_line(theme: &Theme) -> Div {
 }
 
 /// A window title the way Photon writes it: small, mixed case, muted.
-pub fn title_text(title: impl Into<SharedString>, theme: &Theme) -> Div {
+pub(crate) fn title_text(title: impl Into<SharedString>, theme: &Theme) -> Div {
     div()
         .font_family(HEADING)
         .text_size(rpx(13.0))
@@ -179,7 +200,7 @@ pub fn title_text(title: impl Into<SharedString>, theme: &Theme) -> Div {
 
 /// How a notice reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mood {
+pub(crate) enum Mood {
     Info,
     Done,
     Problem,
@@ -187,7 +208,7 @@ pub enum Mood {
 
 /// A short line about what just happened, shown in a header for a few seconds.
 #[derive(Debug, Clone)]
-pub struct Notice {
+pub(crate) struct Notice {
     pub mood: Mood,
     pub text: String,
     /// Tells one notice from the next, so a timer only clears its own.
@@ -198,7 +219,7 @@ pub struct Notice {
 
 impl Notice {
     /// How long it stays before fading: a problem gets time to be read.
-    pub fn lasts(&self) -> Duration {
+    pub(crate) fn lasts(&self) -> Duration {
         match self.mood {
             Mood::Problem => Duration::from_secs(7),
             _ => Duration::from_millis(2600),
@@ -206,10 +227,10 @@ impl Notice {
     }
 }
 
-pub const FADE: Duration = Duration::from_millis(260);
+pub(crate) const FADE: Duration = Duration::from_millis(260);
 
 /// The notice: an icon and the line, sliding in from above and fading out when it leaves.
-pub fn notice(notice: &Notice, theme: &Theme) -> AnyElement {
+pub(crate) fn notice(notice: &Notice, theme: &Theme) -> AnyElement {
     let (icon, color) = match notice.mood {
         Mood::Done => ("icons/circle-check.svg", theme::added()),
         Mood::Info => ("icons/info.svg", theme.primary),

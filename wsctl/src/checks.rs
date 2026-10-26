@@ -11,7 +11,7 @@ use crate::config::{CERTS_DIR, DEFAULT_CERT, DEFAULT_KEY, Database, Deployment, 
 use crate::exec::Runner;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Verdict {
+pub(crate) enum Verdict {
     Ok,
     /// Worth saying, not worth stopping for.
     Warn,
@@ -20,7 +20,7 @@ pub enum Verdict {
 }
 
 #[derive(Debug, Clone)]
-pub struct Check {
+pub(crate) struct Check {
     pub verdict: Verdict,
     pub label: String,
     /// What to do about it, when there is something to do.
@@ -28,21 +28,21 @@ pub struct Check {
 }
 
 impl Check {
-    pub fn ok(label: impl Into<String>) -> Self {
+    pub(crate) fn ok(label: impl Into<String>) -> Self {
         Self {
             verdict: Verdict::Ok,
             label: label.into(),
             hint: None,
         }
     }
-    pub fn warn(label: impl Into<String>, hint: impl Into<String>) -> Self {
+    pub(crate) fn warn(label: impl Into<String>, hint: impl Into<String>) -> Self {
         Self {
             verdict: Verdict::Warn,
             label: label.into(),
             hint: Some(hint.into()),
         }
     }
-    pub fn fatal(label: impl Into<String>, hint: impl Into<String>) -> Self {
+    pub(crate) fn fatal(label: impl Into<String>, hint: impl Into<String>) -> Self {
         Self {
             verdict: Verdict::Fatal,
             label: label.into(),
@@ -51,7 +51,7 @@ impl Check {
     }
 }
 
-pub fn docker(runner: &mut dyn Runner, dir: &Path) -> Check {
+pub(crate) fn docker(runner: &mut dyn Runner, dir: &Path) -> Check {
     let Ok(version) = runner.capture(
         dir,
         "docker",
@@ -98,7 +98,7 @@ fn compose_version(short: &str) -> Option<(u32, u32)> {
 /// Building the API compiles Rust, which wants about 2GB; with less, the compiler is
 /// killed part way and the build fails with nothing useful to say. Counts swap, since
 /// that is the usual fix. None where the memory cannot be read (anything but Linux).
-pub fn memory_for_building() -> Option<Check> {
+pub(crate) fn memory_for_building() -> Option<Check> {
     let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
     let kb = |name: &str| -> u64 {
         meminfo
@@ -125,9 +125,27 @@ pub fn memory_for_building() -> Option<Check> {
 
 const BUILD_NEEDS_MB: u64 = 1900;
 
+/// Whether this stack's own service, the one that holds these ports on a machine that is
+/// already serving, is running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OwnStack {
+    Running,
+    Stopped,
+}
+
+impl From<bool> for OwnStack {
+    fn from(running: bool) -> Self {
+        if running {
+            Self::Running
+        } else {
+            Self::Stopped
+        }
+    }
+}
+
 /// The bundled database's loopback port (DB_PORT), which a Postgres already on this
 /// machine is usually holding.
-pub fn database_port(port: u16, ours: bool) -> Check {
+pub(crate) fn database_port(port: u16, ours: OwnStack) -> Check {
     let mut check = ports(&[port], ours).remove(0);
     if check.verdict == Verdict::Fatal {
         check.label = format!("port {port} (DB_PORT, the database on 127.0.0.1) is in use");
@@ -138,7 +156,7 @@ pub fn database_port(port: u16, ours: bool) -> Check {
 }
 
 /// The release build wants roughly 2GB of memory and the static data a few GB of disk.
-pub fn disk(path: &Path) -> Check {
+pub(crate) fn disk(path: &Path) -> Check {
     let Some(free) = free_gb(path) else {
         return Check::warn("could not read the free disk space", "Check it by hand.");
     };
@@ -152,9 +170,9 @@ pub fn disk(path: &Path) -> Check {
     }
 }
 
-/// `ours` says this stack's own proxy is running, which is what holds these ports on a
-/// machine that is already serving. Busy is only a problem when it is somebody else.
-pub fn ports(ports: &[u16], ours: bool) -> Vec<Check> {
+/// `ours` says whether this stack's own proxy is running, which is what holds these ports
+/// on a machine that is already serving. Busy is only a problem when it is somebody else.
+pub(crate) fn ports(ports: &[u16], ours: OwnStack) -> Vec<Check> {
     ports
         .iter()
         .map(|&port| match (port_state(port), ours) {
@@ -162,8 +180,10 @@ pub fn ports(ports: &[u16], ours: bool) -> Vec<Check> {
             (Port::NothingAnswers, _) => Check::ok(format!(
                 "nothing answers on port {port} (only root can bind it to be sure; Docker will)"
             )),
-            (Port::Busy, true) => Check::ok(format!("port {port} is held by this stack")),
-            (Port::Busy, false) => Check::fatal(
+            (Port::Busy, OwnStack::Running) => {
+                Check::ok(format!("port {port} is held by this stack"))
+            }
+            (Port::Busy, OwnStack::Stopped) => Check::fatal(
                 format!("port {port} is already in use"),
                 "Stop whatever is on it, or pick another port in `wsctl setup`.",
             ),
@@ -182,7 +202,7 @@ enum Port {
 
 /// Whether the name points here. Certificates cannot be issued for a name that does not
 /// resolve, and Let's Encrypt has to reach port 80 on this machine.
-pub fn dns(domain: &str, public: Option<IpAddr>) -> Check {
+pub(crate) fn dns(domain: &str, public: Option<IpAddr>) -> Check {
     if domain.is_empty() {
         return Check::ok("no domain, so plain http on this machine");
     }
@@ -195,7 +215,7 @@ pub fn dns(domain: &str, public: Option<IpAddr>) -> Check {
     }
     let list = resolved
         .iter()
-        .map(|ip| ip.to_string())
+        .map(std::string::ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ");
     match public {
@@ -212,7 +232,7 @@ pub fn dns(domain: &str, public: Option<IpAddr>) -> Check {
 }
 
 /// Whether the checkout is behind its remote, so an update is not a surprise later.
-pub fn repo(runner: &mut dyn Runner, dir: &Path) -> Check {
+pub(crate) fn repo(runner: &mut dyn Runner, dir: &Path) -> Check {
     if runner
         .capture(dir, "git", &["rev-parse", "--git-dir"])
         .is_err()
@@ -251,7 +271,7 @@ pub fn repo(runner: &mut dyn Runner, dir: &Path) -> Check {
 
 /// Whether an external database answers where the API will look
 /// for it: inside the Docker network, not on this machine's loopback.
-pub fn database(runner: &mut dyn Runner, dir: &Path, network: &str, url: &str) -> Check {
+pub(crate) fn database(runner: &mut dyn Runner, dir: &Path, network: &str, url: &str) -> Check {
     let Some((host, port)) = database_address(url) else {
         return Check::fatal(
             "WS_DATABASE_URL is not a postgres:// URL",
@@ -275,7 +295,7 @@ pub fn database(runner: &mut dyn Runner, dir: &Path, network: &str, url: &str) -
 }
 
 /// The certificate and key WS_TLS=files mounts into Caddy. Missing, Caddy refuses to start.
-pub fn certificate_files(dir: &Path) -> Check {
+pub(crate) fn certificate_files(dir: &Path) -> Check {
     let env = std::fs::read_to_string(dir.join(".env")).unwrap_or_default();
     let name = |key: &str, fallback: &str| {
         crate::envfile::get(&env, key)
@@ -300,7 +320,7 @@ pub fn certificate_files(dir: &Path) -> Check {
     }
 }
 
-pub fn network(runner: &mut dyn Runner, dir: &Path, name: &str) -> Check {
+pub(crate) fn network(runner: &mut dyn Runner, dir: &Path, name: &str) -> Check {
     if crate::stack::network_exists(runner, dir, name) {
         Check::ok(format!("the Docker network {name} exists"))
     } else {
@@ -312,7 +332,7 @@ pub fn network(runner: &mut dyn Runner, dir: &Path, name: &str) -> Check {
 }
 
 /// Host and port out of a postgres URL, the port defaulting the way libpq's does.
-pub fn database_address(url: &str) -> Option<(String, u16)> {
+pub(crate) fn database_address(url: &str) -> Option<(String, u16)> {
     let rest = url
         .strip_prefix("postgres://")
         .or_else(|| url.strip_prefix("postgresql://"))?;
@@ -339,7 +359,7 @@ pub fn database_address(url: &str) -> Option<(String, u16)> {
     Some((host.to_string(), port))
 }
 
-pub fn worst(checks: &[Check]) -> Verdict {
+pub(crate) fn worst(checks: &[Check]) -> Verdict {
     checks
         .iter()
         .map(|c| c.verdict)
@@ -373,7 +393,7 @@ fn port_state(port: u16) -> Port {
     }
 }
 
-pub fn free_gb(path: &Path) -> Option<u64> {
+pub(crate) fn free_gb(path: &Path) -> Option<u64> {
     let out = Command::new("df")
         .args(["-Pk", path.to_str()?])
         .stderr(Stdio::null())
@@ -391,7 +411,7 @@ pub fn free_gb(path: &Path) -> Option<u64> {
 }
 
 /// This machine's address as the internet sees it. Best effort: a warning either way.
-pub fn public_ip() -> Option<IpAddr> {
+pub(crate) fn public_ip() -> Option<IpAddr> {
     for url in ["https://api.ipify.org", "https://ifconfig.me"] {
         let out = Command::new("curl")
             .args(["-fsS", "--max-time", "5", url])
@@ -406,13 +426,17 @@ pub fn public_ip() -> Option<IpAddr> {
 }
 
 /// The machine itself: what every install needs whichever way it is put together.
-pub fn machine(runner: &mut dyn Runner, dir: &Path) -> Vec<Check> {
+pub(crate) fn machine(runner: &mut dyn Runner, dir: &Path) -> Vec<Check> {
     vec![docker(runner, dir), disk(dir), repo(runner, dir)]
 }
 
 /// What the install's own choices need: the ports and the name Caddy takes, the networks
 /// a proxy finds the app on, the database it connects to.
-pub fn deployment(runner: &mut dyn Runner, dir: &Path, deployment: &Deployment) -> Vec<Check> {
+pub(crate) fn deployment(
+    runner: &mut dyn Runner,
+    dir: &Path,
+    deployment: &Deployment,
+) -> Vec<Check> {
     let mut checks = Vec::new();
 
     let proxy_network = deployment.proxy_network();
@@ -443,13 +467,13 @@ pub fn deployment(runner: &mut dyn Runner, dir: &Path, deployment: &Deployment) 
         let port = crate::envfile::get(&env, "DB_PORT")
             .and_then(|p| p.parse().ok())
             .unwrap_or(5432);
-        let ours = crate::stack::service_running(runner, dir, "db");
+        let ours = OwnStack::from(crate::stack::service_running(runner, dir, "db"));
         checks.push(database_port(port, ours));
     }
 
     match &deployment.proxy {
         Proxy::Caddy(site) => {
-            let ours = crate::stack::proxy_running(runner, dir);
+            let ours = OwnStack::from(crate::stack::proxy_running(runner, dir));
             checks.extend(ports(&[site.http_port, site.https_port], ours));
             let mut name = dns(&site.domain, public_ip());
             // Only Let's Encrypt has to reach this machine by the name. With a certificate
@@ -464,13 +488,13 @@ pub fn deployment(runner: &mut dyn Runner, dir: &Path, deployment: &Deployment) 
         }
         Proxy::Router(router) => {
             if let Some(port) = router.port {
-                let ours = crate::stack::proxy_running(runner, dir);
+                let ours = OwnStack::from(crate::stack::proxy_running(runner, dir));
                 checks.extend(ports(&[port], ours));
             }
         }
         Proxy::Direct(direct) => {
             if let Some((api, web)) = direct.host_ports {
-                let ours = crate::stack::service_running(runner, dir, "api");
+                let ours = OwnStack::from(crate::stack::service_running(runner, dir, "api"));
                 checks.extend(ports(&[api, web], ours));
             }
         }
@@ -505,10 +529,10 @@ mod tests {
     fn a_busy_database_port_names_db_port() {
         let held = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
         let port = held.local_addr().unwrap().port();
-        let check = database_port(port, false);
+        let check = database_port(port, OwnStack::Stopped);
         assert_eq!(check.verdict, Verdict::Fatal);
         assert!(check.label.contains("DB_PORT"));
-        assert_eq!(database_port(port, true).verdict, Verdict::Ok);
+        assert_eq!(database_port(port, OwnStack::Running).verdict, Verdict::Ok);
     }
 
     #[test]
@@ -533,7 +557,7 @@ mod tests {
     fn a_port_something_else_is_listening_on_is_fatal() {
         let held = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
         let port = held.local_addr().unwrap().port();
-        assert_eq!(ports(&[port], false)[0].verdict, Verdict::Fatal);
+        assert_eq!(ports(&[port], OwnStack::Stopped)[0].verdict, Verdict::Fatal);
     }
 
     // A non-root user cannot bind below 1024 at all, which is not the same as the port
@@ -544,7 +568,7 @@ mod tests {
             return; // root, or unprivileged ports lowered: nothing to tell apart here
         }
         assert_eq!(port_state(1), Port::NothingAnswers);
-        assert_eq!(ports(&[1], false)[0].verdict, Verdict::Ok);
+        assert_eq!(ports(&[1], OwnStack::Stopped)[0].verdict, Verdict::Ok);
     }
 
     // An install that is already serving holds its own ports, and telling its operator to
@@ -553,7 +577,7 @@ mod tests {
     fn a_port_this_stack_holds_is_fine() {
         let held = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
         let port = held.local_addr().unwrap().port();
-        assert_eq!(ports(&[port], true)[0].verdict, Verdict::Ok);
+        assert_eq!(ports(&[port], OwnStack::Running)[0].verdict, Verdict::Ok);
     }
 
     #[test]
@@ -665,7 +689,7 @@ mod tests {
             "postgres://ws:secret@localhost:5432/ws",
         );
         assert_eq!(check.verdict, Verdict::Fatal);
-        assert!(runner.commands.is_empty());
+        assert_eq!(runner.commands, Vec::<String>::new());
     }
 
     #[test]

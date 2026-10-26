@@ -29,6 +29,32 @@ pub async fn link_signature(pool: &PgPool, actor: Actor, cmd: LinkSignature) -> 
     run(pool, actor, cmd).await
 }
 
+/// The connection must be on this map and touch the signature's system (one of its two
+/// endpoint placements is in that solar system).
+async fn check_reaches(tx: &mut Tx<'_>, cmd: &LinkSignature, solar_system_id: i64) -> Result<()> {
+    let ok = sqlx::query_scalar!(
+        "select exists(
+             select 1
+             from map_connections c
+             join map_solar_systems mss on mss.id in (c.from_system, c.to_system)
+             where c.id = $1 and c.map_id = $2 and mss.solar_system_id = $3
+         )",
+        cmd.connection_id,
+        cmd.map_id,
+        solar_system_id,
+    )
+    .fetch_one(&mut **tx)
+    .await?
+    .unwrap_or(false);
+    if ok {
+        Ok(())
+    } else {
+        Err(MapError::Validation(
+            "connection must be on this map and reach the signature's system".into(),
+        ))
+    }
+}
+
 pub(in crate::maps) async fn apply_link_signature(
     tx: &mut Tx<'_>,
     cmd: LinkSignature,
@@ -40,27 +66,7 @@ pub(in crate::maps) async fn apply_link_signature(
         ));
     }
 
-    // The connection must be on this map and touch the signature's system (one of its two
-    // endpoint placements is in that solar system).
-    let ok = sqlx::query_scalar!(
-        "select exists(
-             select 1
-             from map_connections c
-             join map_solar_systems mss on mss.id in (c.from_system, c.to_system)
-             where c.id = $1 and c.map_id = $2 and mss.solar_system_id = $3
-         )",
-        cmd.connection_id,
-        cmd.map_id,
-        sig.solar_system_id,
-    )
-    .fetch_one(&mut **tx)
-    .await?
-    .unwrap_or(false);
-    if !ok {
-        return Err(MapError::Validation(
-            "connection must be on this map and reach the signature's system".into(),
-        ));
-    }
+    check_reaches(tx, &cmd, sig.solar_system_id).await?;
 
     // One signature per side: the group's state is the hole's, and two signatures sharing
     // it would mean two scans of one hole. Saying "this one is the hole" therefore lets

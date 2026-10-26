@@ -55,17 +55,25 @@ fn clear_dir(dir: impl AsRef<Path>) -> std::io::Result<()> {
 ///
 /// Blocking network and disk I/O; call it via `spawn_blocking` when on an async runtime.
 pub fn ensure_present() -> Result<bool, EnsurePresentError> {
-    fetch(false)
+    fetch(Fetch::IfMissing)
 }
 
-/// As [`ensure_present`], but `force` downloads the current build over whatever is there.
-/// CCP releases a new build every few days, and old files are left in place rather than
-/// removed: a type CCP dropped would otherwise linger and be seeded forever.
-pub fn fetch(force: bool) -> Result<bool, EnsurePresentError> {
-    if !force && Path::new(SDE_DIR).join(SDE_MARKER).exists() {
+/// Whether [`fetch`] keeps an SDE that is already unpacked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fetch {
+    IfMissing,
+    /// Download the current build over whatever is there. CCP releases a new build every
+    /// few days, and old files are removed rather than left in place: a type CCP dropped
+    /// would otherwise linger and be seeded forever.
+    Replace,
+}
+
+/// As [`ensure_present`], or with [`Fetch::Replace`] a fresh download regardless.
+pub fn fetch(mode: Fetch) -> Result<bool, EnsurePresentError> {
+    if mode == Fetch::IfMissing && Path::new(SDE_DIR).join(SDE_MARKER).exists() {
         return Ok(false);
     }
-    if force && Path::new(SDE_DIR).exists() {
+    if mode == Fetch::Replace && Path::new(SDE_DIR).exists() {
         clear_dir(SDE_DIR)?;
     }
 

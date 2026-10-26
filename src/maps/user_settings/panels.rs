@@ -170,13 +170,13 @@ mod layout_tests {
         )])
     }
 
-    fn tile(i: &str, x: i32, y: i32, w: i32, h: i32) -> LayoutItem {
+    fn tile(id: &str, x: i32, y: i32, width: i32, height: i32) -> LayoutItem {
         LayoutItem {
-            i: i.into(),
+            i: id.into(),
             x,
             y,
-            w,
-            h,
+            w: width,
+            h: height,
         }
     }
 

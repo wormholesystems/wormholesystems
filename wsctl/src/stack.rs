@@ -11,9 +11,9 @@ use crate::config::Images;
 use crate::exec::Runner;
 
 /// `docker compose <args>`, which is how the whole stack is addressed.
-pub fn compose(args: &[&str]) -> Vec<String> {
+pub(crate) fn compose(args: &[&str]) -> Vec<String> {
     let mut out = vec!["compose".to_string()];
-    out.extend(args.iter().map(|a| a.to_string()));
+    out.extend(args.iter().map(std::string::ToString::to_string));
     out
 }
 
@@ -21,13 +21,13 @@ fn as_refs(args: &[String]) -> Vec<&str> {
     args.iter().map(String::as_str).collect()
 }
 
-pub fn build(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
+pub(crate) fn build(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
     runner.run(dir, "docker", &as_refs(&compose(&["build"])))
 }
 
 /// Fetch every image the stack runs: the published API and frontend, and the Postgres and
 /// Caddy releases, which a build never touches.
-pub fn pull(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
+pub(crate) fn pull(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
     runner
         .run(dir, "docker", &as_refs(&compose(&["pull"])))
         .context("could not pull the images; `WS_IMAGES=build` in .env builds them here instead")
@@ -35,7 +35,7 @@ pub fn pull(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
 
 /// Have the images ready before anything is stopped, so the old containers keep serving
 /// for however long this takes.
-pub fn images(runner: &mut dyn Runner, dir: &Path, images: Images) -> Result<()> {
+pub(crate) fn images(runner: &mut dyn Runner, dir: &Path, images: Images) -> Result<()> {
     match images {
         Images::Pull => pull(runner, dir),
         Images::Build => build(runner, dir),
@@ -53,7 +53,7 @@ const WAIT_SECS: &str = "1800";
 /// Pulling installs say `--no-build`: a service with both `image` and `build` that is missing
 /// its image is otherwise built on the spot, and a pull that failed quietly would turn into
 /// a Rust compile on a server that was never meant to run one.
-pub fn up(runner: &mut dyn Runner, dir: &Path, images: Images) -> Result<()> {
+pub(crate) fn up(runner: &mut dyn Runner, dir: &Path, images: Images) -> Result<()> {
     let mut args = vec!["up", "-d", "--wait", "--wait-timeout", WAIT_SECS];
     if images == Images::Pull {
         args.push("--no-build");
@@ -68,7 +68,7 @@ pub fn up(runner: &mut dyn Runner, dir: &Path, images: Images) -> Result<()> {
 /// Drop the build cache and images a rebuild has just superseded. Every api build leaves
 /// a full set of layers behind, and a small disk fills within weeks of updates. Cache the
 /// build just used is under a day old and stays, so the next update is still incremental.
-pub fn prune(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
+pub(crate) fn prune(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
     runner.run(
         dir,
         "docker",
@@ -77,13 +77,13 @@ pub fn prune(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
     runner.run(dir, "docker", &["image", "prune", "-f"])
 }
 
-pub fn stop(runner: &mut dyn Runner, dir: &Path, service: &str) -> Result<()> {
+pub(crate) fn stop(runner: &mut dyn Runner, dir: &Path, service: &str) -> Result<()> {
     runner.run(dir, "docker", &as_refs(&compose(&["stop", service])))
 }
 
 /// Stop and remove a service's container, for one an overlay or a profile has taken out of
 /// the stack: compose no longer touches it on its own.
-pub fn remove(runner: &mut dyn Runner, dir: &Path, service: &str) -> Result<()> {
+pub(crate) fn remove(runner: &mut dyn Runner, dir: &Path, service: &str) -> Result<()> {
     runner.run(dir, "docker", &as_refs(&compose(&["rm", "-sf", service])))
 }
 
@@ -102,27 +102,32 @@ fn backup_args<'a>(args: &[&'a str], mounts: &'a [String]) -> Vec<&'a str> {
 }
 
 /// A one-off backup command whose output is read.
-pub fn backup(runner: &mut dyn Runner, dir: &Path, args: &[&str]) -> Result<String> {
+pub(crate) fn backup(runner: &mut dyn Runner, dir: &Path, args: &[&str]) -> Result<String> {
     runner.capture(dir, "docker", &backup_args(args, &[]))
 }
 
 /// Dump the database now, labelled. Answers with the dump's file name.
-pub fn dump(runner: &mut dyn Runner, dir: &Path, label: &str) -> Result<String> {
+pub(crate) fn dump(runner: &mut dyn Runner, dir: &Path, label: &str) -> Result<String> {
     let out = backup(runner, dir, &["dump", label])?;
     Ok(out.lines().last().unwrap_or_default().trim().to_string())
 }
 
 /// Replace the database with the dump at `inside`, a path in the backup container.
 /// Streamed, since a large restore takes a while and its errors are what matters.
-pub fn restore(runner: &mut dyn Runner, dir: &Path, inside: &str, mounts: &[String]) -> Result<()> {
+pub(crate) fn restore(
+    runner: &mut dyn Runner,
+    dir: &Path,
+    inside: &str,
+    mounts: &[String],
+) -> Result<()> {
     runner.run(dir, "docker", &backup_args(&["restore", inside], mounts))
 }
 
-pub fn restart(runner: &mut dyn Runner, dir: &Path, service: &str) -> Result<()> {
+pub(crate) fn restart(runner: &mut dyn Runner, dir: &Path, service: &str) -> Result<()> {
     runner.run(dir, "docker", &as_refs(&compose(&["restart", service])))
 }
 
-pub fn ps(runner: &mut dyn Runner, dir: &Path) -> Result<String> {
+pub(crate) fn ps(runner: &mut dyn Runner, dir: &Path) -> Result<String> {
     runner.capture(dir, "docker", &as_refs(&compose(&["ps"])))
 }
 
@@ -142,17 +147,17 @@ fn api_args<'a>(args: &[&'a str]) -> Vec<&'a str> {
 
 /// One-shot command in a throwaway api container, with no dependencies started, whose
 /// output is read.
-pub fn api(runner: &mut dyn Runner, dir: &Path, args: &[&str]) -> Result<String> {
+pub(crate) fn api(runner: &mut dyn Runner, dir: &Path, args: &[&str]) -> Result<String> {
     runner.capture(dir, "docker", &api_args(args))
 }
 
 /// The same, with its output on the terminal as it goes, for the long ones.
-pub fn api_streamed(runner: &mut dyn Runner, dir: &Path, args: &[&str]) -> Result<()> {
+pub(crate) fn api_streamed(runner: &mut dyn Runner, dir: &Path, args: &[&str]) -> Result<()> {
     runner.run(dir, "docker", &api_args(args))
 }
 
 /// Where Docker keeps its volumes on this machine, when it says.
-pub fn docker_root(runner: &mut dyn Runner, dir: &Path) -> Option<String> {
+pub(crate) fn docker_root(runner: &mut dyn Runner, dir: &Path) -> Option<String> {
     runner
         .capture(dir, "docker", &["info", "--format", "{{.DockerRootDir}}"])
         .ok()
@@ -162,18 +167,18 @@ pub fn docker_root(runner: &mut dyn Runner, dir: &Path) -> Option<String> {
 /// Whether this stack's own proxy is up. It is the thing holding 80 and 443 on a machine
 /// that is already running, and a port check that does not know this tells the operator to
 /// stop the very stack they are updating.
-pub fn proxy_running(runner: &mut dyn Runner, dir: &Path) -> bool {
+pub(crate) fn proxy_running(runner: &mut dyn Runner, dir: &Path) -> bool {
     service_running(runner, dir, "caddy")
 }
 
 /// Whether one of this stack's services has a container up.
-pub fn service_running(runner: &mut dyn Runner, dir: &Path, service: &str) -> bool {
+pub(crate) fn service_running(runner: &mut dyn Runner, dir: &Path, service: &str) -> bool {
     runner
         .capture(dir, "docker", &as_refs(&compose(&["ps", "-q", service])))
         .is_ok_and(|out| !out.trim().is_empty())
 }
 
-pub fn network_exists(runner: &mut dyn Runner, dir: &Path, name: &str) -> bool {
+pub(crate) fn network_exists(runner: &mut dyn Runner, dir: &Path, name: &str) -> bool {
     runner
         .capture(
             dir,
@@ -185,7 +190,7 @@ pub fn network_exists(runner: &mut dyn Runner, dir: &Path, name: &str) -> bool {
 
 /// Make the network your proxy finds the app on, unless it is there already. Quiet: docker
 /// answers with the new network's id, which nobody needs to see.
-pub fn ensure_network(runner: &mut dyn Runner, dir: &Path, name: &str) -> Result<bool> {
+pub(crate) fn ensure_network(runner: &mut dyn Runner, dir: &Path, name: &str) -> Result<bool> {
     if network_exists(runner, dir, name) {
         return Ok(false);
     }
@@ -198,7 +203,7 @@ pub fn ensure_network(runner: &mut dyn Runner, dir: &Path, name: &str) -> Result
 /// Whether something answers on `host:port` from inside a Docker network, which is where
 /// the API will be looking from. A plain TCP connect: it says the address is right, not
 /// that the password is.
-pub fn reachable_from(
+pub(crate) fn reachable_from(
     runner: &mut dyn Runner,
     dir: &Path,
     network: &str,
@@ -228,14 +233,14 @@ pub fn reachable_from(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SdeStatus {
+pub(crate) struct SdeStatus {
     pub loaded: String,
     pub latest: String,
     pub update_available: bool,
 }
 
 /// Parses the `key=value` lines `sde-status` prints.
-pub fn parse_sde_status(output: &str) -> Option<SdeStatus> {
+pub(crate) fn parse_sde_status(output: &str) -> Option<SdeStatus> {
     let field = |name: &str| {
         output.lines().find_map(|line| {
             line.trim()
@@ -250,7 +255,7 @@ pub fn parse_sde_status(output: &str) -> Option<SdeStatus> {
     })
 }
 
-pub fn sde_status(runner: &mut dyn Runner, dir: &Path) -> Result<SdeStatus> {
+pub(crate) fn sde_status(runner: &mut dyn Runner, dir: &Path) -> Result<SdeStatus> {
     let out = api(runner, dir, &["sde-status"])?;
     parse_sde_status(&out).context("could not read the SDE status; is the stack built?")
 }

@@ -55,7 +55,7 @@ pub async fn sweep_expired(pool: &PgPool) -> Result<u64> {
 pub fn spawn_expiry_sweep(pool: PgPool) {
     crate::background::spawn_every(
         "access expiry sweep",
-        std::time::Duration::from_secs(60 * 60),
+        std::time::Duration::from_hours(1),
         move || {
             let pool = pool.clone();
             async move {

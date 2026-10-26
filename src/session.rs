@@ -25,8 +25,14 @@ pub const SESSION_COOKIE: &str = "ws_session";
 /// same terms (`frontend/src/lib/server/session.ts`).
 pub const SESSION_DAYS: i64 = 400;
 
+/// [`SESSION_DAYS`] as the `int` the queries bind.
+fn session_days() -> i32 {
+    i32::try_from(SESSION_DAYS).expect("SESSION_DAYS fits in an int")
+}
+
 /// An ESI entity (corp/alliance) we cache so a character's deferred FKs resolve. Carries
 /// just what the entity tables require; refreshed on each login.
+#[derive(Debug)]
 pub struct Entity {
     pub id: i64,
     pub name: String,
@@ -52,7 +58,7 @@ pub async fn actor_for_session(
          select user_id as \"user_id!\", active_character_id as \"active_character_id!\"
          from live",
         tokens::hash(session_id),
-        SESSION_DAYS as i32,
+        session_days(),
     )
     .fetch_optional(pool)
     .await?;
@@ -102,7 +108,7 @@ pub async fn create_session(
         tokens::hash(&id),
         user_id,
         character_id,
-        SESSION_DAYS as i32,
+        session_days(),
     )
     .execute(pool)
     .await?;
@@ -199,6 +205,36 @@ pub async fn ensure_preferred_character(pool: &PgPool, user_id: i64) -> Result<(
     Ok(())
 }
 
+/// The character's corp/alliance are deferred FKs to the ESI-cached entity tables, so
+/// ensure those rows exist (and are kept fresh) before/with the character row.
+async fn upsert_entities(
+    conn: &mut sqlx::PgConnection,
+    corporation: &Entity,
+    alliance: Option<&Entity>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        "insert into corporations (id, name, ticker) values ($1, $2, $3)
+         on conflict (id) do update set name = excluded.name, ticker = excluded.ticker, updated_at = now()",
+        corporation.id,
+        corporation.name,
+        corporation.ticker,
+    )
+    .execute(&mut *conn)
+    .await?;
+    if let Some(alliance) = alliance {
+        sqlx::query!(
+            "insert into alliances (id, name, ticker) values ($1, $2, $3)
+             on conflict (id) do update set name = excluded.name, ticker = excluded.ticker, updated_at = now()",
+            alliance.id,
+            alliance.name,
+            alliance.ticker,
+        )
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(())
+}
+
 /// Resolve the SSO login to a user and persist the character, returning the owning `user_id`.
 ///
 /// The identity rules: a returning login reuses the user, an owner-hash change (character
@@ -215,28 +251,7 @@ pub async fn persist_identity(
     let alliance_id = alliance.as_ref().map(|a| a.id);
     let mut tx = pool.begin().await?;
 
-    // The character's corp/alliance are deferred FKs to the ESI-cached entity tables, so
-    // ensure those rows exist (and are kept fresh) before/with the character row.
-    sqlx::query!(
-        "insert into corporations (id, name, ticker) values ($1, $2, $3)
-         on conflict (id) do update set name = excluded.name, ticker = excluded.ticker, updated_at = now()",
-        corporation.id,
-        corporation.name,
-        corporation.ticker,
-    )
-    .execute(&mut *tx)
-    .await?;
-    if let Some(alliance) = &alliance {
-        sqlx::query!(
-            "insert into alliances (id, name, ticker) values ($1, $2, $3)
-             on conflict (id) do update set name = excluded.name, ticker = excluded.ticker, updated_at = now()",
-            alliance.id,
-            alliance.name,
-            alliance.ticker,
-        )
-        .execute(&mut *tx)
-        .await?;
-    }
+    upsert_entities(&mut tx, &corporation, alliance.as_ref()).await?;
 
     let existing = sqlx::query!(
         "select user_id, owner_hash from characters where id = $1",

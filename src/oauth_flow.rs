@@ -17,6 +17,8 @@ use axum_extra::extract::cookie::{Cookie, SameSite};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::app::CookieSecurity;
+
 /// Which handshake a state belongs to. Stored as the `kind` column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FlowKind {
@@ -47,12 +49,12 @@ impl FlowKind {
 /// The cookie that ties a new handshake's `state` to this browser. Lax, so it still comes
 /// along on the provider's top-level redirect back to the callback, and as short-lived as
 /// the row it points at.
-pub fn browser_cookie(kind: FlowKind, state: &str, secure: bool) -> Cookie<'static> {
+pub fn browser_cookie(kind: FlowKind, state: &str, security: CookieSecurity) -> Cookie<'static> {
     Cookie::build((kind.cookie_name(), state.to_string()))
         .path("/")
         .http_only(true)
         .same_site(SameSite::Lax)
-        .secure(secure)
+        .secure(security == CookieSecurity::Https)
         .max_age(time::Duration::minutes(10))
         .build()
 }

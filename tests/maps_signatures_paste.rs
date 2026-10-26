@@ -21,7 +21,7 @@ use wormholesystems::maps::{
 async fn sig_by_id(pool: &PgPool, actor: Actor, map_id: i64, sid: &str) -> Option<Signature> {
     list_signatures(pool, actor, map_id)
         .await
-        .unwrap()
+        .expect("list_signatures")
         .into_iter()
         .find(|s| s.signature_id == sid)
 }
@@ -741,7 +741,7 @@ async fn pasted_at(
 ) -> Option<chrono::DateTime<chrono::Utc>> {
     let system = get_map(pool, actor, GetMap { map_id })
         .await
-        .unwrap()
+        .expect("get_map")
         .systems
         .into_iter()
         .find(|s| s.id() == placement)
@@ -771,7 +771,7 @@ async fn paste_one(pool: &PgPool, actor: Actor, map_id: i64, sid: &str) {
         },
     )
     .await
-    .unwrap();
+    .expect("paste_signatures");
 }
 
 async fn undo(pool: &PgPool, actor: Actor, map_id: i64) {
@@ -781,7 +781,7 @@ async fn undo(pool: &PgPool, actor: Actor, map_id: i64) {
         wormholesystems::maps::history::MapIdBody { map_id },
     )
     .await
-    .unwrap();
+    .expect("undo");
 }
 
 #[sqlx::test]

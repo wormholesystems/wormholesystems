@@ -18,6 +18,10 @@ use panels::{PanelLayouts, validate_layouts};
 /// A user's per-map preferences.
 #[derive(Clone, Debug, Serialize, Deserialize, ts_rs::TS, utoipa::ToSchema)]
 #[ts(export)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the settings wire shape: one independent toggle per preference"
+)]
 pub struct MapUserSettings {
     pub tracking_allowed: bool,
     pub show_threat_level: bool,
@@ -265,44 +269,14 @@ pub async fn update(
     user_id: i64,
     body: &UpdateMapUserSettings,
 ) -> Result<MapUserSettings> {
-    // The tolerances and the preference are enums, so a value outside them never gets this
-    // far: serde rejects the body. Only the number still needs saying out loud.
-    if let Some(p) = body.security_penalty
-        && !(0..=100).contains(&p)
-    {
-        return Err(MapError::Validation(
-            "security penalty must be 0-100".into(),
-        ));
-    }
-    if let Some(ids) = &body.tracked_character_ids {
-        let owned = sqlx::query_scalar!(
-            "select count(*) from characters where user_id = $1 and id = any($2)",
-            user_id,
-            ids,
-        )
-        .fetch_one(pool)
-        .await?
-        .unwrap_or(0);
-        if owned as usize != ids.len() {
-            return Err(MapError::Validation(
-                "only your own characters can map for you".into(),
-            ));
-        }
-    }
-    // Reject an arrangement that could not render, rather than breaking the next load.
-    let layout_json =
-        match &body.layout_breakpoints {
-            Some(layouts) => {
-                validate_layouts(layouts)?;
-                Some(serde_json::to_value(layouts).map_err(|e| {
-                    MapError::Validation(format!("could not store the layout: {e}"))
-                })?)
-            }
-            None => None,
-        };
+    let layout_json = validate(pool, user_id, body).await?;
 
     let mut tx = pool.begin().await?;
     insert_defaults(&mut *tx, map_id, user_id).await?;
+    #[expect(
+        clippy::as_conversions,
+        reason = "sqlx's `as` type override for a typed parameter, not a value conversion"
+    )]
     sqlx::query!(
         r#"update map_user_settings set
              tracking_allowed = coalesce($3, tracking_allowed),
@@ -377,6 +351,51 @@ pub async fn update(
     }
 
     load(pool, map_id, user_id).await
+}
+
+/// Refuse an update that names a value the settings cannot hold, and encode the layout
+/// it carries, if any.
+async fn validate(
+    pool: &PgPool,
+    user_id: i64,
+    body: &UpdateMapUserSettings,
+) -> Result<Option<serde_json::Value>> {
+    // The tolerances and the preference are enums, so a value outside them never gets this
+    // far: serde rejects the body. Only the number still needs saying out loud.
+    if let Some(p) = body.security_penalty
+        && !(0..=100).contains(&p)
+    {
+        return Err(MapError::Validation(
+            "security penalty must be 0-100".into(),
+        ));
+    }
+    if let Some(ids) = &body.tracked_character_ids {
+        let owned = sqlx::query_scalar!(
+            "select count(*) from characters where user_id = $1 and id = any($2)",
+            user_id,
+            ids,
+        )
+        .fetch_one(pool)
+        .await?
+        .unwrap_or(0);
+        if usize::try_from(owned) != Ok(ids.len()) {
+            return Err(MapError::Validation(
+                "only your own characters can map for you".into(),
+            ));
+        }
+    }
+    // Reject an arrangement that could not render, rather than breaking the next load.
+    let layout_json =
+        match &body.layout_breakpoints {
+            Some(layouts) => {
+                validate_layouts(layouts)?;
+                Some(serde_json::to_value(layouts).map_err(|e| {
+                    MapError::Validation(format!("could not store the layout: {e}"))
+                })?)
+            }
+            None => None,
+        };
+    Ok(layout_json)
 }
 
 /// The bare row: the key and nothing else, so every setting is the column's default.

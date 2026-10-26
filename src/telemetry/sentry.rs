@@ -26,6 +26,10 @@ pub fn release() -> String {
 
 /// Start the client when `SENTRY_DSN` is set. The guard flushes what is queued when the
 /// process ends, so it lives as long as `main`.
+#[expect(
+    clippy::print_stderr,
+    reason = "logging is not up yet, so stderr is the only place to say it"
+)]
 pub fn init() -> Option<ClientInitGuard> {
     let dsn = nonempty("SENTRY_DSN")?;
     let dsn = match dsn.parse() {
@@ -86,7 +90,7 @@ pub fn scrub_event(mut event: Event<'static>) -> Event<'static> {
         redact_in_place(&mut entry.message);
         entry.params.iter_mut().for_each(redact_value);
     }
-    for exception in event.exception.values.iter_mut() {
+    for exception in &mut event.exception.values {
         if let Some(value) = exception.value.as_mut() {
             redact_in_place(value);
         }

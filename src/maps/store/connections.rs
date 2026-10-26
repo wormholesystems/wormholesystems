@@ -35,7 +35,7 @@ pub struct ConnectionRow {
 
 /// A connection that is not on the map yet.
 #[derive(Debug, Clone, Copy)]
-pub struct NewConnection {
+pub(crate) struct NewConnection {
     pub from_system: i64,
     pub to_system: i64,
     pub kind: ConnectionType,
@@ -51,7 +51,7 @@ pub struct NewConnection {
 
 impl NewConnection {
     /// A freshly drawn edge: nothing known about it yet but, perhaps, its size.
-    pub fn drawn(
+    pub(crate) fn drawn(
         from_system: i64,
         to_system: i64,
         kind: ConnectionType,
@@ -166,7 +166,7 @@ pub(crate) async fn reinsert(tx: &mut Tx<'_>, map_id: i64, row: &ConnectionRow) 
 
 /// The ends of a connection that was just deleted.
 #[derive(Debug, Clone, Copy)]
-pub struct DeletedConnection {
+pub(crate) struct DeletedConnection {
     pub from_system: i64,
     pub to_system: i64,
 }

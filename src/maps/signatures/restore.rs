@@ -104,7 +104,7 @@ pub(in crate::maps) async fn apply_restore_signatures(
     for s in &cmd.signatures {
         store::signatures::reinsert_overwriting(tx, cmd.map_id, s).await?;
     }
-    let count = cmd.signatures.len() as i64;
+    let count = cmd.signatures.len();
     let mut systems: Vec<i64> = cmd
         .signatures
         .iter()

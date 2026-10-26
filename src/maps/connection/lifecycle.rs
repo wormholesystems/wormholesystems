@@ -19,7 +19,7 @@ use super::fetch_connection_tx;
 /// How long a connection must have been marked critical before the map offers to sweep it.
 /// Legacy's rule: a critical hole is minutes from collapsing, so an hour without an update
 /// means nobody is flying it any more.
-pub const STALE_AFTER_MINUTES: i64 = 60;
+pub const STALE_AFTER_MINUTES: i32 = 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, utoipa::ToSchema)]
 #[ts(export)]
@@ -61,7 +61,7 @@ pub async fn list_stale_connections(
              and c.time_status_updated_at < now() - make_interval(mins => $2)
            order by c.time_status_updated_at"#,
         map_id,
-        STALE_AFTER_MINUTES as i32,
+        STALE_AFTER_MINUTES,
     )
     .fetch_all(pool)
     .await?;
@@ -89,7 +89,7 @@ pub(in crate::maps) async fn apply_clean_stale(
              and time_status in ('critical', 'expired')
              and time_status_updated_at < now() - make_interval(mins => $2)"#,
         cmd.map_id,
-        STALE_AFTER_MINUTES as i32,
+        STALE_AFTER_MINUTES,
     )
     .fetch_all(&mut **tx)
     .await?;
@@ -156,7 +156,7 @@ async fn sweep(
         placements::delete(tx, map_id, &orphans).await?;
     }
 
-    let removed = ids.len() as u64;
+    let removed = u64::try_from(ids.len()).expect("a usize fits in u64");
     let mut events: Vec<MapEvent> = ids
         .iter()
         .map(|id| MapEvent::ConnectionChanged {
@@ -173,7 +173,7 @@ async fn sweep(
         label(removed, orphans.len()),
         CommandOutput::Count(removed),
     )
-    .entries(removed as i64 + orphans.len() as i64)
+    .entries(ids.len() + orphans.len())
     .undo_with(MapCommand::RestoreSystems(snapshot))
     .emit_all(events))
 }
@@ -338,7 +338,7 @@ pub async fn age_connections(pool: &PgPool) -> Result<u64> {
             time_status,
         };
         match run_as(pool, EventActor::System, cmd).await {
-            Ok(_) => aged += 1,
+            Ok(()) => aged += 1,
             // Someone marked or removed the hole between the read and the write.
             Err(MapError::Conflict(_) | MapError::NotFound) => {}
             Err(err) => return Err(err),

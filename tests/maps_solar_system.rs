@@ -269,7 +269,7 @@ async fn pinned_and_home_systems_are_passed_over_rather_than_refused(pool: PgPoo
     let pinned = place_at(&pool, w.owner, w.map_id, SYS_B, 200.0).await;
     let ordinary = place_at(&pool, w.owner, w.map_id, SYS_C, 400.0).await;
     mark_home(&pool, w.owner, w.map_id, home).await;
-    pin(&pool, w.owner, w.map_id, pinned, true).await;
+    pin(&pool, w.owner, w.map_id, pinned).await;
 
     // A selection spanning all three takes only the one that is not protected, and says so
     // by succeeding rather than by erroring.
@@ -318,7 +318,7 @@ async fn pinned_and_home_systems_are_passed_over_rather_than_refused(pool: PgPoo
 async fn unpinning_gives_the_system_back(pool: PgPool) {
     let w = world(&pool).await;
     let pinned = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
-    pin(&pool, w.owner, w.map_id, pinned, true).await;
+    pin(&pool, w.owner, w.map_id, pinned).await;
 
     remove_system(
         &pool,
@@ -333,7 +333,7 @@ async fn unpinning_gives_the_system_back(pool: PgPool) {
     assert_eq!(placed_ids(&pool, w.owner, w.map_id).await.len(), 1);
 
     // A guard, not a life sentence.
-    pin(&pool, w.owner, w.map_id, pinned, false).await;
+    unpin(&pool, w.owner, w.map_id, pinned).await;
     remove_system(
         &pool,
         w.owner,
@@ -344,7 +344,10 @@ async fn unpinning_gives_the_system_back(pool: PgPool) {
     )
     .await
     .unwrap();
-    assert!(placed_ids(&pool, w.owner, w.map_id).await.is_empty());
+    assert_eq!(
+        placed_ids(&pool, w.owner, w.map_id).await,
+        Vec::<i64>::new()
+    );
 }
 
 #[sqlx::test]
@@ -353,7 +356,7 @@ async fn a_pinned_system_will_not_move_but_the_home_system_will(pool: PgPool) {
     let home = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let pinned = place_at(&pool, w.owner, w.map_id, SYS_B, 200.0).await;
     mark_home(&pool, w.owner, w.map_id, home).await;
-    pin(&pool, w.owner, w.map_id, pinned, true).await;
+    pin(&pool, w.owner, w.map_id, pinned).await;
 
     // Being home says nothing about moving.
     move_system(
@@ -431,27 +434,35 @@ async fn mark_home(pool: &PgPool, actor: wormholesystems::maps::Actor, map_id: i
         },
     )
     .await
-    .unwrap();
+    .expect("set_home");
 }
 
-async fn pin(
-    pool: &PgPool,
-    actor: wormholesystems::maps::Actor,
-    map_id: i64,
-    id: i64,
-    value: bool,
-) {
+async fn pin(pool: &PgPool, actor: wormholesystems::maps::Actor, map_id: i64, id: i64) {
     set_pinned(
         pool,
         actor,
         SetPinned {
             map_id,
             map_solar_system_id: id,
-            value,
+            value: true,
         },
     )
     .await
-    .unwrap();
+    .expect("set_pinned");
+}
+
+async fn unpin(pool: &PgPool, actor: wormholesystems::maps::Actor, map_id: i64, id: i64) {
+    set_pinned(
+        pool,
+        actor,
+        SetPinned {
+            map_id,
+            map_solar_system_id: id,
+            value: false,
+        },
+    )
+    .await
+    .expect("set_pinned");
 }
 
 async fn position(
@@ -466,7 +477,7 @@ async fn position(
         wormholesystems::maps::map::GetMap { map_id },
     )
     .await
-    .unwrap();
+    .expect("get_map");
     let s = view.systems.iter().find(|s| s.id() == id).expect("placed");
     s.position()
 }
@@ -474,10 +485,10 @@ async fn position(
 async fn placed_ids(pool: &PgPool, actor: wormholesystems::maps::Actor, map_id: i64) -> Vec<i64> {
     wormholesystems::maps::map::get_map(pool, actor, wormholesystems::maps::map::GetMap { map_id })
         .await
-        .unwrap()
+        .expect("get_map")
         .systems
         .iter()
-        .map(|s| s.id())
+        .map(wormholesystems::maps::MapSystemView::id)
         .collect()
 }
 
@@ -499,7 +510,7 @@ async fn a_map_has_one_home_and_undo_returns_the_last_one(pool: PgPool) {
     assert_eq!(home_of(&pool, w.map_id).await, Some(first));
 
     // A rally point is its own mark: setting one leaves the home system alone.
-    rally(&pool, w.owner, w.map_id, second, true).await.unwrap();
+    rally(&pool, w.owner, w.map_id, second).await.unwrap();
     assert_eq!(home_of(&pool, w.map_id).await, Some(first));
 }
 
@@ -512,11 +523,11 @@ async fn a_third_rally_point_replaces_the_oldest_and_undo_brings_it_back(pool: P
     let b = place_at(&pool, w.owner, w.map_id, SYS_B, 200.0).await;
     let c = place_at(&pool, w.owner, w.map_id, SYS_C, 400.0).await;
 
-    rally(&pool, w.owner, w.map_id, a, true).await.unwrap();
-    rally(&pool, w.owner, w.map_id, b, true).await.unwrap();
+    rally(&pool, w.owner, w.map_id, a).await.unwrap();
+    rally(&pool, w.owner, w.map_id, b).await.unwrap();
     assert_eq!(rallies_of(&pool, w.map_id).await, vec![a, b]);
 
-    rally(&pool, w.owner, w.map_id, c, true).await.unwrap();
+    rally(&pool, w.owner, w.map_id, c).await.unwrap();
     assert_eq!(rallies_of(&pool, w.map_id).await, vec![b, c]);
 
     undo(&pool, w.owner, MapIdBody { map_id: w.map_id })
@@ -530,7 +541,7 @@ async fn a_third_rally_point_replaces_the_oldest_and_undo_brings_it_back(pool: P
 
     // Setting one that already is a rally point makes it the newest instead of adding it
     // twice.
-    rally(&pool, w.owner, w.map_id, b, true).await.unwrap();
+    rally(&pool, w.owner, w.map_id, b).await.unwrap();
     assert_eq!(rallies_of(&pool, w.map_id).await, vec![c, b]);
 }
 
@@ -542,12 +553,12 @@ async fn a_rally_point_clears_on_its_own(pool: PgPool) {
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let b = place_at(&pool, w.owner, w.map_id, SYS_B, 200.0).await;
     let c = place_at(&pool, w.owner, w.map_id, SYS_C, 400.0).await;
-    rally(&pool, w.owner, w.map_id, a, true).await.unwrap();
-    rally(&pool, w.owner, w.map_id, b, true).await.unwrap();
+    rally(&pool, w.owner, w.map_id, a).await.unwrap();
+    rally(&pool, w.owner, w.map_id, b).await.unwrap();
 
-    rally(&pool, w.owner, w.map_id, a, false).await.unwrap();
+    unrally(&pool, w.owner, w.map_id, a).await.unwrap();
     assert_eq!(rallies_of(&pool, w.map_id).await, vec![b]);
-    rally(&pool, w.owner, w.map_id, c, false).await.unwrap();
+    unrally(&pool, w.owner, w.map_id, c).await.unwrap();
     assert_eq!(rallies_of(&pool, w.map_id).await, vec![b]);
 
     undo(&pool, w.owner, MapIdBody { map_id: w.map_id })
@@ -560,11 +571,11 @@ async fn a_rally_point_clears_on_its_own(pool: PgPool) {
 
     let viewer = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Viewer).await;
     assert!(matches!(
-        rally(&pool, viewer, w.map_id, c, true).await,
+        rally(&pool, viewer, w.map_id, c).await,
         Err(MapError::Forbidden),
     ));
     assert!(matches!(
-        rally(&pool, viewer, w.map_id, a, false).await,
+        unrally(&pool, viewer, w.map_id, a).await,
         Err(MapError::Forbidden),
     ));
     assert_eq!(rallies_of(&pool, w.map_id).await, vec![a, b]);
@@ -577,8 +588,8 @@ async fn a_restored_rally_point_keeps_its_place(pool: PgPool) {
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let b = place_at(&pool, w.owner, w.map_id, SYS_B, 200.0).await;
     let c = place_at(&pool, w.owner, w.map_id, SYS_C, 400.0).await;
-    rally(&pool, w.owner, w.map_id, a, true).await.unwrap();
-    rally(&pool, w.owner, w.map_id, b, true).await.unwrap();
+    rally(&pool, w.owner, w.map_id, a).await.unwrap();
+    rally(&pool, w.owner, w.map_id, b).await.unwrap();
 
     remove_system(
         &pool,
@@ -595,7 +606,7 @@ async fn a_restored_rally_point_keeps_its_place(pool: PgPool) {
         .unwrap();
     assert_eq!(rallies_of(&pool, w.map_id).await, vec![a, b]);
 
-    rally(&pool, w.owner, w.map_id, c, true).await.unwrap();
+    rally(&pool, w.owner, w.map_id, c).await.unwrap();
     assert_eq!(rallies_of(&pool, w.map_id).await, vec![b, c]);
 }
 
@@ -604,7 +615,6 @@ async fn rally(
     actor: wormholesystems::maps::Actor,
     map_id: i64,
     id: i64,
-    value: bool,
 ) -> Result<(), MapError> {
     set_rally(
         pool,
@@ -612,7 +622,25 @@ async fn rally(
         SetRally {
             map_id,
             map_solar_system_id: id,
-            value,
+            value: true,
+        },
+    )
+    .await
+}
+
+async fn unrally(
+    pool: &PgPool,
+    actor: wormholesystems::maps::Actor,
+    map_id: i64,
+    id: i64,
+) -> Result<(), MapError> {
+    set_rally(
+        pool,
+        actor,
+        SetRally {
+            map_id,
+            map_solar_system_id: id,
+            value: false,
         },
     )
     .await
@@ -625,7 +653,7 @@ async fn home_of(pool: &PgPool, map_id: i64) -> Option<i64> {
     )
     .fetch_optional(pool)
     .await
-    .unwrap()
+    .expect("query map_solar_systems")
 }
 
 /// The map's rally points, oldest first.
@@ -637,7 +665,7 @@ async fn rallies_of(pool: &PgPool, map_id: i64) -> Vec<i64> {
     )
     .fetch_all(pool)
     .await
-    .unwrap()
+    .expect("query map_solar_systems")
 }
 
 /// The intel recorded against a placed system: status, occupier and notes.
@@ -649,7 +677,7 @@ async fn intel_of(pool: &PgPool, map_id: i64) -> Option<(String, Option<String>,
     .bind(map_id)
     .fetch_optional(pool)
     .await
-    .unwrap()
+    .expect("query map_solar_system_details")
 }
 
 /// Status, occupier and notes share one row, and each write touches its own column only:

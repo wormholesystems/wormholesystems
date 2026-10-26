@@ -26,7 +26,7 @@ async fn flying(pool: &PgPool, map_id: i64, actor: Actor) {
             &Token {
                 access_token: "access".into(),
                 refresh_token: "refresh".into(),
-                expires_at: SystemTime::now() + Duration::from_secs(1200),
+                expires_at: SystemTime::now() + Duration::from_mins(20),
                 scopes: vec![
                     "esi-location.read_online.v1".into(),
                     "esi-location.read_location.v1".into(),
@@ -34,7 +34,7 @@ async fn flying(pool: &PgPool, map_id: i64, actor: Actor) {
             },
         )
         .await
-        .unwrap();
+        .expect("create token store");
     sqlx::query(
         "insert into character_status (character_id, online, solar_system_id) values ($1, true, $2)",
     )
@@ -42,7 +42,7 @@ async fn flying(pool: &PgPool, map_id: i64, actor: Actor) {
     .bind(SYS_A)
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert character_status");
     sqlx::query(
         "insert into map_user_settings (map_id, user_id, tracking_allowed) values ($1, $2, true)
          on conflict (map_id, user_id) do update set tracking_allowed = true",
@@ -51,7 +51,7 @@ async fn flying(pool: &PgPool, map_id: i64, actor: Actor) {
     .bind(actor.user_id)
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert map_user_settings");
 }
 
 async fn last_active(pool: &PgPool, user_id: i64, minutes_ago: i32) {
@@ -62,13 +62,13 @@ async fn last_active(pool: &PgPool, user_id: i64, minutes_ago: i32) {
     .bind(minutes_ago)
     .execute(pool)
     .await
-    .unwrap();
+    .expect("update users");
 }
 
 async fn on_map(pool: &PgPool, map_id: i64, viewer: Actor) -> Vec<i64> {
     characters_on(pool, map_id, viewer.user_id)
         .await
-        .unwrap()
+        .expect("characters_on")
         .into_iter()
         .map(|c| c.character_id)
         .collect()
@@ -79,7 +79,7 @@ async fn online(pool: &PgPool, character_id: i64) -> bool {
         .bind(character_id)
         .fetch_one(pool)
         .await
-        .unwrap()
+        .expect("query character_status")
 }
 
 #[sqlx::test]
@@ -104,7 +104,10 @@ async fn an_idle_users_pilots_leave_the_map(pool: PgPool) {
     assert_eq!(on_map(&pool, w.map_id, w.owner).await, vec![1001]);
     assert!(!online(&pool, 1002).await);
     // Said once: the next sweep has nothing left to flip.
-    assert!(mark_unpolled_offline(&pool).await.unwrap().is_empty());
+    assert_eq!(
+        mark_unpolled_offline(&pool).await.unwrap(),
+        Vec::<wormholesystems::pilots::poller::Due>::new()
+    );
 }
 
 #[sqlx::test]

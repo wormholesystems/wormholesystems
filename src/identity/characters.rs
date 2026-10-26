@@ -61,6 +61,10 @@ pub struct CharacterStatus {
 /// One of the user's characters, for the switcher.
 #[derive(Clone, Debug, Serialize, Deserialize, ts_rs::TS, utoipa::ToSchema)]
 #[ts(export)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "API shape the frontend reads; each flag is independent"
+)]
 pub struct CharacterRef {
     pub character_id: i64,
     pub name: String,
@@ -288,15 +292,10 @@ pub async fn remove(
     Ok(())
 }
 
-/// Where a waypoint goes, and how it joins the route already set.
-#[derive(Debug, Clone, Copy)]
-pub struct Waypoint {
-    pub destination_id: i64,
-    pub add_to_beginning: bool,
-    pub clear_other_waypoints: bool,
-}
+pub use crate::esi::ui::Waypoint;
 
 /// The two ESI handles a waypoint needs: SSO for the character's token, ESI for the call.
+#[derive(Debug)]
 pub struct Esi<'a> {
     pub sso: &'a Sso,
     pub tokens: &'a TokenCache,
@@ -390,12 +389,7 @@ async fn send_waypoint(
         return Err(CharacterError::MissingScope);
     }
     esi.esi
-        .set_waypoint(
-            &token.access_token,
-            waypoint.destination_id,
-            waypoint.add_to_beginning,
-            waypoint.clear_other_waypoints,
-        )
+        .set_waypoint(&token.access_token, waypoint)
         .await
         .map_err(CharacterError::Upstream)
 }

@@ -4,20 +4,20 @@
 //! before it is done: those may have read the map before the change landed.
 
 #[derive(Debug, Default)]
-pub struct Freshness {
+pub(crate) struct Freshness {
     started: u64,
     shown: u64,
 }
 
 impl Freshness {
     /// Number a refresh as it starts.
-    pub fn start(&mut self) -> u64 {
+    pub(crate) fn start(&mut self) -> u64 {
         self.started += 1;
         self.started
     }
 
     /// Whether the reply to refresh `n` may be shown, and if so, that it is.
-    pub fn show(&mut self, n: u64) -> bool {
+    pub(crate) fn show(&mut self, n: u64) -> bool {
         if n <= self.shown {
             return false;
         }
@@ -26,7 +26,7 @@ impl Freshness {
     }
 
     /// The map changed, or what it shows now came after every refresh started so far.
-    pub fn changed(&mut self) {
+    pub(crate) fn changed(&mut self) {
         self.shown = self.start();
     }
 }

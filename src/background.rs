@@ -49,11 +49,14 @@ where
             // `None` is a panic, already logged.
             let result = guarded(name, &mut job).await;
             let took = started.elapsed();
-            crate::telemetry::metrics::job_pass(name, took, !matches!(result, Some(Ok(()))));
+            crate::telemetry::metrics::job_pass(name, took);
+            if !matches!(result, Some(Ok(()))) {
+                crate::telemetry::metrics::job_failed(name);
+            }
             // The interval drops the ticks that came due while this pass ran.
             crate::telemetry::metrics::ticks_skipped(
                 name,
-                (took.as_nanos() / period.as_nanos().max(1)) as u64,
+                u64::try_from(took.as_nanos() / period.as_nanos().max(1)).unwrap_or(u64::MAX),
             );
             if let Some(Err(err)) = result {
                 tracing::error!("{name} failed: {err}");
@@ -100,6 +103,7 @@ fn panic_message(panic: &(dyn Any + Send)) -> &str {
 /// Tells a bad moment from a stuck job. Upstream services fail now and then and the next
 /// try usually works, so a failure is a warning until the job has failed every time for
 /// `limit`, which is worth one error.
+#[derive(Debug)]
 pub struct Streak {
     limit: Duration,
     /// Since when every try has failed, and whether that has been reported yet.
@@ -114,13 +118,14 @@ impl Streak {
         }
     }
 
-    /// Note one try's outcome. True once per streak, when it first reaches the limit.
-    pub fn record(&self, failed: bool, now: Instant) -> bool {
+    /// Note a try that worked, which ends the streak.
+    pub fn record_success(&self) {
+        *self.state.lock().expect("streak lock") = None;
+    }
+
+    /// Note a try that failed. True once per streak, when it first reaches the limit.
+    pub fn record_failure(&self, now: Instant) -> bool {
         let mut state = self.state.lock().expect("streak lock");
-        if !failed {
-            *state = None;
-            return false;
-        }
         let (since, reported) = state.get_or_insert((now, false));
         if *reported || now.duration_since(*since) < self.limit {
             return false;
@@ -166,8 +171,8 @@ where
             }
             tracing::info!("{name}: starting again in {delay:?}");
             tokio::select! {
-                _ = tokio::time::sleep(delay) => {}
-                _ = stopped() => return,
+                () = tokio::time::sleep(delay) => {}
+                () = stopped() => return,
             }
             delay = (delay * 2).min(RESTART_MAX.max(first));
         }
@@ -207,16 +212,16 @@ mod tests {
 
     #[test]
     fn a_streak_is_reported_once_when_it_reaches_the_limit() {
-        let limit = Duration::from_secs(900);
+        let limit = Duration::from_mins(15);
         let streak = Streak::new(limit);
         let start = Instant::now();
-        assert!(!streak.record(true, start));
-        assert!(!streak.record(true, start + limit / 2));
-        assert!(streak.record(true, start + limit));
-        assert!(!streak.record(true, start + limit * 2));
+        assert!(!streak.record_failure(start));
+        assert!(!streak.record_failure(start + limit / 2));
+        assert!(streak.record_failure(start + limit));
+        assert!(!streak.record_failure(start + limit * 2));
         // A success ends the streak, and the next failure starts the clock again.
-        assert!(!streak.record(false, start + limit * 2));
-        assert!(!streak.record(true, start + limit * 3));
-        assert!(streak.record(true, start + limit * 4));
+        streak.record_success();
+        assert!(!streak.record_failure(start + limit * 3));
+        assert!(streak.record_failure(start + limit * 4));
     }
 }

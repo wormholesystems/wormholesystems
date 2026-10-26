@@ -35,7 +35,7 @@ const CACHE_TTL: Duration = Duration::from_secs(60);
 /// How far back a lagged map-event subscriber looks to catch up on what it missed: from
 /// the last event it took, plus some slack, but never more than the cap.
 const LAG_REPLAY_SLACK: Duration = Duration::from_secs(30);
-const LAG_REPLAY_CAP: Duration = Duration::from_secs(10 * 60);
+const LAG_REPLAY_CAP: Duration = Duration::from_mins(10);
 
 /// Bumped by every change to an alert or its destination, so the cache knows to reload.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -47,6 +47,7 @@ pub fn changed() {
 }
 
 /// One message, evaluated and claimed, waiting to be sent.
+#[derive(Debug)]
 pub struct Outgoing {
     pub alert: Alert,
     pub key: String,
@@ -56,7 +57,7 @@ pub struct Outgoing {
 struct Snapshot {
     loaded_at: Instant,
     generation: u64,
-    alerts: Arc<Vec<Alert>>,
+    alerts: Arc<[Alert]>,
 }
 
 /// The stargate graph, the HTTP client and the active alerts, held for the life of the
@@ -73,6 +74,15 @@ pub struct Runtime {
     /// The delivery worker. Evaluation only ever hands it messages, so a slow Discord
     /// holds up messages and nothing else.
     outbox: mpsc::Sender<Outgoing>,
+}
+
+// By hand, so the bot token stays out of logs.
+impl std::fmt::Debug for Runtime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Runtime")
+            .field("public_url", &self.public_url)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Runtime {
@@ -105,17 +115,17 @@ impl Runtime {
     }
 
     /// Every active alert, from memory unless something changed or the copy is old.
-    async fn alerts(&self, pool: &PgPool) -> Arc<Vec<Alert>> {
+    async fn alerts(&self, pool: &PgPool) -> Arc<[Alert]> {
         let generation = GENERATION.load(Ordering::Relaxed);
         if let Some(snapshot) = self.cache.lock().expect("alert cache poisoned").as_ref()
             && snapshot.generation == generation
             && snapshot.loaded_at.elapsed() < CACHE_TTL
         {
-            return snapshot.alerts.clone();
+            return Arc::clone(&snapshot.alerts);
         }
         // Loaded outside the lock: two callers racing here both load, which is harmless.
         let alerts = match fetch_active(pool, None).await {
-            Ok(alerts) => Arc::new(alerts),
+            Ok(alerts) => Arc::from(alerts),
             Err(err) => {
                 tracing::error!("alerts: could not load the active alerts: {err}");
                 return Arc::default();
@@ -124,7 +134,7 @@ impl Runtime {
         *self.cache.lock().expect("alert cache poisoned") = Some(Snapshot {
             loaded_at: Instant::now(),
             generation,
-            alerts: alerts.clone(),
+            alerts: Arc::clone(&alerts),
         });
         alerts
     }
@@ -318,8 +328,7 @@ async fn deliver_loop(
 ) {
     let senders = Arc::new(Semaphore::new(SENDERS));
     while let Some(out) = inbox.recv().await {
-        let permit = senders
-            .clone()
+        let permit = Arc::clone(&senders)
             .acquire_owned()
             .await
             .expect("semaphore open");
@@ -375,7 +384,7 @@ pub fn start_on(pool: PgPool, hub: crate::realtime::MapHub, runtime: Arc<Runtime
             received = Instant::now();
             // One event's evaluation per guarded pass: a panic loses that event's alerts,
             // and the subscription, with its place in the stream, carries on.
-            let (pool, runtime) = (pool.clone(), runtime.clone());
+            let (pool, runtime) = (pool.clone(), Arc::clone(&runtime));
             crate::background::guarded("alert evaluation", move || async move {
                 let out = match (event, replay) {
                     (_, Some(since)) => runtime.replay(&pool, since).await,
@@ -714,8 +723,7 @@ pub async fn claim(pool: &PgPool, alert_id: i64, dedup_key: &str) -> bool {
     )
     .execute(pool)
     .await
-    .map(|r| r.rows_affected() == 1)
-    .unwrap_or(false)
+    .is_ok_and(|r| r.rows_affected() == 1)
 }
 
 /// Mark a claimed delivery as actually sent, and stamp the alert.

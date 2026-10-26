@@ -14,15 +14,15 @@ use wormholesystems::realtime::MapEvent;
 
 /// A fixed timestamp (chrono's `clock` feature is off — no `Utc::now()`).
 fn ts() -> DateTime<Utc> {
-    DateTime::<Utc>::from_timestamp(0, 0).unwrap()
+    DateTime::<Utc>::from_timestamp(0, 0).expect("epoch is a valid timestamp")
 }
 
 /// Serialize → deserialize → re-serialize. The two JSON strings must match (lets us assert a
 /// faithful round-trip for types that don't derive `PartialEq`).
 fn reserialize<T: serde::Serialize + serde::de::DeserializeOwned>(value: &T) -> (String, String) {
-    let first = serde_json::to_string(value).unwrap();
-    let back: T = serde_json::from_str(&first).unwrap();
-    (first.clone(), serde_json::to_string(&back).unwrap())
+    let first = serde_json::to_string(value).expect("serialize JSON");
+    let back: T = serde_json::from_str(&first).expect("parse JSON");
+    (first, serde_json::to_string(&back).expect("serialize JSON"))
 }
 
 #[test]

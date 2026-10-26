@@ -16,19 +16,21 @@ use wormholesystems::telemetry::tunnel::{BODY_LIMIT, Tunnel};
 /// A stand-in Sentry that keeps what it was sent, and the DSN that points at it.
 async fn collector() -> (String, Arc<Mutex<Vec<(String, Bytes)>>>) {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let keep = seen.clone();
+    let keep = Arc::clone(&seen);
     let app = Router::new().route(
         "/api/{project}/envelope/",
         post(
             move |axum::extract::Path(project): axum::extract::Path<String>, body: Bytes| {
-                keep.lock().unwrap().push((project, body));
+                keep.lock().expect("mutex poisoned").push((project, body));
                 async { StatusCode::OK }
             },
         ),
     );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let addr = listener.local_addr().expect("read listener address");
+    tokio::spawn(async move { axum::serve(listener, app).await.expect("serve test app") });
     (format!("http://public@{addr}/7"), seen)
 }
 
@@ -41,7 +43,7 @@ async fn post_envelope(app: Router, body: impl Into<Body>) -> StatusCode {
         Request::post("/api/sentry-tunnel")
             .header("content-type", "application/x-sentry-envelope")
             .body(body.into())
-            .unwrap(),
+            .expect("build request"),
     )
     .await
     .unwrap()
@@ -50,7 +52,7 @@ async fn post_envelope(app: Router, body: impl Into<Body>) -> StatusCode {
 
 fn app_with(pool: &PgPool, dsn: Option<&str>) -> Router {
     let mut state = common::app::state(pool);
-    state.sentry_tunnel = dsn.map(|dsn| Arc::new(Tunnel::new(dsn).unwrap()));
+    state.sentry_tunnel = dsn.map(|dsn| Arc::new(Tunnel::new(dsn).expect("parse sentry DSN")));
     wormholesystems::app::router(state)
 }
 

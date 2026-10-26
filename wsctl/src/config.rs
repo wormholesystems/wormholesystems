@@ -9,7 +9,7 @@ use rand::Rng;
 use crate::envfile;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Answers {
+pub(crate) struct Answers {
     pub deployment: Deployment,
     pub images: Images,
     pub contact_name: String,
@@ -36,7 +36,7 @@ pub struct Answers {
 /// The Sentry-protocol DSNs errors go to: the API's, and the one the frontend and the
 /// browser report to, which may be a project of its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ErrorReporting {
+pub(crate) struct ErrorReporting {
     pub api_dsn: String,
     pub web_dsn: String,
 }
@@ -44,7 +44,7 @@ pub struct ErrorReporting {
 impl ErrorReporting {
     /// The answer to the one question setup asks. Both halves report to `dsn`, unless
     /// `.env` already sends the web half to a project of its own, which is kept.
-    pub fn from_answer(existing: &str, dsn: &str) -> Option<Self> {
+    pub(crate) fn from_answer(existing: &str, dsn: &str) -> Option<Self> {
         let dsn = dsn.trim();
         if dsn.is_empty() {
             return None;
@@ -61,7 +61,7 @@ impl ErrorReporting {
     }
 
     /// The DSN `.env` reports to, which is what the question starts from.
-    pub fn current(existing: &str) -> String {
+    pub(crate) fn current(existing: &str) -> String {
         ["SENTRY_DSN", "PUBLIC_SENTRY_DSN"]
             .iter()
             .find_map(|key| envfile::get(existing, key).filter(|v| !v.is_empty()))
@@ -71,7 +71,7 @@ impl ErrorReporting {
 
 /// A DSN as Sentry, GlitchTip and Bugsink hand them out, `https://key@host/project`, or
 /// nothing. Checked here because the server would only say so in its log.
-pub fn dsn(input: &str) -> Result<String, String> {
+pub(crate) fn dsn(input: &str) -> Result<String, String> {
     let input = input.trim();
     if input.is_empty() {
         return Ok(String::new());
@@ -95,10 +95,10 @@ pub fn dsn(input: &str) -> Result<String, String> {
 }
 
 /// What the killmail ingest fills in on its first start unless told otherwise.
-pub const DEFAULT_BACKFILL_DAYS: u32 = 90;
+pub(crate) const DEFAULT_BACKFILL_DAYS: u32 = 90;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Announcement {
+pub(crate) struct Announcement {
     /// `info`, `warning` or `critical`.
     pub level: String,
     pub title: String,
@@ -109,10 +109,10 @@ pub struct Announcement {
 }
 
 impl Announcement {
-    pub const LEVELS: [&str; 3] = ["info", "warning", "critical"];
+    pub(crate) const LEVELS: [&str; 3] = ["info", "warning", "critical"];
 
     /// The one `.env` has, if its message is set: an empty message is how it is off.
-    pub fn from_env(env: &str) -> Option<Self> {
+    pub(crate) fn from_env(env: &str) -> Option<Self> {
         let get = |key: &str| envfile::get(env, key).unwrap_or_default();
         let message = get("ANNOUNCEMENT_MESSAGE");
         (!message.is_empty()).then(|| Self {
@@ -129,7 +129,7 @@ impl Announcement {
 }
 
 /// The killmail ingest as `.env` has it: on when ZKB_LISTEN is 1, as the server reads it.
-pub fn killmails_from_env(env: &str) -> Option<u32> {
+pub(crate) fn killmails_from_env(env: &str) -> Option<u32> {
     (envfile::get(env, "ZKB_LISTEN").as_deref() == Some("1")).then(|| {
         envfile::get(env, "KILLMAIL_BACKFILL_DAYS")
             .and_then(|d| d.parse().ok())
@@ -138,43 +138,39 @@ pub fn killmails_from_env(env: &str) -> Option<u32> {
 }
 
 /// The compose profile that turns the scheduled dumps on.
-pub const BACKUP_PROFILE: &str = "backup";
+pub(crate) const BACKUP_PROFILE: &str = "backup";
 /// Where dumps land unless WS_BACKUP_DIR says otherwise, relative to the checkout.
-pub const DEFAULT_BACKUP_DIR: &str = "backups";
+pub(crate) const DEFAULT_BACKUP_DIR: &str = "backups";
 /// The Postgres the bundled database runs, and the backup client's default.
-pub const BUNDLED_POSTGRES: u32 = 16;
+pub(crate) const BUNDLED_POSTGRES: u32 = 16;
 
 /// Whether COMPOSE_PROFILES turns the scheduled dumps on.
-pub fn backups_on(env: &str) -> bool {
+pub(crate) fn backups_on(env: &str) -> bool {
     envfile::get(env, "COMPOSE_PROFILES")
         .unwrap_or_default()
         .split(',')
         .any(|p| p.trim() == BACKUP_PROFILE)
 }
 
-/// COMPOSE_PROFILES with `profile` on or off, and any others the operator has left as
-/// they are. None when nothing is left.
-pub fn with_profile(current: &str, profile: &str, on: bool) -> Option<String> {
-    let mut profiles: Vec<&str> = current
+/// The profiles in COMPOSE_PROFILES other than `profile`, which the operator has left as
+/// they are.
+pub(crate) fn other_profiles<'a>(current: &'a str, profile: &str) -> Vec<&'a str> {
+    current
         .split(',')
         .map(str::trim)
         .filter(|p| !p.is_empty() && *p != profile)
-        .collect();
-    if on {
-        profiles.push(profile);
-    }
-    (!profiles.is_empty()).then(|| profiles.join(","))
+        .collect()
 }
 
 /// Where the dumps are on this machine.
-pub fn backup_dir(dir: &std::path::Path, env: &str) -> std::path::PathBuf {
+pub(crate) fn backup_dir(dir: &std::path::Path, env: &str) -> std::path::PathBuf {
     let configured = envfile::get(env, "WS_BACKUP_DIR").filter(|d| !d.is_empty());
     dir.join(configured.as_deref().unwrap_or(DEFAULT_BACKUP_DIR))
 }
 
 /// Where the API and frontend images come from.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Images {
+pub(crate) enum Images {
     /// The ones CI publishes for every push to main.
     #[default]
     Pull,
@@ -184,7 +180,7 @@ pub enum Images {
 }
 
 impl Images {
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Images::Pull => "pull",
             Images::Build => "build",
@@ -193,7 +189,7 @@ impl Images {
 
     /// What an install runs from. One that never chose builds, since that is what it has
     /// always done; it keeps doing so until its operator opts in.
-    pub fn from_env(env: &str) -> Self {
+    pub(crate) fn from_env(env: &str) -> Self {
         match envfile::get(env, "WS_IMAGES").as_deref() {
             Some("pull") => Images::Pull,
             _ => Images::Build,
@@ -201,7 +197,7 @@ impl Images {
     }
 
     /// Whether `.env` says at all, as opposed to falling back to building.
-    pub fn chosen(env: &str) -> bool {
+    pub(crate) fn chosen(env: &str) -> bool {
         envfile::get(env, "WS_IMAGES").is_some_and(|v| !v.is_empty())
     }
 }
@@ -209,13 +205,13 @@ impl Images {
 /// How the install is put together: two choices that used to be one ("full" ran both
 /// bundled, "standalone" neither).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Deployment {
+pub(crate) struct Deployment {
     pub database: Database,
     pub proxy: Proxy,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum Database {
+pub(crate) enum Database {
     /// Postgres in a container of this stack, with its data in the `pgdata` volume.
     #[default]
     Bundled,
@@ -224,7 +220,7 @@ pub enum Database {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ExternalDb {
+pub(crate) struct ExternalDb {
     /// As the containers reach it: never localhost, which is the container itself.
     pub url: String,
     /// The Docker network it is a container on, when it is one. The API joins it.
@@ -233,7 +229,7 @@ pub struct ExternalDb {
 
 /// What stands between the internet and the app.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Proxy {
+pub(crate) enum Proxy {
     /// The bundled Caddy on ports 80 and 443, with its own certificate.
     Caddy(Site),
     /// The bundled Caddy as a plain-http path router behind the operator's own proxy, which
@@ -251,7 +247,7 @@ impl Default for Proxy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Site {
+pub(crate) struct Site {
     /// Empty means no domain: plain http on `http_port`.
     pub domain: String,
     pub http_port: u16,
@@ -278,7 +274,7 @@ impl Default for Site {
 /// How the bundled Caddy gets a certificate for its domain. Each is a snippet in the
 /// Caddyfile, picked by WS_TLS.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Tls {
+pub(crate) enum Tls {
     /// Let's Encrypt, which needs the name to resolve here and ports 80 and 443 open.
     #[default]
     Acme,
@@ -291,9 +287,9 @@ pub enum Tls {
 }
 
 impl Tls {
-    pub const ALL: [Tls; 4] = [Tls::Acme, Tls::Files, Tls::Internal, Tls::Off];
+    pub(crate) const ALL: [Tls; 4] = [Tls::Acme, Tls::Files, Tls::Internal, Tls::Off];
 
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Tls::Acme => "acme",
             Tls::Files => "files",
@@ -302,19 +298,19 @@ impl Tls {
         }
     }
 
-    pub fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|tls| tls.as_str() == value)
     }
 }
 
 /// Where WS_TLS=files reads the certificate and key, as the checkout and the Caddy
 /// container both see them.
-pub const CERTS_DIR: &str = "certs";
-pub const DEFAULT_CERT: &str = "fullchain.pem";
-pub const DEFAULT_KEY: &str = "privkey.pem";
+pub(crate) const CERTS_DIR: &str = "certs";
+pub(crate) const DEFAULT_CERT: &str = "fullchain.pem";
+pub(crate) const DEFAULT_KEY: &str = "privkey.pem";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Router {
+pub(crate) struct Router {
     /// What the browser uses, scheme included. The proxy in front decides it.
     pub public_url: String,
     /// The Docker network Caddy joins as `wormholesystems-router`.
@@ -324,7 +320,7 @@ pub struct Router {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Direct {
+pub(crate) struct Direct {
     /// What the browser uses, scheme included. The proxy in front decides it.
     pub public_url: String,
     /// The Docker network the API and the frontend join, where a proxy container finds
@@ -335,27 +331,28 @@ pub struct Direct {
     pub host_ports: Option<(u16, u16)>,
 }
 
-pub const DEFAULT_NETWORK: &str = "wormholesystems";
-pub const DEFAULT_ROUTER_PORT: u16 = 8080;
+pub(crate) const DEFAULT_NETWORK: &str = "wormholesystems";
+pub(crate) const DEFAULT_ROUTER_PORT: u16 = 8080;
 
 /// The compose files, base first. docker-compose.yml alone is the bundled everything, and
 /// compose's default, so an install that is all bundled needs no COMPOSE_FILE at all.
-pub const BASE_COMPOSE: &str = "docker-compose.yml";
-pub const EXTERNAL_DB_COMPOSE: &str = "deploy/external-db.yml";
-pub const DB_NETWORK_COMPOSE: &str = "deploy/db-network.yml";
-pub const APP_NETWORK_COMPOSE: &str = "deploy/app-network.yml";
-pub const APP_PORTS_COMPOSE: &str = "deploy/app-ports.yml";
-pub const ROUTER_NETWORK_COMPOSE: &str = "deploy/router-network.yml";
-pub const ROUTER_PORT_COMPOSE: &str = "deploy/router-port.yml";
+pub(crate) const BASE_COMPOSE: &str = "docker-compose.yml";
+pub(crate) const EXTERNAL_DB_COMPOSE: &str = "deploy/external-db.yml";
+pub(crate) const DB_NETWORK_COMPOSE: &str = "deploy/db-network.yml";
+pub(crate) const APP_NETWORK_COMPOSE: &str = "deploy/app-network.yml";
+pub(crate) const APP_PORTS_COMPOSE: &str = "deploy/app-ports.yml";
+pub(crate) const ROUTER_NETWORK_COMPOSE: &str = "deploy/router-network.yml";
+pub(crate) const ROUTER_PORT_COMPOSE: &str = "deploy/router-port.yml";
 /// What wsctl 0.5 wrote for a standalone install. Still in the checkout, so an install that
 /// names them keeps running until `update` moves it to the overlays above.
-pub const LEGACY_STANDALONE_COMPOSE: &str = "compose.standalone.yml";
-pub const LEGACY_PORTS_COMPOSE: &str = "compose.standalone.ports.yml";
+pub(crate) const LEGACY_STANDALONE_COMPOSE: &str = "compose.standalone.yml";
+pub(crate) const LEGACY_PORTS_COMPOSE: &str = "compose.standalone.ports.yml";
 
 /// The files compose reads on its own next to docker-compose.yml, for changes of the
 /// operator's that survive updates. Compose stops looking for them once COMPOSE_FILE is
 /// set, so wsctl names whichever exist there itself.
-pub const OVERRIDE_COMPOSE: [&str; 2] = ["compose.override.yml", "docker-compose.override.yml"];
+pub(crate) const OVERRIDE_COMPOSE: [&str; 2] =
+    ["compose.override.yml", "docker-compose.override.yml"];
 
 /// Every compose file wsctl decides about. Anything else in COMPOSE_FILE was put there by
 /// the operator, and stays.
@@ -378,7 +375,7 @@ impl Deployment {
     /// WS_SETUP instead: `standalone` was an external database behind a proxy on the
     /// network (and the loopback ports when its COMPOSE_FILE had them), anything else all
     /// bundled.
-    pub fn from_env(env: &str) -> Self {
+    pub(crate) fn from_env(env: &str) -> Self {
         let get = |key: &str| envfile::get(env, key).unwrap_or_default();
         let filled = |key: &str| Some(get(key)).filter(|v| !v.is_empty());
         let port = |key: &str, fallback: u16| get(key).parse().unwrap_or(fallback);
@@ -435,7 +432,7 @@ impl Deployment {
                 let domain = get("WS_DOMAIN");
                 // As compose reads them, whatever they are: `setup` is what pins them to 80
                 // and 443 for a domain, and an update must not quietly move somebody's ports.
-                let (http_port, https_port) = (port("HTTP_PORT", 80), port("HTTPS_PORT", 443));
+                let (http, https) = (port("HTTP_PORT", 80), port("HTTPS_PORT", 443));
                 Proxy::Caddy(Site {
                     public_url: if domain.is_empty() {
                         get("WS_PUBLIC_URL")
@@ -443,8 +440,8 @@ impl Deployment {
                         String::new()
                     },
                     domain,
-                    http_port,
-                    https_port,
+                    http_port: http,
+                    https_port: https,
                     tls: Tls::parse(&get("WS_TLS")).unwrap_or_default(),
                 })
             }
@@ -454,7 +451,7 @@ impl Deployment {
 
     /// Whether `.env` still says it the way wsctl 0.5 did, with WS_SETUP instead of the two
     /// choices.
-    pub fn is_legacy(env: &str) -> bool {
+    pub(crate) fn is_legacy(env: &str) -> bool {
         envfile::get(env, "WS_PROXY").is_none_or(|v| v.is_empty())
             && envfile::get(env, "WS_SETUP").is_some()
     }
@@ -462,7 +459,7 @@ impl Deployment {
     /// The compose files this needs, base first, then the database's overlays, then the
     /// proxy's. The order matters where two touch the same thing: router-port.yml replaces
     /// the ports router-network.yml cleared.
-    pub fn compose_files(&self) -> Vec<&'static str> {
+    pub(crate) fn compose_files(&self) -> Vec<&'static str> {
         let mut files = vec![BASE_COMPOSE];
         if let Database::External(db) = &self.database {
             files.push(EXTERNAL_DB_COMPOSE);
@@ -497,7 +494,7 @@ impl Deployment {
     /// COMPOSE_FILE as it should read: wsctl's own files, then whatever the operator added
     /// to the current one, then the override files that exist (`overrides`), last so they
     /// win. None when compose's default reads exactly that already.
-    pub fn compose_file(&self, current: &str, overrides: &[&str]) -> Option<String> {
+    pub(crate) fn compose_file(&self, current: &str, overrides: &[&str]) -> Option<String> {
         let mut files: Vec<&str> = self.compose_files();
         files.extend(
             current
@@ -514,7 +511,7 @@ impl Deployment {
     }
 
     /// The network the API and the frontend are on for the operator's proxy, if any.
-    pub fn app_network(&self) -> Option<&str> {
+    pub(crate) fn app_network(&self) -> Option<&str> {
         match &self.proxy {
             Proxy::Direct(direct) => direct.network.as_deref(),
             _ => None,
@@ -523,7 +520,7 @@ impl Deployment {
 
     /// The network wsctl makes when it is missing: the one the operator's proxy joins.
     /// A database's network is somebody else's and has to exist already.
-    pub fn proxy_network(&self) -> Option<&str> {
+    pub(crate) fn proxy_network(&self) -> Option<&str> {
         match &self.proxy {
             Proxy::Router(router) => router.network.as_deref(),
             Proxy::Direct(direct) => direct.network.as_deref(),
@@ -532,7 +529,7 @@ impl Deployment {
     }
 
     /// What the outside world calls this install. Every redirect has to match it exactly.
-    pub fn base_url(&self) -> String {
+    pub(crate) fn base_url(&self) -> String {
         match &self.proxy {
             Proxy::Caddy(site) if site.domain.is_empty() => {
                 if site.public_url.is_empty() {
@@ -560,7 +557,7 @@ impl Deployment {
 
     /// Where `status` checks that the install answers, when it has an address worth
     /// checking from here.
-    pub fn public_url(&self) -> Option<String> {
+    pub(crate) fn public_url(&self) -> Option<String> {
         match &self.proxy {
             Proxy::Caddy(site) if site.domain.is_empty() && site.public_url.is_empty() => None,
             _ => Some(self.base_url()).filter(|u| !u.is_empty()),
@@ -571,7 +568,7 @@ impl Deployment {
     /// stale one cannot keep selecting them, and COMPOSE_FILE to match.
     ///
     /// `overrides` are the override files present in the checkout ([`overrides`]).
-    pub fn apply(&self, env: &str, overrides: &[&str]) -> String {
+    pub(crate) fn apply(&self, env: &str, overrides: &[&str]) -> String {
         let mut values = BTreeMap::new();
         let mut removals = vec!["WS_SETUP"];
         let mut set = |k: &str, v: String| {
@@ -656,7 +653,7 @@ impl Deployment {
 }
 
 /// The override files the checkout has, in the order compose would read them.
-pub fn overrides(dir: &std::path::Path) -> Vec<&'static str> {
+pub(crate) fn overrides(dir: &std::path::Path) -> Vec<&'static str> {
     OVERRIDE_COMPOSE
         .into_iter()
         .filter(|file| dir.join(file).is_file())
@@ -664,7 +661,7 @@ pub fn overrides(dir: &std::path::Path) -> Vec<&'static str> {
 }
 
 /// The address of a Caddy without a domain, seen from this machine.
-pub fn localhost(port: u16) -> String {
+pub(crate) fn localhost(port: u16) -> String {
     if port == 80 {
         "http://localhost".into()
     } else {
@@ -673,7 +670,7 @@ pub fn localhost(port: u16) -> String {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Discord {
+pub(crate) struct Discord {
     pub application_id: String,
     pub public_key: String,
     pub client_id: String,
@@ -683,22 +680,26 @@ pub struct Discord {
 }
 
 impl Answers {
-    pub fn base_url(&self) -> String {
+    pub(crate) fn base_url(&self) -> String {
         self.deployment.base_url()
     }
 
     /// The `.env` the answers make out of the current one.
-    pub fn apply(&self, env: &str, overrides: &[&str]) -> String {
+    pub(crate) fn apply(&self, env: &str, overrides: &[&str]) -> String {
         let mut out = envfile::patch(&self.deployment.apply(env, overrides), &self.env_values());
         for key in self.removals() {
             out = envfile::remove(&out, key);
         }
-        let profiles = envfile::get(&out, "COMPOSE_PROFILES").unwrap_or_default();
-        match with_profile(&profiles, BACKUP_PROFILE, self.backups) {
-            Some(profiles) => {
-                out = envfile::patch(&out, &[("COMPOSE_PROFILES".to_string(), profiles)].into())
-            }
-            None => out = envfile::remove(&out, "COMPOSE_PROFILES"),
+        let current = envfile::get(&out, "COMPOSE_PROFILES").unwrap_or_default();
+        let mut profiles = other_profiles(&current, BACKUP_PROFILE);
+        if self.backups {
+            profiles.push(BACKUP_PROFILE);
+        }
+        if profiles.is_empty() {
+            out = envfile::remove(&out, "COMPOSE_PROFILES");
+        } else {
+            let profiles = profiles.join(",");
+            out = envfile::patch(&out, &[("COMPOSE_PROFILES".to_string(), profiles)].into());
         }
         out
     }
@@ -706,7 +707,7 @@ impl Answers {
     /// The `.env` keys this produces besides the deployment's. Discord is absent rather
     /// than blank when it is off: the server reads it all-or-nothing, and an empty client
     /// id counts as configured.
-    pub fn env_values(&self) -> BTreeMap<String, String> {
+    pub(crate) fn env_values(&self) -> BTreeMap<String, String> {
         let mut values = BTreeMap::new();
         let mut set = |k: &str, v: String| {
             values.insert(k.to_string(), v);
@@ -795,7 +796,7 @@ impl Answers {
 /// A list of EVE ids as the server reads it: numbers, comma separated. Spaces and commas
 /// both separate on the way in, since that is how a list gets pasted. Anything else is
 /// refused here, because the server refuses to start on it.
-pub fn affiliation_ids(input: &str) -> Result<String, String> {
+pub(crate) fn affiliation_ids(input: &str) -> Result<String, String> {
     let mut ids = Vec::new();
     for entry in input.split([',', ' ']).filter(|e| !e.is_empty()) {
         match entry.parse::<u64>() {
@@ -808,11 +809,11 @@ pub fn affiliation_ids(input: &str) -> Result<String, String> {
 
 /// A password nobody has to think about. Alphanumeric so it survives a URL, a shell and a
 /// compose file without escaping.
-pub fn generated_password() -> String {
+pub(crate) fn generated_password() -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let mut rng = rand::rng();
     (0..32)
-        .map(|_| ALPHABET[rng.random_range(0..ALPHABET.len())] as char)
+        .map(|_| char::from(ALPHABET[rng.random_range(0..ALPHABET.len())]))
         .collect()
 }
 

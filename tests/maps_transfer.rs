@@ -18,7 +18,7 @@ use wormholesystems::maps::solar_system::{
     AddSystem, SetHome, SetRally, add_system, set_home, set_rally,
 };
 use wormholesystems::maps::transfer::{
-    SectionSet, export_map, import_map, import_map_as_new, parse_export,
+    ImportTarget, SectionSet, export_map, import_map, import_map_as_new, parse_export,
 };
 use wormholesystems::maps::{
     ConnectionType, MapError, MassStatus, Role, SignatureGroup, SystemStatus, TimeStatus,
@@ -40,6 +40,14 @@ fn all_sections() -> SectionSet {
 async fn populated_world(pool: &PgPool) -> common::World {
     seed_catalog(pool).await;
     let w = world(pool).await;
+    let (a, b) = place_home_and_neighbour(pool, &w).await;
+    link_wormhole(pool, &w, a, b).await;
+    add_intel(pool, &w).await;
+    w
+}
+
+/// The two placed systems, the first one home. Returns their placement ids.
+async fn place_home_and_neighbour(pool: &PgPool, w: &common::World) -> (i64, i64) {
     let a = add_system(
         pool,
         w.owner,
@@ -52,7 +60,7 @@ async fn populated_world(pool: &PgPool) -> common::World {
         },
     )
     .await
-    .unwrap();
+    .expect("add_system");
     let b = add_system(
         pool,
         w.owner,
@@ -65,7 +73,7 @@ async fn populated_world(pool: &PgPool) -> common::World {
         },
     )
     .await
-    .unwrap();
+    .expect("add_system");
     set_home(
         pool,
         w.owner,
@@ -76,21 +84,25 @@ async fn populated_world(pool: &PgPool) -> common::World {
         },
     )
     .await
-    .unwrap();
+    .expect("set_home");
+    (a.id, b.id)
+}
 
+/// A wormhole between the two with its signature linked on the near side.
+async fn link_wormhole(pool: &PgPool, w: &common::World, a: i64, b: i64) {
     let conn = add_connection(
         pool,
         w.owner,
         AddConnection {
             map_id: w.map_id,
-            from_system: a.id,
-            to_system: b.id,
+            from_system: a,
+            to_system: b,
             kind: ConnectionType::Wormhole,
             size: Some(WormholeSize::Medium),
         },
     )
     .await
-    .unwrap();
+    .expect("add_connection");
     let sig = add_signature(
         pool,
         w.owner,
@@ -107,7 +119,7 @@ async fn populated_world(pool: &PgPool) -> common::World {
         },
     )
     .await
-    .unwrap();
+    .expect("add_signature");
     link_signature(
         pool,
         w.owner,
@@ -118,8 +130,11 @@ async fn populated_world(pool: &PgPool) -> common::World {
         },
     )
     .await
-    .unwrap();
+    .expect("link_signature");
+}
 
+/// Notes on a third system, which also sits on the ignore list.
+async fn add_intel(pool: &PgPool, w: &common::World) {
     sqlx::query(
         "insert into map_solar_system_details (map_id, solar_system_id, status, occupying_group, notes)
          values ($1, $2, 'hostile', 'Bad Corp', 'stay out')
@@ -130,7 +145,7 @@ async fn populated_world(pool: &PgPool) -> common::World {
     .bind(SYS_C)
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert map_solar_system_details");
     add_ignored_system(
         pool,
         w.owner,
@@ -140,8 +155,7 @@ async fn populated_world(pool: &PgPool) -> common::World {
         },
     )
     .await
-    .unwrap();
-    w
+    .expect("add_ignored_system");
 }
 
 #[sqlx::test]
@@ -152,7 +166,7 @@ async fn a_round_trip_reproduces_the_map(pool: PgPool) {
         .await
         .unwrap();
     let content = serde_json::to_string(&file).unwrap();
-    let parsed = parse_export(&content, all_sections(), true).unwrap();
+    let parsed = parse_export(&content, all_sections(), ImportTarget::NewMap).unwrap();
     let map = import_map_as_new(
         &pool,
         w.owner,
@@ -227,7 +241,7 @@ async fn importing_twice_updates_rather_than_duplicates(pool: PgPool) {
         .await
         .unwrap();
     let content = serde_json::to_string(&file).unwrap();
-    let parsed = parse_export(&content, all_sections(), false).unwrap();
+    let parsed = parse_export(&content, all_sections(), ImportTarget::ExistingMap).unwrap();
 
     let summary = import_map(&pool, w.owner, w.map_id, &parsed).await.unwrap();
 
@@ -300,7 +314,7 @@ async fn a_legacy_file_imports_with_its_vocabulary_translated(pool: PgPool) {
         signatures: true,
         ..Default::default()
     };
-    let parsed = parse_export(&content, sections, true).unwrap();
+    let parsed = parse_export(&content, sections, ImportTarget::NewMap).unwrap();
     let map = import_map_as_new(
         &pool,
         w.owner,
@@ -405,7 +419,7 @@ async fn import_connection_size(pool: &PgPool, content: &str) -> Option<Wormhole
         connections: true,
         ..Default::default()
     };
-    let parsed = parse_export(content, sections, true).unwrap();
+    let parsed = parse_export(content, sections, ImportTarget::NewMap).expect("parse_export");
     let map = import_map_as_new(
         pool,
         w.owner,
@@ -414,14 +428,14 @@ async fn import_connection_size(pool: &PgPool, content: &str) -> Option<Wormhole
         None,
     )
     .await
-    .unwrap();
+    .expect("import_map_as_new");
     sqlx::query_scalar!(
         r#"select size as "size: WormholeSize" from map_connections where map_id = $1"#,
         map.id,
     )
     .fetch_one(pool)
     .await
-    .unwrap()
+    .expect("query map_connections")
 }
 
 #[sqlx::test]
@@ -472,7 +486,7 @@ async fn a_linked_signature_type_wins_over_the_connection_type(pool: PgPool) {
         signatures: true,
         ..Default::default()
     };
-    let parsed = parse_export(&content, sections, true).unwrap();
+    let parsed = parse_export(&content, sections, ImportTarget::NewMap).unwrap();
     let map = import_map_as_new(
         &pool,
         w.owner,
@@ -514,7 +528,7 @@ async fn the_owner_grant_is_never_touched(pool: PgPool) {
         access: true,
         ..Default::default()
     };
-    let parsed = parse_export(content, sections, false).unwrap();
+    let parsed = parse_export(content, sections, ImportTarget::ExistingMap).unwrap();
     let summary = import_map(&pool, w.owner, w.map_id, &parsed).await.unwrap();
 
     // The row demoting the owner to viewer is skipped; the new corp grant lands.
@@ -551,7 +565,7 @@ async fn a_file_with_owner_grants_is_rejected(pool: PgPool) {
         ..Default::default()
     };
     assert!(matches!(
-        parse_export(content, sections, false),
+        parse_export(content, sections, ImportTarget::ExistingMap),
         Err(MapError::Validation(_))
     ));
 }
@@ -580,12 +594,12 @@ async fn parse_refuses_wrong_files_with_a_reason(pool: PgPool) {
             "does not contain the \"settings\" section",
         ),
     ] {
-        match parse_export(content, sections, false) {
+        match parse_export(content, sections, ImportTarget::ExistingMap) {
             Err(MapError::Validation(msg)) => {
                 assert!(
                     msg.contains(expected),
                     "{msg:?} should mention {expected:?}"
-                )
+                );
             }
             other => panic!("expected a validation error, got {other:?}"),
         }
@@ -598,9 +612,9 @@ async fn parse_refuses_wrong_files_with_a_reason(pool: PgPool) {
     };
     let content = r#"{"format": "wormholesystems-map-export", "version": 1,
         "map_name": "x", "sections": {"connections": []}}"#;
-    assert!(parse_export(content, deps, false).is_ok());
+    assert!(parse_export(content, deps, ImportTarget::ExistingMap).is_ok());
     assert!(matches!(
-        parse_export(content, deps, true),
+        parse_export(content, deps, ImportTarget::NewMap),
         Err(MapError::Validation(_))
     ));
 }
@@ -630,7 +644,7 @@ async fn importing_routes_into_a_new_map_replaces_the_seeded_watchlist(pool: PgP
         routes: true,
         ..Default::default()
     };
-    let parsed = parse_export(&content, sections, true).unwrap();
+    let parsed = parse_export(&content, sections, ImportTarget::NewMap).unwrap();
     let map = import_map_as_new(
         &pool,
         w.owner,
@@ -655,7 +669,7 @@ async fn importing_routes_into_a_new_map_replaces_the_seeded_watchlist(pool: PgP
     assert_eq!(ignored_ids(&pool, map.id).await.unwrap(), vec![SYS_C]);
 
     // Importing the same file again leaves one row, counted as updated rather than made.
-    let parsed = parse_export(&content, sections, true).unwrap();
+    let parsed = parse_export(&content, sections, ImportTarget::NewMap).unwrap();
     let counts = import_map(&pool, w.owner, map.id, &parsed).await.unwrap();
     assert_eq!(counts.routes.updated, 2);
     assert_eq!(counts.routes.created, 0);
@@ -685,7 +699,7 @@ async fn a_system_ignored_twice_in_one_file_is_ignored_once(pool: PgPool) {
         routes: true,
         ..Default::default()
     };
-    let parsed = parse_export(&content, sections, true).unwrap();
+    let parsed = parse_export(&content, sections, ImportTarget::NewMap).unwrap();
 
     let counts = import_map(&pool, w.owner, w.map_id, &parsed).await.unwrap();
 
@@ -740,7 +754,7 @@ async fn a_faction_warfare_signature_keeps_the_legacy_code_on_the_wire(pool: PgP
     );
 
     let content = serde_json::to_string(&file).unwrap();
-    let parsed = parse_export(&content, all_sections(), true).unwrap();
+    let parsed = parse_export(&content, all_sections(), ImportTarget::NewMap).unwrap();
     let map = import_map_as_new(
         &pool,
         w.owner,
@@ -792,7 +806,7 @@ async fn export_carries_every_rally_point(pool: PgPool) {
     assert!(settings.get("rally_solarsystem_id").is_none());
 
     // And they come back in the same order on the copy.
-    let parsed = parse_export(&json.to_string(), all_sections(), true).unwrap();
+    let parsed = parse_export(&json.to_string(), all_sections(), ImportTarget::NewMap).unwrap();
     let map = import_map_as_new(
         &pool,
         w.owner,
@@ -845,14 +859,19 @@ async fn import_reads_rally_points_in_either_spelling(pool: PgPool) {
         (r#""rally_solarsystem_ids": null"#.to_string(), vec![]),
         (r#""home_solarsystem_id": null"#.to_string(), vec![]),
     ] {
-        let parsed = parse_export(&rally_settings_file(&rally), sections, false).unwrap();
+        let parsed = parse_export(
+            &rally_settings_file(&rally),
+            sections,
+            ImportTarget::ExistingMap,
+        )
+        .unwrap();
         import_map(&pool, w.owner, w.map_id, &parsed).await.unwrap();
         assert_eq!(rally_systems(&pool, w.map_id).await, expected, "{rally}");
     }
 
     let malformed = rally_settings_file(r#""rally_solarsystem_ids": ["abc"]"#);
     assert!(matches!(
-        parse_export(&malformed, sections, false),
+        parse_export(&malformed, sections, ImportTarget::ExistingMap),
         Err(MapError::Validation(_))
     ));
 }
@@ -885,7 +904,7 @@ async fn placements_by_system(pool: &PgPool, map_id: i64) -> HashMap<i64, i64> {
     )
     .fetch_all(pool)
     .await
-    .unwrap()
+    .expect("query map_solar_systems")
     .into_iter()
     .map(|r| (r.solar_system_id, r.id))
     .collect()
@@ -900,7 +919,7 @@ async fn rally_systems(pool: &PgPool, map_id: i64) -> Vec<i64> {
     )
     .fetch_all(pool)
     .await
-    .unwrap()
+    .expect("query map_solar_systems")
 }
 
 /// Legacy writes the in-game "closure imminent" state as `expired`; it has to survive the
@@ -934,7 +953,7 @@ async fn an_expired_hole_round_trips_as_expired(pool: PgPool) {
     let content = serde_json::to_string(&file).unwrap();
     assert!(content.contains(r#""lifetime":"expired""#));
 
-    let parsed = parse_export(&content, all_sections(), true).unwrap();
+    let parsed = parse_export(&content, all_sections(), ImportTarget::NewMap).unwrap();
     let map = import_map_as_new(
         &pool,
         w.owner,

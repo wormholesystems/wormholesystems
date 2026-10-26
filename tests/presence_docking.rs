@@ -31,12 +31,12 @@ async fn docked(
             &Token {
                 access_token: "access".into(),
                 refresh_token: "refresh".into(),
-                expires_at: SystemTime::now() + Duration::from_secs(1200),
+                expires_at: SystemTime::now() + Duration::from_mins(20),
                 scopes: vec!["esi-location.read_location.v1".into()],
             },
         )
         .await
-        .unwrap();
+        .expect("create token store");
     sqlx::query(
         "insert into character_status (character_id, online, solar_system_id, station_id, structure_id)
          values ($1, true, $2, $3, $4)
@@ -49,7 +49,7 @@ async fn docked(
     .bind(structure)
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert character_status");
     sqlx::query(
         "insert into map_user_settings (map_id, user_id, tracking_allowed) values ($1, $2, true)
          on conflict (map_id, user_id) do update set tracking_allowed = true",
@@ -58,16 +58,16 @@ async fn docked(
     .bind(actor.user_id)
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert map_user_settings");
 }
 
 async fn me(pool: &PgPool, map_id: i64, actor: Actor) -> MapCharacter {
     characters_on(pool, map_id, actor.user_id)
         .await
-        .unwrap()
+        .expect("characters_on")
         .into_iter()
         .find(|c| c.character_id == actor.character_id)
-        .unwrap()
+        .expect("character is listed")
 }
 
 #[sqlx::test]

@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 
 use crate::exec::Runner;
 
-pub const PROJECT: &str = "wormholesystems";
+pub(crate) const PROJECT: &str = "wormholesystems";
 const OLD_ROLE: &str = "vector";
 const VOLUMES: [&str; 5] = ["pgdata", "sde", "uploads", "caddy_data", "caddy_config"];
 /// Postgres will not rename the role a session is logged in as, and `vector` is the only
@@ -20,7 +20,7 @@ const VOLUMES: [&str; 5] = ["pgdata", "sde", "uploads", "caddy_data", "caddy_con
 const HELPER_ROLE: &str = "wsctl_rename";
 
 #[derive(Debug, Default, PartialEq, Eq)]
-pub struct Renamed {
+pub(crate) struct Renamed {
     /// The project the install ran under before, when it was not already ours.
     pub from_project: Option<String>,
     /// The old volumes copied into ours, by their old names.
@@ -31,7 +31,7 @@ pub struct Renamed {
 }
 
 /// The project compose resolves for this checkout right now: `.env`, then the directory.
-pub fn current_project(runner: &mut dyn Runner, dir: &Path) -> Result<String> {
+pub(crate) fn current_project(runner: &mut dyn Runner, dir: &Path) -> Result<String> {
     let out = runner
         .capture(dir, "docker", &["compose", "config"])
         .context("could not read the compose configuration")?;
@@ -53,7 +53,7 @@ fn volumes(runner: &mut dyn Runner, dir: &Path) -> Result<Vec<String>> {
 /// The project this install still runs under when it is not ours yet, and only when there
 /// is something under it: a fresh checkout resolves to its directory name too, with nothing
 /// to move. Asked before `.env` names the new project, which is what the answer comes from.
-pub fn old_project(runner: &mut dyn Runner, dir: &Path) -> Result<Option<String>> {
+pub(crate) fn old_project(runner: &mut dyn Runner, dir: &Path) -> Result<Option<String>> {
     let old = current_project(runner, dir)?;
     if old == PROJECT {
         return Ok(None);
@@ -67,7 +67,7 @@ pub fn old_project(runner: &mut dyn Runner, dir: &Path) -> Result<Option<String>
 
 /// Whether there is a database volume already, under either name: an install that has
 /// been running, as opposed to one about to be created.
-pub fn has_database(runner: &mut dyn Runner, dir: &Path, old: Option<&str>) -> Result<bool> {
+pub(crate) fn has_database(runner: &mut dyn Runner, dir: &Path, old: Option<&str>) -> Result<bool> {
     let existing = volumes(runner, dir)?;
     Ok([Some(PROJECT), old]
         .into_iter()
@@ -77,7 +77,7 @@ pub fn has_database(runner: &mut dyn Runner, dir: &Path, old: Option<&str>) -> R
 
 /// Stop the old project and copy its volumes into ours. Run after the new images are
 /// built, so the map is only down for the copy, not for a build.
-pub fn move_project(runner: &mut dyn Runner, dir: &Path, old: &str) -> Result<Renamed> {
+pub(crate) fn move_project(runner: &mut dyn Runner, dir: &Path, old: &str) -> Result<Renamed> {
     let mut renamed = Renamed {
         from_project: Some(old.to_string()),
         ..Default::default()
@@ -175,7 +175,7 @@ fn answers_one(runner: &mut dyn Runner, dir: &Path, user: &str, sql: &str) -> bo
 /// done from a run that failed in between, so each is checked on its own. The password
 /// survives (it is stored as SCRAM, which does not depend on the role's name), and inside
 /// the container psql logs in over the local socket without one.
-pub fn rename_role(runner: &mut dyn Runner, dir: &Path) -> Result<bool> {
+pub(crate) fn rename_role(runner: &mut dyn Runner, dir: &Path) -> Result<bool> {
     if !volumes(runner, dir)?.contains(&format!("{PROJECT}_pgdata")) {
         return Ok(false);
     }

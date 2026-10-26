@@ -39,7 +39,7 @@ async fn scan(pool: &PgPool, actor: Actor, map_id: i64, system: i64, sig: &str) 
         },
     )
     .await
-    .unwrap()
+    .expect("add_signature")
     .id
 }
 
@@ -57,7 +57,7 @@ async fn ghosting(pool: &PgPool, actor: Actor, map_id: i64) {
         },
     )
     .await
-    .unwrap();
+    .expect("update_map");
 }
 
 /// The node the map raised for this scan.
@@ -74,7 +74,7 @@ async fn ghost_for(pool: &PgPool, map_id: i64, sig: i64) -> i64 {
     .bind(map_id)
     .fetch_one(pool)
     .await
-    .unwrap()
+    .expect("query signatures")
 }
 
 /// Where a node sits, for the assertions that care that it stayed there.
@@ -85,7 +85,7 @@ async fn position(pool: &PgPool, id: i64) -> (f64, f64) {
     .bind(id)
     .fetch_one(pool)
     .await
-    .unwrap()
+    .expect("query map_solar_systems")
 }
 
 #[sqlx::test]
@@ -449,13 +449,10 @@ async fn a_pasted_scan_raises_the_holes_it_found(pool: PgPool) {
     assert_eq!(view.connections.len(), 3);
     assert!(view.connections.iter().all(|c| c.from_system == home));
     // Siblings stack in the column beside the system they hang off.
-    assert!(
-        ghosts
-            .iter()
-            .all(|g| g.position().0 == ghosts[0].position().0)
-    );
-    let mut ys: Vec<i64> = ghosts.iter().map(|g| g.position().1 as i64).collect();
-    ys.sort_unstable();
+    let column = ghosts[0].position().0.to_bits();
+    assert!(ghosts.iter().all(|g| g.position().0.to_bits() == column));
+    let mut ys: Vec<f64> = ghosts.iter().map(|g| g.position().1).collect();
+    ys.sort_by(f64::total_cmp);
     ys.dedup();
     assert_eq!(ys.len(), 3, "and do not sit on top of each other");
 
@@ -860,7 +857,10 @@ async fn deleting_the_signature_takes_its_ghost(pool: PgPool) {
         .unwrap();
     assert!(view.connections.is_empty());
     assert_eq!(
-        view.systems.iter().map(|s| s.id()).collect::<Vec<_>>(),
+        view.systems
+            .iter()
+            .map(wormholesystems::maps::MapSystemView::id)
+            .collect::<Vec<_>>(),
         vec![home],
         "only the system someone actually placed is left"
     );
@@ -909,7 +909,7 @@ async fn deleting_the_signature_leaves_a_real_system(pool: PgPool) {
     .await
     .unwrap();
 
-    assert!(outcome.removed_placement_ids.is_empty());
+    assert_eq!(outcome.removed_placement_ids, Vec::<i64>::new());
     let view = get_map(&pool, w.owner, GetMap { map_id: w.map_id })
         .await
         .unwrap();
@@ -1317,15 +1317,18 @@ async fn a_removal_can_be_walked_forward_again(pool: PgPool) {
         .await
         .unwrap();
     let shape = |view: &wormholesystems::maps::MapView| {
-        let mut systems: Vec<Option<i64>> =
-            view.systems.iter().map(|s| s.solar_system_id()).collect();
+        let mut systems: Vec<Option<i64>> = view
+            .systems
+            .iter()
+            .map(wormholesystems::maps::MapSystemView::solar_system_id)
+            .collect();
         systems.sort();
         let mut edges: Vec<(i64, i64)> = view
             .connections
             .iter()
             .map(|c| (c.from_system, c.to_system))
             .collect();
-        edges.sort();
+        edges.sort_unstable();
         (systems, edges)
     };
     assert_eq!(shape(&after_redo), shape(&after_removal));

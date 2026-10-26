@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
@@ -46,14 +47,14 @@ const WALK_LIMIT: i64 = 100;
 
 /// How long the feed may keep failing before that is an error rather than a warning. A
 /// failed fetch is retried after 30s, and zKillboard has bad minutes.
-const FAILING_FOR: Duration = Duration::from_secs(15 * 60);
+const FAILING_FOR: Duration = Duration::from_mins(15);
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Log a failed step of the feed: a warning, or the one error once it has kept failing.
 /// The error goes in a field so the reports group as one issue.
 fn failed(streak: &Streak, err: impl Display) {
-    if streak.record(true, Instant::now()) {
+    if streak.record_failure(Instant::now()) {
         tracing::error!(
             error = %err,
             "killmail ingest has failed for {} minutes",
@@ -106,7 +107,7 @@ impl Default for Timing {
 #[doc(hidden)]
 pub async fn listen(
     pool: PgPool,
-    alerts: Option<std::sync::Arc<crate::alerts::Runtime>>,
+    alerts: Option<Arc<crate::alerts::Runtime>>,
     base: String,
     timing: Timing,
 ) {
@@ -144,13 +145,13 @@ pub async fn listen(
         let next = last + 1;
         match ingest(&pool, &http, &base, alerts.as_ref(), next).await {
             Ok(true) => {
-                streak.record(false, Instant::now());
+                streak.record_success();
                 cursor = Some(next);
                 missing = None;
                 tokio::time::sleep(timing.pace).await;
             }
             Ok(false) => {
-                streak.record(false, Instant::now());
+                streak.record_success();
                 // Past the head: it has not happened yet.
                 let Some(to) = head.seq.filter(|&head| next <= head) else {
                     tokio::time::sleep(timing.idle).await;
@@ -171,7 +172,7 @@ pub async fn listen(
                             resume - 1
                         );
                         metrics::counter!("ws_killmail_ingest_skipped_total")
-                            .increment((resume - next) as u64);
+                            .increment(u64::try_from(resume - next).unwrap_or(0));
                         if let Err(err) = advance(&pool, resume - 1).await {
                             failed(&streak, err);
                         }
@@ -218,7 +219,7 @@ impl Head {
             }
         }
         let behind = self.seq.map_or(0, |head| (head - cursor).max(0));
-        metrics::gauge!("ws_killmail_ingest_behind").set(behind as f64);
+        metrics::gauge!("ws_killmail_ingest_behind").set(to_f64(behind));
         if behind > BEHIND_WARN {
             tracing::warn!("killmail ingest is {behind} kills behind the feed (at {cursor})");
         }
@@ -344,7 +345,7 @@ async fn ingest(
             orgs: serde_json::to_value(extract_orgs(&km.esi))?,
             detail: extract_detail(&km.esi, &km.zkb),
         };
-        super::insert_rows(pool, std::slice::from_ref(&row), true).await?;
+        super::insert_rows(pool, std::slice::from_ref(&row), super::Source::Live).await?;
         metrics::counter!("ws_killmails_ingested_total").increment(1);
         if let Some(lag) = lag_seconds(&row.time) {
             metrics::gauge!("ws_killmail_ingest_lag_seconds").set(lag);
@@ -388,13 +389,13 @@ fn offer(alerts: &mpsc::Sender<Pending>, row: KillmailRow) {
 /// kill after that would go without alerts and without a word.
 async fn alert_loop(
     pool: PgPool,
-    alerts: std::sync::Arc<crate::alerts::Runtime>,
+    alerts: Arc<crate::alerts::Runtime>,
     mut queue: mpsc::Receiver<Pending>,
 ) {
     let mut pending = Vec::with_capacity(ALERT_BATCH);
     while queue.recv_many(&mut pending, ALERT_BATCH).await > 0 {
         let batch = std::mem::replace(&mut pending, Vec::with_capacity(ALERT_BATCH));
-        let (pool, alerts) = (pool.clone(), alerts.clone());
+        let (pool, alerts) = (pool.clone(), Arc::clone(&alerts));
         crate::background::guarded("killmail alerts", move || async move {
             // Most of the time nobody watches for kills, and naming them is wasted work.
             if !alerts.watches_killmails(&pool).await {
@@ -509,11 +510,21 @@ fn lag_seconds(killmail_time: &str) -> Option<f64> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?;
-    Some(now.as_secs_f64() - at.timestamp() as f64)
+    Some(now.as_secs_f64() - to_f64(at.timestamp()))
+}
+
+/// For the gauges, which take `f64`.
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_precision_loss,
+    reason = "sequence numbers and Unix seconds stay far below 2^52, where f64 is exact"
+)]
+fn to_f64(n: i64) -> f64 {
+    n as f64
 }
 
 async fn advance(pool: &PgPool, seq: i64) -> Result<(), sqlx::Error> {
-    metrics::gauge!("ws_killmail_ingest_sequence").set(seq as f64);
+    metrics::gauge!("ws_killmail_ingest_sequence").set(to_f64(seq));
     sqlx::query!("update zkb_state set sequence_id = $1", seq)
         .execute(pool)
         .await?;
@@ -537,9 +548,9 @@ const NAME_RETRIES: u32 = 3;
 /// killmail alerts (which reach beyond the chain), the access search, and the threat
 /// analysis. With the bulk endpoint that is a call or two a minute, so not worth narrowing.
 pub(super) fn start_resolver(pool: PgPool, esi: EsiClient) {
-    let resolver = std::sync::Arc::new(tokio::sync::Mutex::new(NameResolver::default()));
+    let resolver = Arc::new(tokio::sync::Mutex::new(NameResolver::default()));
     crate::background::spawn_every("killmail names", Duration::from_secs(60), move || {
-        let (pool, esi, resolver) = (pool.clone(), esi.clone(), resolver.clone());
+        let (pool, esi, resolver) = (pool.clone(), esi.clone(), Arc::clone(&resolver));
         async move {
             resolver.lock().await.pass(&pool, &esi).await;
             Ok::<_, std::convert::Infallible>(())
@@ -550,7 +561,7 @@ pub(super) fn start_resolver(pool: PgPool, esi: EsiClient) {
 /// Where the name resolver has got to: the last `ingest_seq` it is done with, read from
 /// `zkb_state` once and kept here after, and how many passes the current batch has been
 /// held back for.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct NameResolver {
     mark: Option<i64>,
     held: u32,
@@ -605,7 +616,7 @@ async fn resolve_new(pool: &PgPool, esi: &EsiClient, from: i64, held: &mut u32) 
         let Some(last) = rows.last().map(|row| row.ingest_seq) else {
             return mark;
         };
-        let full = rows.len() as i64 == NAME_BATCH;
+        let full = i64::try_from(rows.len()) == Ok(NAME_BATCH);
 
         let mut characters = Vec::new();
         let mut corporations = Vec::new();

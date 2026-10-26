@@ -22,6 +22,7 @@ use crate::app::AppState;
 pub const BODY_LIMIT: usize = 1024 * 1024;
 
 /// The configured destination and the client that talks to it.
+#[derive(Debug)]
 pub struct Tunnel {
     dsn: Dsn,
     http: reqwest::Client,

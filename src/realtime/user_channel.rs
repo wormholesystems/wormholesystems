@@ -26,7 +26,7 @@ pub enum UserEvent {
 }
 
 /// In-process bus of per-user channels. Cheaply cloneable; hold one in app state.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct UserHub {
     channels: Arc<Mutex<HashMap<i64, broadcast::Sender<UserEvent>>>>,
 }
@@ -57,7 +57,7 @@ impl UserHub {
     }
 
     /// Send an event to every connected user, dropping the channels nobody is listening on.
-    pub fn broadcast(&self, event: UserEvent) {
+    pub fn broadcast(&self, event: &UserEvent) {
         let mut channels = self.channels.lock().expect("user hub poisoned");
         channels.retain(|_, tx| tx.send(event.clone()).is_ok());
     }

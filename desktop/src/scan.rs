@@ -31,7 +31,7 @@ fn names() -> &'static ScanNames {
 /// One row of a paste, as the server's paste command takes it. `group` is `None` when the
 /// scanner had not classified the signature yet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PastedSignature {
+pub(crate) struct PastedSignature {
     pub signature_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<&'static str>,
@@ -42,7 +42,7 @@ pub struct PastedSignature {
 }
 
 /// The signature group a catalog category stands for.
-pub fn group_for_category(category_id: i64) -> &'static str {
+pub(crate) fn group_for_category(category_id: i64) -> &'static str {
     match category_id {
         1 => "wormhole",
         2 => "data",
@@ -59,7 +59,7 @@ pub fn group_for_category(category_id: i64) -> &'static str {
 /// Tab-separated rows of `id, scan group, category, type, signal, distance`. Rows under four
 /// columns or without a seven-character id are skipped. A wormhole's type never comes from
 /// a paste: the scanner only says "Unstable Wormhole", so the pilot picks it.
-pub fn parse(text: &str, catalog: &SignatureCatalog) -> Vec<PastedSignature> {
+pub(crate) fn parse(text: &str, catalog: &SignatureCatalog) -> Vec<PastedSignature> {
     let names = names();
     let mut out = Vec::new();
     for line in text.split('\n') {
@@ -82,8 +82,7 @@ pub fn parse(text: &str, catalog: &SignatureCatalog) -> Vec<PastedSignature> {
                 .categories
                 .iter()
                 .find(|c| c.id == category)
-                .map(|c| c.name.as_str())
-                .unwrap_or("");
+                .map_or("", |c| c.name.as_str());
             let english = names
                 .types
                 .get(category_name)
@@ -309,7 +308,7 @@ mod tests {
 
     #[test]
     fn parses_nothing_from_empty_input() {
-        assert!(parse("", &catalog()).is_empty());
+        assert_eq!(parse("", &catalog()), Vec::<PastedSignature>::new());
     }
 
     #[test]

@@ -80,6 +80,15 @@ struct CachedReply {
     fresh_until: Option<Instant>,
 }
 
+impl std::fmt::Debug for EsiClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EsiClient")
+            .field("base_url", &self.base_url)
+            .field("compatibility_date", &self.compatibility_date)
+            .finish_non_exhaustive()
+    }
+}
+
 impl EsiClient {
     pub fn new() -> Self {
         Self::with_config(crate::user_agent::client(), BASE_URL, COMPATIBILITY_DATE)
@@ -170,9 +179,7 @@ impl EsiClient {
             420 => (ANYONE, reset.unwrap_or(DEFAULT_BACKOFF)),
             429 => (
                 token.unwrap_or(ANYONE),
-                header("retry-after")
-                    .map(Duration::from_secs)
-                    .unwrap_or(DEFAULT_BACKOFF),
+                header("retry-after").map_or(DEFAULT_BACKOFF, Duration::from_secs),
             ),
             _ => match (header("x-esi-error-limit-remain"), reset) {
                 (Some(remain), Some(reset)) if remain <= ERROR_LIMIT_FLOOR => (ANYONE, reset),
@@ -315,16 +322,16 @@ fn fresh_until(headers: &reqwest::header::HeaderMap) -> Option<Instant> {
             .filter_map(|d| d.trim().strip_prefix("max-age="))
             .find_map(|secs| secs.parse::<u64>().ok())
     });
-    let remaining = match max_age {
-        Some(secs) => Duration::from_secs(secs),
-        None => {
-            let date = |name| text(name).and_then(|v| DateTime::parse_from_rfc2822(v).ok());
-            let expires = date(reqwest::header::EXPIRES)?;
-            let now = date(reqwest::header::DATE)
-                .map(|d| d.with_timezone(&Utc))
-                .unwrap_or_else(|| DateTime::<Utc>::from(SystemTime::now()));
-            (expires.with_timezone(&Utc) - now).to_std().ok()?
-        }
+    let remaining = if let Some(secs) = max_age {
+        Duration::from_secs(secs)
+    } else {
+        let date = |name| text(name).and_then(|v| DateTime::parse_from_rfc2822(v).ok());
+        let expires = date(reqwest::header::EXPIRES)?;
+        let now = date(reqwest::header::DATE).map_or_else(
+            || DateTime::<Utc>::from(SystemTime::now()),
+            |d| d.with_timezone(&Utc),
+        );
+        (expires.with_timezone(&Utc) - now).to_std().ok()?
     };
     // Nothing ESI polls is cached for long; a bogus header should not freeze a route.
     (!remaining.is_zero()).then(|| Instant::now() + remaining.min(Duration::from_secs(3600)))

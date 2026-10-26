@@ -11,7 +11,12 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use gpui_kit::component::{ActiveTheme as _, Theme, ThemeStyled as _};
 use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::*;
+use gpui_kit::{
+    Anchor, Animation, AnimationExt, AnyElement, App, Bounds, ClickEvent, Div, ElementId, Entity,
+    EventEmitter, FontWeight, Hsla, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
+    ParentElement, Pixels, Rems, Stateful, StatefulInteractiveElement, Styled, Window, anchored,
+    canvas, deferred, div, ease_out_quint, px, svg,
+};
 
 use crate::api::{
     Connection, MapSnapshot, MassStatus, PlacedSystem, Signature, SignatureCatalog, SignatureEdit,
@@ -19,11 +24,11 @@ use crate::api::{
 };
 use crate::config::{ListView, Overlay, SortColumn};
 use crate::theme::{self, HEADING};
-use crate::ui::{self, Kind, Notice, rpx};
+use crate::ui::{self, ButtonState, Kind, Notice, rpx};
 
 /// What a button in a signatures panel asks the app to do.
 #[derive(Debug, Clone)]
-pub enum Command {
+pub(crate) enum Command {
     Paste,
     DeleteMissing,
     Delete(i64),
@@ -50,7 +55,7 @@ pub enum Command {
 
 /// The system a jump landed in.
 #[derive(Debug, Clone)]
-pub struct Target {
+pub(crate) struct Target {
     pub solar_system_id: i64,
     pub name: String,
     pub class: Option<i64>,
@@ -59,7 +64,7 @@ pub struct Target {
 
 /// A jump waiting to be told which of the origin's signatures it went through.
 #[derive(Debug, Clone)]
-pub struct Ask {
+pub(crate) struct Ask {
     pub character: String,
     pub map_id: i64,
     pub origin: PlacedSystem,
@@ -79,7 +84,7 @@ pub struct Ask {
 
 /// Which of a row's cells has its choices open under it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Picker {
+pub(crate) struct Picker {
     pub sig: i64,
     pub kind: PickerKind,
     /// Opened in the overlay rather than the main window; only that one shows it.
@@ -87,7 +92,7 @@ pub struct Picker {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PickerKind {
+pub(crate) enum PickerKind {
     Category,
     Type,
     Connection,
@@ -96,7 +101,7 @@ pub enum PickerKind {
 }
 
 /// How a row names its type: the wormhole code and where it leads, else the site.
-pub struct TypeLabel {
+pub(crate) struct TypeLabel {
     pub text: String,
     pub dest: Option<(&'static str, Hsla)>,
     pub extra: Option<String>,
@@ -105,7 +110,7 @@ pub struct TypeLabel {
 }
 
 /// The far end of one of the system's connections, as a picker lists it.
-pub struct Far {
+pub(crate) struct Far {
     pub connection: i64,
     pub class: (&'static str, Hsla),
     pub alias: Option<String>,
@@ -116,7 +121,7 @@ pub struct Far {
 
 /// Where you are: the character who moved last, by the chat logs.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Here {
+pub(crate) struct Here {
     pub character: String,
     pub system: String,
 }
@@ -125,28 +130,28 @@ pub struct Here {
 /// there when the scan was pasted can be missing from it: one added since is news the scan
 /// never saw.
 #[derive(Debug, Clone)]
-pub struct Review {
+pub(crate) struct Review {
     pub solar_system_id: i64,
     pub before: HashSet<String>,
     pub pasted: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PasteStatus {
+pub(crate) enum PasteStatus {
     New,
     Updated,
     Missing,
 }
 
-#[derive(Clone)]
-pub enum Tone {
+#[derive(Clone, Copy)]
+pub(crate) enum Tone {
     Info,
     Done,
     Problem,
 }
 
 #[derive(Default)]
-pub struct Sigs {
+pub(crate) struct Sigs {
     pub here: Option<Here>,
     pub snapshot: Option<Arc<MapSnapshot>>,
     pub catalog: Arc<SignatureCatalog>,
@@ -174,13 +179,13 @@ impl EventEmitter<Command> for Sigs {}
 
 impl Sigs {
     /// The system you are in, when it is on the map.
-    pub fn system(&self) -> Option<&PlacedSystem> {
+    pub(crate) fn system(&self) -> Option<&PlacedSystem> {
         let here = self.here.as_ref()?;
         self.snapshot.as_ref()?.system_named(&here.system)
     }
 
     /// The signatures in the system you are in, by scanner id.
-    pub fn rows(&self) -> Vec<&Signature> {
+    pub(crate) fn rows(&self) -> Vec<&Signature> {
         let (Some(system), Some(snapshot)) = (self.system(), &self.snapshot) else {
             return Vec::new();
         };
@@ -196,7 +201,7 @@ impl Sigs {
     /// What the list shows: [`Sigs::rows`] without the hidden categories, sorted the way the
     /// website's panel sorts, ties by scanner id so rows never swap on a refresh.
     /// `rows` is what [`Sigs::rows`] gave, so a render that wants both looks them up once.
-    pub fn shown<'a>(&self, rows: &[&'a Signature]) -> Vec<&'a Signature> {
+    pub(crate) fn shown<'a>(&self, rows: &[&'a Signature]) -> Vec<&'a Signature> {
         let mut shown: Vec<&Signature> = rows
             .iter()
             .copied()
@@ -227,7 +232,7 @@ impl Sigs {
             .filter(|r| r.solar_system_id == system.solar_system_id)
     }
 
-    pub fn paste_status(&self, sig: &Signature) -> Option<PasteStatus> {
+    pub(crate) fn paste_status(&self, sig: &Signature) -> Option<PasteStatus> {
         let review = self.current_review()?;
         let before = review.before.contains(&sig.signature_id);
         if !review.pasted.contains(&sig.signature_id) {
@@ -241,7 +246,7 @@ impl Sigs {
     }
 
     /// Row keys of what the last paste no longer saw.
-    pub fn missing(&self) -> Vec<i64> {
+    pub(crate) fn missing(&self) -> Vec<i64> {
         self.missing_in(&self.rows())
     }
 
@@ -259,7 +264,7 @@ impl Sigs {
     }
 
     /// What a signature is, the way the website's row says it.
-    pub fn type_label(&self, sig: &Signature) -> TypeLabel {
+    pub(crate) fn type_label(&self, sig: &Signature) -> TypeLabel {
         match self.type_of(sig) {
             Some(t) if sig.group == "wormhole" && t.signature.is_some() => TypeLabel {
                 text: t.signature.clone().unwrap_or_default(),
@@ -323,7 +328,7 @@ impl Sigs {
     /// The types a signature can be, grouped the way the website's picker lists them:
     /// the category's types that spawn in this class, narrowed to the far end's class once
     /// linked. For wormholes, statics (when wanted), then K162, then the rest.
-    pub fn type_sections(
+    pub(crate) fn type_sections(
         &self,
         sig: &Signature,
     ) -> Vec<(Option<&'static str>, Vec<&SignatureType>)> {
@@ -363,7 +368,7 @@ impl Sigs {
     /// The connections a wormhole signature could be: the system's, narrowed to the type's
     /// destination class once it has one, aliased ones first. Split into the ones no other
     /// signature here claims, and the ones another does.
-    pub fn link_options(&self, sig: &Signature) -> (Vec<Far>, Vec<Far>) {
+    pub(crate) fn link_options(&self, sig: &Signature) -> (Vec<Far>, Vec<Far>) {
         let (Some(snapshot), Some(here)) = (&self.snapshot, self.system()) else {
             return (Vec::new(), Vec::new());
         };
@@ -456,9 +461,10 @@ fn age_color(sig: &Signature, connection: Option<&Connection>) -> Option<Hsla> {
         _ => connection.and_then(|c| c.time_status).or(sig.time_status),
     };
     match (mass, time) {
-        (Some(MassStatus::Critical), _) => Some(theme::critical()),
         (Some(MassStatus::Reduced), _) => Some(theme::reduced()),
-        (_, Some(TimeStatus::Critical | TimeStatus::Expired)) => Some(theme::critical()),
+        (Some(MassStatus::Critical), _) | (_, Some(TimeStatus::Critical | TimeStatus::Expired)) => {
+            Some(theme::critical())
+        }
         (_, Some(TimeStatus::Eol)) => Some(theme::eol()),
         _ => None,
     }
@@ -475,409 +481,55 @@ fn emit(
     }
 }
 
-/// The signatures panel. `compact` is the overlay's version: a close button in the header,
-/// and less room around everything.
-pub fn panel(entity: &Entity<Sigs>, compact: bool, cx: &App) -> AnyElement {
-    panel_with(entity, compact, None, cx)
+/// Where a signatures panel is shown. The overlay's is the compact one: a close button in
+/// the header, and less room around everything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Place {
+    Page,
+    Overlay,
+}
+
+/// The signatures panel.
+pub(crate) fn panel(entity: &Entity<Sigs>, place: Place, cx: &App) -> AnyElement {
+    panel_with(entity, place, None, cx)
 }
 
 /// What pressing on the panel's title does: the overlay moves by it.
-pub type Grab = Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App)>;
+pub(crate) type Grab = Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App)>;
 
 /// [`panel`], with `grab` making the title a handle to drag the overlay by.
-pub fn panel_with(
+pub(crate) fn panel_with(
     entity: &Entity<Sigs>,
-    compact: bool,
+    place: Place,
     grab: Option<Grab>,
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme().clone();
     let sigs = entity.read(cx);
+    let compact = place == Place::Overlay;
+    let panel = Panel {
+        entity,
+        sigs,
+        compact,
+        pad: if compact { rpx(8.0) } else { rpx(16.0) },
+        theme: &theme,
+    };
     let now = Utc::now();
     // Once per render: each is a lookup, a filter and a sort.
     let all = sigs.rows();
     let rows = sigs.shown(&all);
-    let pad = if compact { rpx(8.0) } else { rpx(16.0) };
-
-    // Header: the system, its class, and who is there.
-    let mut title = div().flex().items_center().gap_2().min_w_0();
-    let sub;
-    match (&sigs.here, sigs.system()) {
-        (None, _) => {
-            title = title.child(
-                div()
-                    .text_color(theme.muted_foreground)
-                    .child("No location"),
-            );
-            sub = "Log in a character; the chat logs say where you are.".into();
-        }
-        (Some(here), None) => {
-            title = title.child(div().child(here.system.clone()));
-            sub = if sigs.snapshot.is_some() {
-                let map = sigs
-                    .snapshot
-                    .as_ref()
-                    .map_or("the map".into(), |s| s.map.name.clone());
-                format!("{} · not on {map}", here.character)
-            } else {
-                here.character.clone()
-            };
-        }
-        (Some(here), Some(system)) => {
-            let (class, color) =
-                theme::class_meta(system.wormhole_class_id, Some(system.security_status));
-            title = title
-                .child(div().flex_none().text_color(color).child(class))
-                .when_some(
-                    system.alias.clone().filter(|a| !a.trim().is_empty()),
-                    |d, alias| d.child(div().flex_none().child(alias)),
-                )
-                .child(
-                    div()
-                        .truncate()
-                        .text_color(theme.muted_foreground)
-                        .child(system.name.clone()),
-                );
-            let count = all.len();
-            let hidden = count - rows.len();
-            let hidden = if hidden > 0 {
-                format!(", {hidden} hidden")
-            } else {
-                String::new()
-            };
-            let map = sigs
-                .snapshot
-                .as_ref()
-                .map(|s| format!("{} · ", s.map.name))
-                .unwrap_or_default();
-            sub = format!(
-                "{map}{} · {count} signature{}{hidden}",
-                here.character,
-                if count == 1 { "" } else { "s" }
-            );
-        }
-    }
-    let header = div()
-        .flex_none()
-        .flex()
-        .items_start()
-        .gap_2()
-        .px(pad)
-        .py_2()
-        .border_b_1()
-        .border_color(theme.border)
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap(rpx(2.0))
-                .when_some(grab, |d, grab| {
-                    d.cursor_move()
-                        .on_mouse_down(MouseButton::Left, move |e, w, cx| grab(e, w, cx))
-                })
-                .child(
-                    title
-                        .font_family(HEADING)
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_size(if compact { rpx(13.0) } else { rpx(16.0) }),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .truncate()
-                        .text_color(theme.muted_foreground)
-                        .child(sub),
-                ),
-        )
-        .when_some(sigs.notice.as_ref(), |d, n| {
-            d.child(
-                div()
-                    .flex_none()
-                    .max_w(rpx(260.0))
-                    .child(ui::notice(n, &theme)),
-            )
-        })
-        .when(compact, |d| {
-            d.child(
-                div()
-                    .id("overlay-hide")
-                    .flex_none()
-                    .p_1()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.muted))
-                    .on_click(emit(entity, Command::HideOverlay))
-                    .child(
-                        svg()
-                            .path("icons/x.svg")
-                            .size(rpx(12.0))
-                            .text_color(theme.muted_foreground),
-                    ),
-            )
-        });
+    let header = panel.header(all.len(), rows.len(), grab);
 
     // The rows.
     let mut list = div().flex().flex_col();
-    if rows.is_empty() && !all.is_empty() {
-        list = list.child(
-            div()
-                .px(pad)
-                .py_3()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(format!("{} hidden by the filters.", all.len())),
-        );
-    } else if rows.is_empty() && sigs.system().is_some() {
-        list = list.child(
-            div()
-                .px(pad)
-                .py_3()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child("No signatures yet. Copy the scan in the probe scanner and paste it."),
-        );
+    if let Some(empty) = panel.empty_note(all.len(), rows.len()) {
+        list = list.child(empty);
     }
-    let mono = theme.mono_font_family.clone();
     let mut shown = false;
     for sig in rows {
-        let status = sigs.paste_status(sig);
-        let (group, group_color) = theme::group_meta(&sig.group);
-        let label = sigs.type_label(sig);
-        let wormhole = sig.group == "wormhole";
-        let connection = sig
-            .connection_id
-            .and_then(|c| sigs.snapshot.as_ref()?.connection(c));
-        let far = sig.connection_id.and_then(|c| sigs.far(c));
-        let mark = match status {
-            Some(PasteStatus::New) => Some(theme::added()),
-            Some(PasteStatus::Updated) => Some(theme::refreshed()),
-            Some(PasteStatus::Missing) => Some(theme::missing()),
-            None => None,
-        };
-        let missing = status == Some(PasteStatus::Missing);
-        let key = sig.id;
-        let open = sigs
-            .picker
-            .filter(|p| p.sig == key && p.overlay == compact)
-            .map(|p| p.kind);
-        let cell = |kind: PickerKind| {
-            div()
-                .id(ElementId::Name(format!("cell-{key}-{kind:?}").into()))
-                .h(rpx(20.0))
-                .px_1()
-                .rounded(px(3.0))
-                .flex()
-                .items_center()
-                .gap_1()
-                .min_w_0()
-                .overflow_hidden()
-                .cursor_pointer()
-                .border_1()
-                .border_color(if open == Some(kind) {
-                    theme.primary.opacity(0.7)
-                } else {
-                    theme.transparent
-                })
-                .hover(|s| s.bg(theme.muted).border_color(theme.input))
-                .relative()
-                .on_mouse_down(
-                    MouseButton::Left,
-                    toggle(
-                        entity,
-                        Picker {
-                            sig: key,
-                            kind,
-                            overlay: compact,
-                        },
-                    ),
-                )
-                .when(open == Some(kind), |d| d.child(probe(&sigs.anchor)))
-        };
-        // The open picker's popup, built once and handed to the cell it hangs off.
-        let float_el = RefCell::new(open.map(|kind| {
-            let content = picker(entity, sigs, sig, connection, kind, &theme);
-            let picker = Picker {
-                sig: key,
-                kind,
-                overlay: compact,
-            };
-            (kind, float(entity, sigs, picker, content, cx))
-        }));
-        let float_for = |kind: PickerKind| {
-            let mut slot = float_el.borrow_mut();
-            match slot.take() {
-                Some((k, el)) if k == kind => Some(el),
-                other => {
-                    *slot = other;
-                    None
-                }
-            }
-        };
-        let category = cell(PickerKind::Category)
-            .w(rpx(72.0))
-            .flex_none()
-            .children(float_for(PickerKind::Category))
-            .map(|d| {
-                if sig.group == "unknown" || group_color.is_none() {
-                    d.child(div().text_color(theme.muted_foreground).child("Category"))
-                } else {
-                    let color = group_color.unwrap_or(theme.muted_foreground);
-                    d.child(
-                        svg()
-                            .flex_none()
-                            .path(theme::group_icon(&sig.group))
-                            .size(rpx(12.0))
-                            .text_color(color),
-                    )
-                    .child(div().truncate().child(group))
-                }
-            });
-        let type_cell = cell(PickerKind::Type)
-            .children(float_for(PickerKind::Type))
-            // A wormhole's type is a code and a class, `K162 C3`: it needs little room, and
-            // the connection beside it gets the rest.
-            .when(wormhole, |d| d.w(rpx(84.0)).flex_none())
-            .when(!wormhole, |d| d.flex_1())
-            .map(|d| match label.dest {
-                Some((short, color)) => d
-                    .font_family(mono.clone())
-                    .child(div().flex_none().child(label.text))
-                    .child(div().flex_none().text_color(color).child(short))
-                    .when_some(label.extra, |d, extra| {
-                        d.child(
-                            div()
-                                .truncate()
-                                .text_color(theme.muted_foreground)
-                                .child(format!("({extra})")),
-                        )
-                    }),
-                None => d.child(
-                    div()
-                        .truncate()
-                        .when(label.muted, |d| d.text_color(theme.muted_foreground))
-                        .child(label.text),
-                ),
-            });
-        let icon_button = |id: &str, path: &'static str| {
-            div()
-                .id(ElementId::Name(format!("{id}-{key}").into()))
-                .flex_none()
-                .size(rpx(20.0))
-                .rounded(px(3.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .cursor_pointer()
-                .hover(|s| s.bg(theme.muted))
-                .child(
-                    svg()
-                        .path(path)
-                        .size(rpx(13.0))
-                        .text_color(theme.muted_foreground),
-                )
-        };
-        list = list.child(
-            div()
-                .id(ElementId::NamedInteger("sig".into(), key as u64))
-                .relative()
-                .flex()
-                .items_center()
-                .gap_2()
-                .px(pad)
-                .h(rpx(26.0))
-                .text_xs()
-                .border_b_1()
-                .border_color(theme.border.opacity(0.3))
-                .hover(|s| s.bg(theme.muted.opacity(0.3)))
-                .when_some(mark, |d, color| d.bg(color.opacity(0.1)))
-                .when(missing, |d| d.opacity(0.6))
-                .child(
-                    // The paste's mark down the left edge.
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .bottom_0()
-                        .w(px(2.0))
-                        .when_some(mark, |d, color| d.bg(color)),
-                )
-                .child(
-                    div()
-                        .w(rpx(56.0))
-                        .flex_none()
-                        .font_family(mono.clone())
-                        .when(missing, |d| d.line_through())
-                        .child(if sig.signature_id.is_empty() {
-                            "---".to_string()
-                        } else {
-                            sig.signature_id.clone()
-                        }),
-                )
-                .child(category)
-                .child(type_cell)
-                .when(wormhole, |d| {
-                    d.child(
-                        cell(PickerKind::Connection)
-                            .flex_1()
-                            .children(float_for(PickerKind::Connection))
-                            .map(|d| match far {
-                                Some(far) => far_label(d, far, None, &theme),
-                                None => d.child(
-                                    div()
-                                        .truncate()
-                                        .text_color(theme.muted_foreground)
-                                        .child("Connection"),
-                                ),
-                            }),
-                    )
-                })
-                .child(
-                    div()
-                        .w(rpx(32.0))
-                        .flex_none()
-                        .flex()
-                        .justify_end()
-                        .font_family(mono.clone())
-                        .text_color(age_color(sig, connection).unwrap_or(theme.muted_foreground))
-                        .child(age(sig, connection, now)),
-                )
-                .child(
-                    div()
-                        .w(rpx(44.0))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_end()
-                        .gap(rpx(2.0))
-                        .when(wormhole, |d| {
-                            d.child(
-                                icon_button("sig-copy", "icons/copy.svg")
-                                    .on_click(emit(entity, Command::CopyBookmark(key))),
-                            )
-                        })
-                        .child(
-                            icon_button("sig-menu", "icons/ellipsis-vertical.svg")
-                                .relative()
-                                .when(open == Some(PickerKind::Menu), |d| {
-                                    d.bg(theme.muted).child(probe(&sigs.anchor))
-                                })
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    toggle(
-                                        entity,
-                                        Picker {
-                                            sig: key,
-                                            kind: PickerKind::Menu,
-                                            overlay: compact,
-                                        },
-                                    ),
-                                )
-                                .children(float_for(PickerKind::Menu)),
-                        ),
-                ),
-        );
-        shown |= open.is_some();
+        let (row, open) = panel.row(sig, now, cx);
+        list = list.child(row);
+        shown |= open;
     }
     let mine = sigs.picker.is_some_and(|p| p.overlay == compact);
     if sigs.picker.is_none() || (mine && !shown) {
@@ -888,67 +540,12 @@ pub fn panel_with(
     let ask = sigs
         .ask
         .as_ref()
-        .map(|ask| ask_section(entity, sigs, ask, pad, &theme));
-
-    // Footer: the last outcome and what can be done next.
-    let missing = sigs.missing_in(&all).len();
-    let can_paste = sigs.system().is_some() && !sigs.busy;
-    let footer = div()
-        .flex_none()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .px(pad)
-        .py_2()
-        .border_t_1()
-        .border_color(theme.border);
-    let footer = footer.child(
-        div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap_1()
-            .child(
-                ui::button(
-                    "sig-paste",
-                    if sigs.busy {
-                        "Working…"
-                    } else {
-                        "Paste scan"
-                    },
-                    Kind::Primary,
-                    can_paste,
-                    &theme,
-                )
-                .when(can_paste, |d| d.on_click(emit(entity, Command::Paste))),
-            )
-            .when(missing > 0, |d| {
-                d.child(
-                    ui::button(
-                        "sig-sweep",
-                        format!("Delete {missing} missing"),
-                        Kind::Danger,
-                        !sigs.busy,
-                        &theme,
-                    )
-                    .when(!sigs.busy, |d| {
-                        d.on_click(emit(entity, Command::DeleteMissing))
-                    }),
-                )
-            })
-            .when(sigs.current_review().is_some(), |d| {
-                d.child(
-                    ui::button("sig-clear", "Clear marks", Kind::Normal, true, &theme)
-                        .on_click(emit(entity, Command::ClearReview)),
-                )
-            })
-            .child(filters(entity, &sigs.list, &theme)),
-    );
-
+        .map(|ask| ask_section(entity, sigs, ask, panel.pad, &theme));
+    let footer = panel.footer(sigs.missing_in(&all).len());
     let columns = sigs
         .system()
         .is_some()
-        .then(|| column_header(entity, &sigs.list, pad, &theme));
+        .then(|| column_header(entity, &sigs.list, panel.pad, &theme));
 
     div()
         .size_full()
@@ -967,6 +564,527 @@ pub fn panel_with(
         )
         .child(footer)
         .into_any_element()
+}
+
+/// What one render of a signatures panel draws with.
+#[derive(Clone, Copy)]
+struct Panel<'a> {
+    entity: &'a Entity<Sigs>,
+    sigs: &'a Sigs,
+    /// The overlay's version.
+    compact: bool,
+    pad: Rems,
+    theme: &'a Theme,
+}
+
+impl Panel<'_> {
+    /// The system, its class, and who is there; `all` signatures, `shown` of them past the
+    /// filters.
+    fn title(&self, all: usize, shown: usize) -> (Div, String) {
+        let Self { sigs, theme, .. } = *self;
+        let title = div().flex().items_center().gap_2().min_w_0();
+        match (&sigs.here, sigs.system()) {
+            (None, _) => (
+                title.child(
+                    div()
+                        .text_color(theme.muted_foreground)
+                        .child("No location"),
+                ),
+                "Log in a character; the chat logs say where you are.".into(),
+            ),
+            (Some(here), None) => {
+                let sub = if sigs.snapshot.is_some() {
+                    let map = sigs
+                        .snapshot
+                        .as_ref()
+                        .map_or("the map".into(), |s| s.map.name.clone());
+                    format!("{} · not on {map}", here.character)
+                } else {
+                    here.character.clone()
+                };
+                (title.child(div().child(here.system.clone())), sub)
+            }
+            (Some(here), Some(system)) => {
+                let (class, color) =
+                    theme::class_meta(system.wormhole_class_id, Some(system.security_status));
+                let title = title
+                    .child(div().flex_none().text_color(color).child(class))
+                    .when_some(
+                        system.alias.clone().filter(|a| !a.trim().is_empty()),
+                        |d, alias| d.child(div().flex_none().child(alias)),
+                    )
+                    .child(
+                        div()
+                            .truncate()
+                            .text_color(theme.muted_foreground)
+                            .child(system.name.clone()),
+                    );
+                let hidden = all - shown;
+                let hidden = if hidden > 0 {
+                    format!(", {hidden} hidden")
+                } else {
+                    String::new()
+                };
+                let map = sigs
+                    .snapshot
+                    .as_ref()
+                    .map(|s| format!("{} · ", s.map.name))
+                    .unwrap_or_default();
+                let sub = format!(
+                    "{map}{} · {all} signature{}{hidden}",
+                    here.character,
+                    if all == 1 { "" } else { "s" }
+                );
+                (title, sub)
+            }
+        }
+    }
+
+    /// The title and what is under it, the latest notice, and the overlay's close button.
+    fn header(&self, all: usize, shown: usize, grab: Option<Grab>) -> Div {
+        let Self {
+            entity,
+            sigs,
+            compact,
+            pad,
+            theme,
+        } = *self;
+        let (title, sub) = self.title(all, shown);
+        div()
+            .flex_none()
+            .flex()
+            .items_start()
+            .gap_2()
+            .px(pad)
+            .py_2()
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(rpx(2.0))
+                    .when_some(grab, |d, grab| {
+                        d.cursor_move()
+                            .on_mouse_down(MouseButton::Left, move |e, w, cx| grab(e, w, cx))
+                    })
+                    .child(
+                        title
+                            .font_family(HEADING)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_size(if compact { rpx(13.0) } else { rpx(16.0) }),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .truncate()
+                            .text_color(theme.muted_foreground)
+                            .child(sub),
+                    ),
+            )
+            .when_some(sigs.notice.as_ref(), |d, n| {
+                d.child(
+                    div()
+                        .flex_none()
+                        .max_w(rpx(260.0))
+                        .child(ui::notice(n, theme)),
+                )
+            })
+            .when(compact, |d| {
+                d.child(
+                    div()
+                        .id("overlay-hide")
+                        .flex_none()
+                        .p_1()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme.muted))
+                        .on_click(emit(entity, Command::HideOverlay))
+                        .child(
+                            svg()
+                                .path("icons/x.svg")
+                                .size(rpx(12.0))
+                                .text_color(theme.muted_foreground),
+                        ),
+                )
+            })
+    }
+
+    /// What stands in for the rows when none are shown.
+    fn empty_note(&self, all: usize, shown: usize) -> Option<Div> {
+        let text = if shown > 0 {
+            None
+        } else if all > 0 {
+            Some(format!("{all} hidden by the filters."))
+        } else if self.sigs.system().is_some() {
+            Some("No signatures yet. Copy the scan in the probe scanner and paste it.".to_string())
+        } else {
+            None
+        }?;
+        Some(
+            div()
+                .px(self.pad)
+                .py_3()
+                .text_xs()
+                .text_color(self.theme.muted_foreground)
+                .child(text),
+        )
+    }
+
+    /// One signature's row, and whether one of its pickers is open.
+    fn row(&self, sig: &Signature, now: DateTime<Utc>, cx: &App) -> (Stateful<Div>, bool) {
+        let Self {
+            entity,
+            sigs,
+            compact,
+            pad,
+            theme,
+        } = *self;
+        let status = sigs.paste_status(sig);
+        let wormhole = sig.group == "wormhole";
+        let connection = sig
+            .connection_id
+            .and_then(|c| sigs.snapshot.as_ref()?.connection(c));
+        let far = sig.connection_id.and_then(|c| sigs.far(c));
+        let mark = match status {
+            Some(PasteStatus::New) => Some(theme::added()),
+            Some(PasteStatus::Updated) => Some(theme::refreshed()),
+            Some(PasteStatus::Missing) => Some(theme::missing()),
+            None => None,
+        };
+        let missing = status == Some(PasteStatus::Missing);
+        let key = sig.id;
+        let open = sigs
+            .picker
+            .filter(|p| p.sig == key && p.overlay == compact)
+            .map(|p| p.kind);
+        // The open picker's popup, built once and handed to the cell it hangs off.
+        let float_el = RefCell::new(open.map(|kind| {
+            let content = picker(entity, sigs, sig, connection, kind, theme);
+            let picker = Picker {
+                sig: key,
+                kind,
+                overlay: compact,
+            };
+            (kind, float(entity, sigs, picker, content, cx))
+        }));
+        let float_for = |kind: PickerKind| {
+            let mut slot = float_el.borrow_mut();
+            match slot.take() {
+                Some((k, el)) if k == kind => Some(el),
+                other => {
+                    *slot = other;
+                    None
+                }
+            }
+        };
+        let cell = |kind: PickerKind| self.cell(key, kind, open).children(float_for(kind));
+        let row = div()
+            .id(ElementId::NamedInteger("sig".into(), key.cast_unsigned()))
+            .relative()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px(pad)
+            .h(rpx(26.0))
+            .text_xs()
+            .border_b_1()
+            .border_color(theme.border.opacity(0.3))
+            .hover(|s| s.bg(theme.muted.opacity(0.3)))
+            .when_some(mark, |d, color| d.bg(color.opacity(0.1)))
+            .when(missing, |d| d.opacity(0.6))
+            .child(
+                // The paste's mark down the left edge.
+                div()
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(2.0))
+                    .when_some(mark, gpui_kit::Styled::bg),
+            )
+            .child(
+                div()
+                    .w(rpx(56.0))
+                    .flex_none()
+                    .font_family(theme.mono_font_family.clone())
+                    .when(missing, gpui_kit::Styled::line_through)
+                    .child(if sig.signature_id.is_empty() {
+                        "---".to_string()
+                    } else {
+                        sig.signature_id.clone()
+                    }),
+            )
+            .child(self.category(cell(PickerKind::Category), sig))
+            .child(self.type_cell(cell(PickerKind::Type), sig))
+            .when(wormhole, |d| {
+                d.child(self.connection_cell(cell(PickerKind::Connection), far))
+            })
+            .child(self.age_cell(sig, connection, now))
+            .child(self.actions(sig, open, float_for(PickerKind::Menu)));
+        (row, open.is_some())
+    }
+
+    /// A row's cell that opens its picker, outlined while that is open.
+    fn cell(&self, key: i64, kind: PickerKind, open: Option<PickerKind>) -> Stateful<Div> {
+        let Self {
+            entity,
+            sigs,
+            compact,
+            theme,
+            ..
+        } = *self;
+        div()
+            .id(ElementId::Name(format!("cell-{key}-{kind:?}").into()))
+            .h(rpx(20.0))
+            .px_1()
+            .rounded(px(3.0))
+            .flex()
+            .items_center()
+            .gap_1()
+            .min_w_0()
+            .overflow_hidden()
+            .cursor_pointer()
+            .border_1()
+            .border_color(if open == Some(kind) {
+                theme.primary.opacity(0.7)
+            } else {
+                theme.transparent
+            })
+            .hover(|s| s.bg(theme.muted).border_color(theme.input))
+            .relative()
+            .on_mouse_down(
+                MouseButton::Left,
+                toggle(
+                    entity,
+                    Picker {
+                        sig: key,
+                        kind,
+                        overlay: compact,
+                    },
+                ),
+            )
+            .when(open == Some(kind), |d| d.child(probe(&sigs.anchor)))
+    }
+
+    /// Where a wormhole's connection leads, or a placeholder for one not linked.
+    fn connection_cell(&self, cell: Stateful<Div>, far: Option<Far>) -> Stateful<Div> {
+        let theme = self.theme;
+        cell.flex_1().map(|d| match far {
+            Some(far) => far_label(d, far, None, theme),
+            None => d.child(
+                div()
+                    .truncate()
+                    .text_color(theme.muted_foreground)
+                    .child("Connection"),
+            ),
+        })
+    }
+
+    fn age_cell(
+        &self,
+        sig: &Signature,
+        connection: Option<&Connection>,
+        now: DateTime<Utc>,
+    ) -> Div {
+        let theme = self.theme;
+        div()
+            .w(rpx(32.0))
+            .flex_none()
+            .flex()
+            .justify_end()
+            .font_family(theme.mono_font_family.clone())
+            .text_color(age_color(sig, connection).unwrap_or(theme.muted_foreground))
+            .child(age(sig, connection, now))
+    }
+
+    /// The category cell's icon and name, or a placeholder for one nobody has set.
+    fn category(&self, cell: Stateful<Div>, sig: &Signature) -> Stateful<Div> {
+        let theme = self.theme;
+        let (group, group_color) = theme::group_meta(&sig.group);
+        cell.w(rpx(72.0)).flex_none().map(|d| {
+            if sig.group == "unknown" || group_color.is_none() {
+                d.child(div().text_color(theme.muted_foreground).child("Category"))
+            } else {
+                let color = group_color.unwrap_or(theme.muted_foreground);
+                d.child(
+                    svg()
+                        .flex_none()
+                        .path(theme::group_icon(&sig.group))
+                        .size(rpx(12.0))
+                        .text_color(color),
+                )
+                .child(div().truncate().child(group))
+            }
+        })
+    }
+
+    fn type_cell(&self, cell: Stateful<Div>, sig: &Signature) -> Stateful<Div> {
+        let theme = self.theme;
+        let label = self.sigs.type_label(sig);
+        let wormhole = sig.group == "wormhole";
+        cell
+            // A wormhole's type is a code and a class, `K162 C3`: it needs little room, and
+            // the connection beside it gets the rest.
+            .when(wormhole, |d| d.w(rpx(84.0)).flex_none())
+            .when(!wormhole, gpui_kit::Styled::flex_1)
+            .map(|d| match label.dest {
+                Some((short, color)) => d
+                    .font_family(theme.mono_font_family.clone())
+                    .child(div().flex_none().child(label.text))
+                    .child(div().flex_none().text_color(color).child(short))
+                    .when_some(label.extra, |d, extra| {
+                        d.child(
+                            div()
+                                .truncate()
+                                .text_color(theme.muted_foreground)
+                                .child(format!("({extra})")),
+                        )
+                    }),
+                None => d.child(
+                    div()
+                        .truncate()
+                        .when(label.muted, |d| d.text_color(theme.muted_foreground))
+                        .child(label.text),
+                ),
+            })
+    }
+
+    /// The row's buttons: copy the bookmark for a wormhole, and the menu with `menu` its
+    /// popup when that is open.
+    fn actions(&self, sig: &Signature, open: Option<PickerKind>, menu: Option<AnyElement>) -> Div {
+        let Self {
+            entity,
+            sigs,
+            compact,
+            theme,
+            ..
+        } = *self;
+        let key = sig.id;
+        let wormhole = sig.group == "wormhole";
+        let icon_button = |id: &str, path: &'static str| {
+            div()
+                .id(ElementId::Name(format!("{id}-{key}").into()))
+                .flex_none()
+                .size(rpx(20.0))
+                .rounded(px(3.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.muted))
+                .child(
+                    svg()
+                        .path(path)
+                        .size(rpx(13.0))
+                        .text_color(theme.muted_foreground),
+                )
+        };
+        div()
+            .w(rpx(44.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_end()
+            .gap(rpx(2.0))
+            .when(wormhole, |d| {
+                d.child(
+                    icon_button("sig-copy", "icons/copy.svg")
+                        .on_click(emit(entity, Command::CopyBookmark(key))),
+                )
+            })
+            .child(
+                icon_button("sig-menu", "icons/ellipsis-vertical.svg")
+                    .relative()
+                    .when(open == Some(PickerKind::Menu), |d| {
+                        d.bg(theme.muted).child(probe(&sigs.anchor))
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        toggle(
+                            entity,
+                            Picker {
+                                sig: key,
+                                kind: PickerKind::Menu,
+                                overlay: compact,
+                            },
+                        ),
+                    )
+                    .children(menu),
+            )
+    }
+
+    /// The last outcome and what can be done next, with `missing` signatures the last
+    /// paste no longer saw.
+    fn footer(&self, missing: usize) -> Div {
+        let Self {
+            entity,
+            sigs,
+            pad,
+            theme,
+            ..
+        } = *self;
+        let can_paste = sigs.system().is_some() && !sigs.busy;
+        let idle = ButtonState::from(!sigs.busy);
+        div()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .px(pad)
+            .py_2()
+            .border_t_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        ui::button(
+                            "sig-paste",
+                            if sigs.busy {
+                                "Working…"
+                            } else {
+                                "Paste scan"
+                            },
+                            Kind::Primary,
+                            ButtonState::from(can_paste),
+                            theme,
+                        )
+                        .when(can_paste, |d| d.on_click(emit(entity, Command::Paste))),
+                    )
+                    .when(missing > 0, |d| {
+                        d.child(
+                            ui::button(
+                                "sig-sweep",
+                                format!("Delete {missing} missing"),
+                                Kind::Danger,
+                                idle,
+                                theme,
+                            )
+                            .when(!sigs.busy, |d| {
+                                d.on_click(emit(entity, Command::DeleteMissing))
+                            }),
+                        )
+                    })
+                    .when(sigs.current_review().is_some(), |d| {
+                        d.child(
+                            ui::button(
+                                "sig-clear",
+                                "Clear marks",
+                                Kind::Normal,
+                                ButtonState::Enabled,
+                                theme,
+                            )
+                            .on_click(emit(entity, Command::ClearReview)),
+                        )
+                    })
+                    .child(filters(entity, &sigs.list, theme)),
+            )
+    }
 }
 
 /// Change the list's filter or sort, and keep it.
@@ -1261,8 +1379,8 @@ fn far_label(d: Stateful<Div>, far: Far, hole: Option<Hsla>, theme: &Theme) -> S
         })
 }
 
-/// One choice in a picker's popup; the chosen one is tinted and ticked.
-fn option(id: String, selected: bool, theme: &Theme) -> Stateful<Div> {
+/// One choice in a picker's popup; [`chosen`] marks the one that is.
+fn option(id: String, theme: &Theme) -> Stateful<Div> {
     div()
         .id(ElementId::Name(id.into()))
         .relative()
@@ -1275,17 +1393,19 @@ fn option(id: String, selected: bool, theme: &Theme) -> Stateful<Div> {
         .rounded(px(3.0))
         .text_xs()
         .cursor_pointer()
-        .when(selected, |d| {
-            d.bg(theme.primary.opacity(0.14)).child(
-                svg()
-                    .absolute()
-                    .right(rpx(8.0))
-                    .path("icons/check.svg")
-                    .size(rpx(12.0))
-                    .text_color(theme.primary),
-            )
-        })
         .hover(|s| s.bg(theme.muted))
+}
+
+/// The chosen [`option`], tinted and ticked.
+fn chosen(option: Stateful<Div>, theme: &Theme) -> Stateful<Div> {
+    option.bg(theme.primary.opacity(0.14)).child(
+        svg()
+            .absolute()
+            .right(rpx(8.0))
+            .path("icons/check.svg")
+            .size(rpx(12.0))
+            .text_color(theme.primary),
+    )
 }
 
 fn heading(text: &'static str, theme: &Theme) -> Div {
@@ -1311,172 +1431,193 @@ fn picker(
     kind: PickerKind,
     theme: &Theme,
 ) -> Div {
-    let key = sig.id;
-    let mut body = div().flex().flex_col();
+    let body = div().flex().flex_col();
     match kind {
-        PickerKind::Category => {
-            for (group, _, name) in theme::CATEGORIES {
-                let (_, color) = theme::group_meta(group);
-                body = body.child(
-                    option(format!("pick-{key}-cat-{group}"), sig.group == group, theme)
-                        .text_color(color.unwrap_or(theme.foreground))
-                        .on_click(choose(entity, key, SignatureEdit::Group(group.into())))
-                        .child(name),
-                );
-            }
+        PickerKind::Category => category_picker(body, entity, sig, theme),
+        PickerKind::Type => type_picker(body, entity, sigs, sig, theme),
+        PickerKind::Menu => menu_picker(body, entity, sig, connection, theme),
+        PickerKind::Connection => connection_picker(body, entity, sigs, sig, theme),
+    }
+}
+
+fn category_picker(mut body: Div, entity: &Entity<Sigs>, sig: &Signature, theme: &Theme) -> Div {
+    let key = sig.id;
+    for (group, _, name) in theme::CATEGORIES {
+        let (_, color) = theme::group_meta(group);
+        body = body.child(
+            option(format!("pick-{key}-cat-{group}"), theme)
+                .when(sig.group == group, |d| chosen(d, theme))
+                .text_color(color.unwrap_or(theme.foreground))
+                .on_click(choose(entity, key, SignatureEdit::Group(group.into())))
+                .child(name),
+        );
+    }
+    body
+}
+
+fn type_picker(
+    mut body: Div,
+    entity: &Entity<Sigs>,
+    sigs: &Sigs,
+    sig: &Signature,
+    theme: &Theme,
+) -> Div {
+    let key = sig.id;
+    let sections = sigs.type_sections(sig);
+    if sections.is_empty() {
+        return body.child(heading("Pick a category first.", theme));
+    }
+    body = body.child(
+        option(format!("pick-{key}-type-none"), theme)
+            .when(sig.signature_type_id.is_none(), |d| chosen(d, theme))
+            .text_color(theme.muted_foreground)
+            .on_click(choose(entity, key, SignatureEdit::Type(None)))
+            .child("Unknown"),
+    );
+    for (label, types) in sections {
+        if let Some(label) = label {
+            body = body.child(heading(label, theme));
         }
-        PickerKind::Type => {
-            let sections = sigs.type_sections(sig);
-            if sections.is_empty() {
-                return body.child(heading("Pick a category first.", theme));
-            }
-            body = body.child(
-                option(
-                    format!("pick-{key}-type-none"),
-                    sig.signature_type_id.is_none(),
-                    theme,
-                )
-                .text_color(theme.muted_foreground)
-                .on_click(choose(entity, key, SignatureEdit::Type(None)))
-                .child("Unknown"),
-            );
-            for (label, types) in sections {
-                if let Some(label) = label {
-                    body = body.child(heading(label, theme));
+        for t in types {
+            let mut chip = option(format!("pick-{key}-type-{}", t.id), theme)
+                .when(sig.signature_type_id == Some(t.id), |d| chosen(d, theme))
+                .on_click(choose(entity, key, SignatureEdit::Type(Some(t.id))));
+            chip = match &t.signature {
+                Some(code) if sig.group == "wormhole" => {
+                    let (short, color) = theme::dest_class_meta(t.target_class);
+                    chip.child(code.clone())
+                        .child(div().text_color(color).child(short))
+                        .when_some(t.extra.clone(), |d, extra| {
+                            d.child(
+                                div()
+                                    .text_color(theme.muted_foreground)
+                                    .child(format!("({extra})")),
+                            )
+                        })
                 }
-                for t in types {
-                    let mut chip = option(
-                        format!("pick-{key}-type-{}", t.id),
-                        sig.signature_type_id == Some(t.id),
-                        theme,
-                    )
+                _ => chip.child(t.name.clone()),
+            };
+            body = body.child(chip);
+        }
+    }
+    body
+}
+
+/// The row's menu: a wormhole's mass and lifetime and its connection's preserve mass,
+/// then delete.
+fn menu_picker(
+    mut body: Div,
+    entity: &Entity<Sigs>,
+    sig: &Signature,
+    connection: Option<&Connection>,
+    theme: &Theme,
+) -> Div {
+    let key = sig.id;
+    let dot = |color: Hsla| div().size(rpx(8.0)).rounded_full().bg(color);
+    if sig.group == "wormhole" {
+        body = body.child(heading("Mass", theme));
+        for (value, name, color) in [
+            (None, "Fresh Mass", theme::healthy()),
+            (Some(MassStatus::Reduced), "Reduced Mass", theme::reduced()),
+            (
+                Some(MassStatus::Critical),
+                "Critical Mass",
+                theme::critical(),
+            ),
+        ] {
+            let current = sig.mass_status.filter(|m| *m != MassStatus::Stable);
+            body = body.child(
+                option(format!("pick-{key}-mass-{name}"), theme)
+                    .when(current == value, |d| chosen(d, theme))
+                    .on_click(choose(entity, key, SignatureEdit::Mass(value)))
+                    .child(dot(color))
+                    .child(name),
+            );
+        }
+        body = body.child(heading("Lifetime", theme));
+        for (value, name, color) in [
+            (None, "Healthy", theme::healthy()),
+            (Some(TimeStatus::Eol), "End of Life", theme::eol()),
+            (Some(TimeStatus::Critical), "Critical", theme::critical()),
+            (Some(TimeStatus::Expired), "Expired", theme::critical()),
+        ] {
+            let current = sig.time_status.filter(|t| *t != TimeStatus::Stable);
+            body = body.child(
+                option(format!("pick-{key}-time-{name}"), theme)
+                    .when(current == value, |d| chosen(d, theme))
+                    .on_click(choose(entity, key, SignatureEdit::Time(value)))
+                    .child(dot(color))
+                    .child(name),
+            );
+        }
+        if let Some(c) = connection {
+            body = body.child(separator(theme)).child(
+                option(format!("pick-{key}-preserve"), theme)
+                    .when(c.preserve_mass, |d| chosen(d, theme))
                     .on_click(choose(
                         entity,
                         key,
-                        SignatureEdit::Type(Some(t.id)),
-                    ));
-                    chip = match &t.signature {
-                        Some(code) if sig.group == "wormhole" => {
-                            let (short, color) = theme::dest_class_meta(t.target_class);
-                            chip.child(code.clone())
-                                .child(div().text_color(color).child(short))
-                                .when_some(t.extra.clone(), |d, extra| {
-                                    d.child(
-                                        div()
-                                            .text_color(theme.muted_foreground)
-                                            .child(format!("({extra})")),
-                                    )
-                                })
-                        }
-                        _ => chip.child(t.name.clone()),
-                    };
-                    body = body.child(chip);
-                }
-            }
-        }
-        PickerKind::Menu => {
-            let dot = |color: Hsla| div().size(rpx(8.0)).rounded_full().bg(color);
-            if sig.group == "wormhole" {
-                body = body.child(heading("Mass", theme));
-                for (value, name, color) in [
-                    (None, "Fresh Mass", theme::healthy()),
-                    (Some(MassStatus::Reduced), "Reduced Mass", theme::reduced()),
-                    (
-                        Some(MassStatus::Critical),
-                        "Critical Mass",
-                        theme::critical(),
-                    ),
-                ] {
-                    let current = sig.mass_status.filter(|m| *m != MassStatus::Stable);
-                    body = body.child(
-                        option(format!("pick-{key}-mass-{name}"), current == value, theme)
-                            .on_click(choose(entity, key, SignatureEdit::Mass(value)))
-                            .child(dot(color))
-                            .child(name),
-                    );
-                }
-                body = body.child(heading("Lifetime", theme));
-                for (value, name, color) in [
-                    (None, "Healthy", theme::healthy()),
-                    (Some(TimeStatus::Eol), "End of Life", theme::eol()),
-                    (Some(TimeStatus::Critical), "Critical", theme::critical()),
-                    (Some(TimeStatus::Expired), "Expired", theme::critical()),
-                ] {
-                    let current = sig.time_status.filter(|t| *t != TimeStatus::Stable);
-                    body = body.child(
-                        option(format!("pick-{key}-time-{name}"), current == value, theme)
-                            .on_click(choose(entity, key, SignatureEdit::Time(value)))
-                            .child(dot(color))
-                            .child(name),
-                    );
-                }
-                if let Some(c) = connection {
-                    body = body.child(separator(theme)).child(
-                        option(format!("pick-{key}-preserve"), c.preserve_mass, theme)
-                            .on_click(choose(
-                                entity,
-                                key,
-                                SignatureEdit::PreserveMass {
-                                    connection: c.id,
-                                    on: !c.preserve_mass,
-                                },
-                            ))
-                            .child("Preserve mass"),
-                    );
-                }
-                body = body.child(separator(theme));
-            }
-            let entity = entity.clone();
-            body = body.child(
-                option(format!("pick-{key}-delete"), false, theme)
-                    .text_color(theme.danger)
-                    .on_click(move |_, _, cx| {
-                        entity.update(cx, |sigs, cx| {
-                            sigs.picker = None;
-                            cx.emit(Command::Delete(key));
-                            cx.notify();
-                        });
-                    })
-                    .child(
-                        svg()
-                            .path("icons/trash-2.svg")
-                            .size(rpx(12.0))
-                            .text_color(theme.danger),
-                    )
-                    .child("Delete Signature"),
+                        SignatureEdit::PreserveMass {
+                            connection: c.id,
+                            on: !c.preserve_mass,
+                        },
+                    ))
+                    .child("Preserve mass"),
             );
         }
-        PickerKind::Connection => {
-            let (free, taken) = sigs.link_options(sig);
-            body = body.child(
-                option(
-                    format!("pick-{key}-conn-none"),
-                    sig.connection_id.is_none(),
-                    theme,
-                )
-                .text_color(theme.muted_foreground)
-                .on_click(choose(entity, key, SignatureEdit::Unlink))
-                .child("Unknown"),
-            );
-            if free.is_empty() && taken.is_empty() {
-                body = body.child(heading("No connection here fits this type yet.", theme));
-            }
-            for (label, list) in [("Connections", free), ("Connected", taken)] {
-                if list.is_empty() {
-                    continue;
-                }
-                body = body.child(heading(label, theme));
-                for far in list {
-                    let id = far.connection;
-                    let chip = option(
-                        format!("pick-{key}-conn-{id}"),
-                        sig.connection_id == Some(id),
-                        theme,
-                    )
-                    .on_click(choose(entity, key, SignatureEdit::Link(id)));
-                    body = body.child(far_label(chip, far, None, theme));
-                }
-            }
+        body = body.child(separator(theme));
+    }
+    let entity = entity.clone();
+    body.child(
+        option(format!("pick-{key}-delete"), theme)
+            .text_color(theme.danger)
+            .on_click(move |_, _, cx| {
+                entity.update(cx, |sigs, cx| {
+                    sigs.picker = None;
+                    cx.emit(Command::Delete(key));
+                    cx.notify();
+                });
+            })
+            .child(
+                svg()
+                    .path("icons/trash-2.svg")
+                    .size(rpx(12.0))
+                    .text_color(theme.danger),
+            )
+            .child("Delete Signature"),
+    )
+}
+
+fn connection_picker(
+    mut body: Div,
+    entity: &Entity<Sigs>,
+    sigs: &Sigs,
+    sig: &Signature,
+    theme: &Theme,
+) -> Div {
+    let key = sig.id;
+    let (free, taken) = sigs.link_options(sig);
+    body = body.child(
+        option(format!("pick-{key}-conn-none"), theme)
+            .when(sig.connection_id.is_none(), |d| chosen(d, theme))
+            .text_color(theme.muted_foreground)
+            .on_click(choose(entity, key, SignatureEdit::Unlink))
+            .child("Unknown"),
+    );
+    if free.is_empty() && taken.is_empty() {
+        body = body.child(heading("No connection here fits this type yet.", theme));
+    }
+    for (label, list) in [("Connections", free), ("Connected", taken)] {
+        if list.is_empty() {
+            continue;
+        }
+        body = body.child(heading(label, theme));
+        for far in list {
+            let id = far.connection;
+            let chip = option(format!("pick-{key}-conn-{id}"), theme)
+                .when(sig.connection_id == Some(id), |d| chosen(d, theme))
+                .on_click(choose(entity, key, SignatureEdit::Link(id)));
+            body = body.child(far_label(chip, far, None, theme));
         }
     }
     body
@@ -1485,6 +1626,28 @@ fn picker(
 /// The question after a jump: which of the origin's signatures was it? One row per option,
 /// numbered for the pick keys, and a last row for a hole nobody had scanned.
 fn ask_section(entity: &Entity<Sigs>, sigs: &Sigs, ask: &Ask, pad: Rems, theme: &Theme) -> Div {
+    let mut section = ask_header(entity, ask, pad, theme);
+    for i in 0..ask.options.len() {
+        section = section.child(ask_option(entity, sigs, ask, i, pad, theme));
+    }
+    section.child(
+        ask_row(
+            "ask-none".into(),
+            Some(format!("{}0", sigs.pick_prefix)),
+            pad,
+            theme,
+        )
+        .on_click(emit(entity, Command::Pick(None)))
+        .child(
+            div()
+                .text_color(theme.muted_foreground)
+                .child("None of these: a hole nobody scanned"),
+        ),
+    )
+}
+
+/// Where the jump went, and the question.
+fn ask_header(entity: &Entity<Sigs>, ask: &Ask, pad: Rems, theme: &Theme) -> Div {
     let origin = ask
         .origin
         .alias
@@ -1492,9 +1655,7 @@ fn ask_section(entity: &Entity<Sigs>, sigs: &Sigs, ask: &Ask, pad: Rems, theme: 
         .filter(|a| !a.trim().is_empty())
         .unwrap_or_else(|| ask.origin.name.clone());
     let (class, class_color) = theme::class_meta(ask.target.class, Some(ask.target.security));
-    let key = |n: usize| format!("{}{n}", sigs.pick_prefix);
-
-    let mut section = div()
+    div()
         .flex_none()
         .flex()
         .flex_col()
@@ -1551,95 +1712,91 @@ fn ask_section(entity: &Entity<Sigs>, sigs: &Sigs, ask: &Ask, pad: Rems, theme: 
                 .text_xs()
                 .text_color(theme.muted_foreground)
                 .child(format!("Which signature did {} jump?", ask.character)),
-        );
+        )
+}
 
-    let row = |id: ElementId, number: Option<String>, dim: bool| {
-        div()
-            .id(id)
-            .flex()
-            .items_center()
-            .gap_2()
-            .px(pad)
-            .h(rpx(22.0))
-            .text_xs()
-            .cursor_pointer()
-            .hover(|s| s.bg(theme.primary.opacity(0.12)))
-            .when(dim, |d| d.opacity(0.55))
-            .child(
-                div()
-                    .w(rpx(64.0))
-                    .flex_none()
-                    .font_family(HEADING)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.primary)
-                    .child(number.unwrap_or_default()),
-            )
-    };
-    for (i, sig) in ask.options.iter().enumerate() {
-        let label = sigs.type_label(sig);
-        let ghost = sig
-            .connection_id
-            .and_then(|c| ask.ghost_aliases.get(&c).cloned());
-        let (group, group_color) = theme::group_meta(&sig.group);
-        let number = (i < 9).then(|| key(i + 1));
-        section = section.child(
-            row(
-                ElementId::NamedInteger("ask".into(), i as u64),
-                number,
-                i >= ask.likely,
-            )
-            .on_click(emit(entity, Command::Pick(Some(i))))
-            .child(
-                div()
-                    .w(rpx(54.0))
-                    .flex_none()
-                    .font_family(HEADING)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(sig.signature_id.clone()),
-            )
-            .child(
-                div()
-                    .w(rpx(40.0))
-                    .flex_none()
-                    .text_color(group_color.unwrap_or(theme.muted_foreground))
-                    .child(group),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
+/// A row to pick, led by its pick key.
+fn ask_row(id: ElementId, number: Option<String>, pad: Rems, theme: &Theme) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap_2()
+        .px(pad)
+        .h(rpx(22.0))
+        .text_xs()
+        .cursor_pointer()
+        .hover(|s| s.bg(theme.primary.opacity(0.12)))
+        .child(
+            div()
+                .w(rpx(64.0))
+                .flex_none()
+                .font_family(HEADING)
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.primary)
+                .child(number.unwrap_or_default()),
+        )
+}
+
+/// The `i`th of the jump's options, dimmed past the likely ones.
+fn ask_option(
+    entity: &Entity<Sigs>,
+    sigs: &Sigs,
+    ask: &Ask,
+    i: usize,
+    pad: Rems,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let sig = &ask.options[i];
+    let label = sigs.type_label(sig);
+    let ghost = sig
+        .connection_id
+        .and_then(|c| ask.ghost_aliases.get(&c).cloned());
+    let (group, group_color) = theme::group_meta(&sig.group);
+    let number = (i < 9).then(|| format!("{}{}", sigs.pick_prefix, i + 1));
+    ask_row(ElementId::from(("ask", i)), number, pad, theme)
+        .when(i >= ask.likely, |d| d.opacity(0.55))
+        .on_click(emit(entity, Command::Pick(Some(i))))
+        .child(
+            div()
+                .w(rpx(54.0))
+                .flex_none()
+                .font_family(HEADING)
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(sig.signature_id.clone()),
+        )
+        .child(
+            div()
+                .w(rpx(40.0))
+                .flex_none()
+                .text_color(group_color.unwrap_or(theme.muted_foreground))
+                .child(group),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .truncate()
+                        .when(label.muted, |d| d.text_color(theme.muted_foreground))
+                        .child(label.text),
+                )
+                .when_some(label.dest, |d, (short, color)| {
+                    d.child(div().flex_none().text_color(color).child(short))
+                })
+                .when_some(ghost, |d, alias| {
+                    d.child(
                         div()
-                            .truncate()
-                            .when(label.muted, |d| d.text_color(theme.muted_foreground))
-                            .child(label.text),
+                            .flex_none()
+                            .text_color(theme.muted_foreground)
+                            .child(format!("→ {alias}")),
                     )
-                    .when_some(label.dest, |d, (short, color)| {
-                        d.child(div().flex_none().text_color(color).child(short))
-                    })
-                    .when_some(ghost, |d, alias| {
-                        d.child(
-                            div()
-                                .flex_none()
-                                .text_color(theme.muted_foreground)
-                                .child(format!("→ {alias}")),
-                        )
-                    }),
-            ),
-        );
-    }
-    section.child(
-        row("ask-none".into(), Some(key(0)), false)
-            .on_click(emit(entity, Command::Pick(None)))
-            .child(
-                div()
-                    .text_color(theme.muted_foreground)
-                    .child("None of these: a hole nobody scanned"),
-            ),
-    )
+                }),
+        )
 }
 
 #[cfg(test)]
@@ -1664,15 +1821,21 @@ mod tests {
             .collect()
     }
 
-    fn sorted_by(column: SortColumn, descending: bool) -> Sigs {
+    fn going_up(column: SortColumn) -> Sigs {
         Sigs {
             list: ListView {
                 hidden: Vec::new(),
                 sort: column,
-                descending,
+                descending: false,
             },
             ..Default::default()
         }
+    }
+
+    fn going_down(column: SortColumn) -> Sigs {
+        let mut sigs = going_up(column);
+        sigs.list.descending = true;
+        sigs
     }
 
     #[test]
@@ -1684,12 +1847,12 @@ mod tests {
             sig("DDD-100", Some("Data Site")),
         ];
         assert_eq!(
-            sorted(&sorted_by(SortColumn::Type, false), &rows),
+            sorted(&going_up(SortColumn::Type), &rows),
             ["CCC-100", "DDD-100", "BBB-100", "AAA-100"]
         );
         // Ties stay by scanner id either way.
         assert_eq!(
-            sorted(&sorted_by(SortColumn::Type, true), &rows),
+            sorted(&going_down(SortColumn::Type), &rows),
             ["AAA-100", "BBB-100", "CCC-100", "DDD-100"]
         );
     }
@@ -1698,11 +1861,11 @@ mod tests {
     fn sorts_by_id_both_ways() {
         let rows = [sig("AAA-100", None), sig("BBB-100", None)];
         assert_eq!(
-            sorted(&sorted_by(SortColumn::Id, false), &rows),
+            sorted(&going_up(SortColumn::Id), &rows),
             ["AAA-100", "BBB-100"]
         );
         assert_eq!(
-            sorted(&sorted_by(SortColumn::Id, true), &rows),
+            sorted(&going_down(SortColumn::Id), &rows),
             ["BBB-100", "AAA-100"]
         );
     }
@@ -1720,7 +1883,7 @@ mod tests {
         hole.created_at = at("2026-09-01T00:00:00Z");
         hole.updated_at = at("2026-10-03T00:00:00Z");
         assert_eq!(
-            sorted(&sorted_by(SortColumn::Age, false), &[old, new, hole]),
+            sorted(&going_up(SortColumn::Age), &[old, new, hole]),
             ["BBB-100", "AAA-100", "CCC-100"]
         );
     }
@@ -1729,7 +1892,7 @@ mod tests {
     fn leaves_out_hidden_categories() {
         let mut hole = sig("BBB-100", None);
         hole.group = "wormhole".into();
-        let mut sigs = sorted_by(SortColumn::Id, false);
+        let mut sigs = going_up(SortColumn::Id);
         sigs.list.hidden = vec!["data".into()];
         assert_eq!(sorted(&sigs, &[sig("AAA-100", None), hole]), ["BBB-100"]);
     }

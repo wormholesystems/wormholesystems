@@ -21,7 +21,7 @@ async fn kills(pool: &PgPool, ids: &[i64], solar_system_id: i64) {
         .bind(solar_system_id)
         .execute(pool)
         .await
-        .unwrap();
+        .expect("insert killmails");
     }
 }
 
@@ -30,9 +30,9 @@ async fn listed(pool: &PgPool, cookie: &str, path: &str) -> Vec<i64> {
     assert_eq!(res.status, StatusCode::OK);
     res.body
         .as_array()
-        .unwrap()
+        .expect("rows are an array")
         .iter()
-        .map(|k| k["id"].as_i64().unwrap())
+        .map(|k| k["id"].as_i64().expect("id is an integer"))
         .collect()
 }
 
@@ -81,7 +81,7 @@ async fn the_selected_system_filter_shows_only_that_system(pool: PgPool) {
         vec![3, 2, 1]
     );
     assert_eq!(listed(&pool, &cookie, &selecting(SYS_B)).await, vec![5, 4]);
-    assert!(listed(&pool, &cookie, &path).await.is_empty());
+    assert_eq!(listed(&pool, &cookie, &path).await, Vec::<i64>::new());
     assert!(
         listed(&pool, &cookie, &selecting(SYS_C)).await.is_empty(),
         "a system off the map has nothing to show here"

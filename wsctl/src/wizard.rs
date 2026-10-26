@@ -17,7 +17,7 @@ use crate::exec::Runner;
 use crate::integrate;
 use crate::rename::{self, Renamed};
 use crate::stack;
-use crate::ui;
+use crate::ui::{self, Answer};
 
 const ENV: &str = ".env";
 const EXAMPLE: &str = ".env.example";
@@ -91,26 +91,23 @@ fn with_environment(env: &str, vars: &[(String, String)]) -> String {
 }
 
 /// `scripted` is `--non-interactive`, with the environment it reads its answers from.
-pub fn setup(
+pub(crate) fn setup(
     runner: &mut dyn Runner,
     dir: &Path,
     scripted: Option<&[(String, String)]>,
 ) -> Result<()> {
     require_checkout(dir)?;
     let on_disk = read_env(dir)?;
-    let fresh = on_disk.is_empty();
-    let (existing, template) = match scripted {
-        Some(vars) => {
-            ui::script();
-            (
-                with_environment(&on_disk, vars),
-                with_environment(&template(dir)?, vars),
-            )
-        }
-        None => {
-            require_terminal()?;
-            (on_disk, template(dir)?)
-        }
+    let install = Install::of(&on_disk);
+    let (existing, template) = if let Some(vars) = scripted {
+        ui::script();
+        (
+            with_environment(&on_disk, vars),
+            with_environment(&template(dir)?, vars),
+        )
+    } else {
+        require_terminal()?;
+        (on_disk, template(dir)?)
     };
     ui::heading("Checking this machine");
     let domain = envfile::get(&existing, "WS_DOMAIN").unwrap_or_default();
@@ -127,7 +124,7 @@ pub fn setup(
         ui::report(&check);
     }
 
-    let answers = ask_everything(&existing, fresh, http, https)?;
+    let answers = ask_everything(&existing, install, http, https)?;
     let missing = ui::take_missing();
     if !missing.is_empty() {
         bail!(
@@ -158,7 +155,7 @@ pub fn setup(
     // Before .env names the new project, which is what the old name is read from. A fresh
     // checkout has no .env yet, and nothing under any name to move.
     let bundled = deployment.database == Database::Bundled;
-    let (old, has_database) = if fresh {
+    let (old, has_database) = if install == Install::New {
         (None, false)
     } else {
         let old = rename::old_project(runner, dir)?;
@@ -166,7 +163,12 @@ pub fn setup(
         (old, has_database)
     };
 
-    write_env(dir, &template, &answers, bundled && has_database)?;
+    let bundled_db = if bundled && has_database {
+        BundledDb::Existing
+    } else {
+        BundledDb::New
+    };
+    write_env(dir, &template, &answers, bundled_db)?;
     ui::done("wrote .env");
 
     // Ready before anything is stopped, so a running install only goes down for the move.
@@ -184,7 +186,7 @@ pub fn setup(
     }
     report_renamed(&renamed);
     ui::heading("Starting");
-    if fresh {
+    if install == Install::New {
         ui::note("The first boot downloads CCP's static data (~550MB) and seeds from it before");
         ui::note("the API answers. This waits for that, which takes a few minutes; follow it");
         ui::note("from another shell with:  docker compose logs -f api");
@@ -236,10 +238,61 @@ fn report_leftovers(leftovers: &[&str]) {
     ui::note(&format!("  docker compose rm -sf {}", leftovers.join(" ")));
 }
 
+/// Whether a checkout already had a `.env` when setup started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Install {
+    /// No `.env` yet: gets the defaults a new install should have rather than the ones
+    /// that keep an old install as it was.
+    New,
+    Existing,
+}
+
+impl Install {
+    /// From the `.env` on disk, empty when there is none.
+    fn of(env: &str) -> Self {
+        if env.is_empty() {
+            Self::New
+        } else {
+            Self::Existing
+        }
+    }
+}
+
+/// Whether the bundled database already has data, made with whatever password it had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BundledDb {
+    Existing,
+    New,
+}
+
+/// When `update` fetches the static data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Sde {
+    /// Only when CCP has a newer build than the one loaded.
+    IfNewer,
+    /// Even when the loaded build is already current.
+    Force,
+}
+
+/// Whether `update` dumps the database before the new version starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Dump {
+    First,
+    Skip,
+}
+
+/// Whether `restore` asks before replacing the database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Confirmation {
+    Ask,
+    /// Already given, on the command line.
+    Given,
+}
+
 /// Bring the checkout, the containers and the static data up to date. One command,
 /// because a version of the code and the export it reads are not separately interesting:
 /// whoever is updating the server wants the server updated.
-pub fn update(runner: &mut dyn Runner, dir: &Path, force_sde: bool, dump: bool) -> Result<()> {
+pub(crate) fn update(runner: &mut dyn Runner, dir: &Path, sde: Sde, dump: Dump) -> Result<()> {
     require_checkout(dir)?;
     ui::heading("Updating");
     let before = runner
@@ -313,10 +366,10 @@ pub fn update(runner: &mut dyn Runner, dir: &Path, force_sde: bool, dump: bool) 
     // Migrations run as the new API boots, and none of them has a way back. An install that
     // was just moved off its old names has the old volumes as its copy already.
     let has_data = match deployment.database {
-        Database::Bundled => dump && rename::has_database(runner, dir, None)?,
+        Database::Bundled => dump == Dump::First && rename::has_database(runner, dir, None)?,
         Database::External(_) => true,
     };
-    if dump
+    if dump == Dump::First
         && old.is_none()
         && has_data
         && let Err(err) = dump_before_update(runner, dir)
@@ -335,7 +388,7 @@ pub fn update(runner: &mut dyn Runner, dir: &Path, force_sde: bool, dump: bool) 
             style("!").yellow()
         ),
     }
-    update_sde(runner, dir, force_sde);
+    update_sde(runner, dir, sde);
     Ok(())
 }
 
@@ -385,7 +438,7 @@ fn prepare_backups(runner: &mut dyn Runner, dir: &Path) -> Result<std::path::Pat
 }
 
 /// Dump the database now, into the backup directory.
-pub fn backup(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
+pub(crate) fn backup(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
     require_checkout(dir)?;
     ui::heading("Dumping the database");
     let backups = prepare_backups(runner, dir)?;
@@ -396,7 +449,12 @@ pub fn backup(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
 
 /// Put a dump back. Everything in the database is replaced, so the API is stopped first
 /// and started again on the restored data, migrating it forward if the dump is older.
-pub fn restore(runner: &mut dyn Runner, dir: &Path, file: &Path, yes: bool) -> Result<()> {
+pub(crate) fn restore(
+    runner: &mut dyn Runner,
+    dir: &Path,
+    file: &Path,
+    confirmation: Confirmation,
+) -> Result<()> {
     require_checkout(dir)?;
     let file =
         std::fs::canonicalize(file).with_context(|| format!("no dump at {}", file.display()))?;
@@ -404,13 +462,13 @@ pub fn restore(runner: &mut dyn Runner, dir: &Path, file: &Path, yes: bool) -> R
         bail!("{} is not a file", file.display());
     };
     let name = name.to_string_lossy();
-    if !yes {
+    if confirmation == Confirmation::Ask {
         if !console::user_attended() {
             bail!("restoring replaces the whole database; pass --yes to do it without asking");
         }
         if !ui::confirm(
             &format!("Replace everything in the database with {name}?"),
-            false,
+            Answer::No,
         )? {
             bail!("nothing changed");
         }
@@ -488,18 +546,15 @@ fn report_sde(runner: &mut dyn Runner, dir: &Path) {
 
 /// Take a newer export when CCP has one, and say so either way. Failing to read the status
 /// does not fail the update: the code is already live, and the static data can wait.
-fn update_sde(runner: &mut dyn Runner, dir: &Path, force: bool) {
-    let status = match stack::sde_status(runner, dir) {
-        Ok(status) => status,
-        Err(_) => {
-            println!(
-                "  {} could not read the static data; is the stack built?",
-                style("!").yellow()
-            );
-            return;
-        }
+fn update_sde(runner: &mut dyn Runner, dir: &Path, sde: Sde) {
+    let Ok(status) = stack::sde_status(runner, dir) else {
+        println!(
+            "  {} could not read the static data; is the stack built?",
+            style("!").yellow()
+        );
+        return;
     };
-    if !status.update_available && !force {
+    if !status.update_available && sde == Sde::IfNewer {
         ui::done(&format!("static data current ({})", status.loaded));
         return;
     }
@@ -556,7 +611,7 @@ fn update_sde(runner: &mut dyn Runner, dir: &Path, force: bool) {
 /// Room for the archive and what it unpacks to, with some to spare.
 const SDE_NEEDS_GB: u64 = 2;
 
-pub fn status(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
+pub(crate) fn status(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
     require_checkout(dir)?;
     ui::heading("Containers");
     println!("{}", stack::ps(runner, dir)?);
@@ -607,7 +662,7 @@ fn probe_url(runner: &mut dyn Runner, dir: &Path, url: &str) -> checks::Check {
     }
 }
 
-pub fn discord_register(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
+pub(crate) fn discord_register(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
     require_checkout(dir)?;
     let env = read_env(dir)?;
     // The command reads both, and without either it panics in a container instead of
@@ -627,7 +682,7 @@ pub fn discord_register(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn doctor(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
+pub(crate) fn doctor(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
     let env = read_env(dir)?;
     let deployment = Deployment::from_env(&env);
 
@@ -647,15 +702,13 @@ pub fn doctor(runner: &mut dyn Runner, dir: &Path) -> Result<()> {
 }
 
 /// What a reverse proxy in front of this install needs, again, for whoever sets it up.
-pub fn integrate(dir: &Path) -> Result<()> {
+pub(crate) fn integrate(dir: &Path) -> Result<()> {
     require_checkout(dir)?;
     integrate::print(&Deployment::from_env(&read_env(dir)?));
     Ok(())
 }
 
-/// `fresh` is a checkout with no `.env` yet, which gets the defaults a new install should
-/// have rather than the ones that keep an old install as it was.
-fn ask_everything(existing: &str, fresh: bool, http: u16, https: u16) -> Result<Answers> {
+fn ask_everything(existing: &str, install: Install, http: u16, https: u16) -> Result<Answers> {
     ui::heading("What this deployment needs");
     let keep = |key: &str| envfile::get(existing, key).filter(|v| !v.is_empty());
 
@@ -716,8 +769,8 @@ fn ask_everything(existing: &str, fresh: bool, http: u16, https: u16) -> Result<
     answers.killmails = ask_killmails(existing)?;
     answers.announcement = ask_announcement(existing)?;
     answers.error_reporting = ask_error_reporting(existing)?;
-    answers.images = ask_images(existing, fresh)?;
-    answers.backups = ask_backups(existing, fresh)?;
+    answers.images = ask_images(existing, install)?;
+    answers.backups = ask_backups(existing, install)?;
     Ok(answers)
 }
 
@@ -756,7 +809,9 @@ fn ask_database(previous: &Deployment) -> Result<Database> {
         .network
         .or_else(|| previous.app_network().map(String::from))
         .unwrap_or_default();
-    let network = ui::edit("Its Docker network", &network, tidy)?;
+    let network = ui::edit("Its Docker network", &network, |input| {
+        Ok(input.trim().to_string())
+    })?;
     Ok(Database::External(ExternalDb {
         url,
         network: Some(network).filter(|n| !n.is_empty()),
@@ -791,7 +846,14 @@ fn ask_proxy(existing: &str, previous: &Proxy, http: u16, https: u16) -> Result<
     match choice {
         0 => ask_site(existing, http, https).map(Proxy::Caddy),
         1 => ask_router(keep("WS_PUBLIC_URL"), previous).map(Proxy::Router),
-        n => ask_direct(keep("WS_PUBLIC_URL"), previous, n == 2).map(Proxy::Direct),
+        n => {
+            let runs = if n == 2 {
+                ProxyRuns::InDocker
+            } else {
+                ProxyRuns::OnThisMachine
+            };
+            ask_direct(keep("WS_PUBLIC_URL"), previous, runs).map(Proxy::Direct)
+        }
     }
 }
 
@@ -804,7 +866,7 @@ fn ask_site(existing: &str, http: u16, https: u16) -> Result<Site> {
         let tls = ask_tls(existing)?;
         // Let's Encrypt only ever looks at 80 and 443. A certificate from anywhere else
         // can be served wherever this install already serves it.
-        let (http_port, https_port) = if tls == Tls::Acme {
+        let (http, https) = if tls == Tls::Acme {
             (80, 443)
         } else {
             let read = |key, fallback| {
@@ -816,8 +878,8 @@ fn ask_site(existing: &str, http: u16, https: u16) -> Result<Site> {
         };
         return Ok(Site {
             domain,
-            http_port,
-            https_port,
+            http_port: http,
+            https_port: https,
             public_url: String::new(),
             tls,
         });
@@ -890,7 +952,14 @@ fn ask_router(public_url: Option<String>, previous: &Proxy) -> Result<Router> {
     })
 }
 
-fn ask_direct(public_url: Option<String>, previous: &Proxy, in_docker: bool) -> Result<Direct> {
+/// Where the operator's own proxy runs, which is how it reaches the app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProxyRuns {
+    InDocker,
+    OnThisMachine,
+}
+
+fn ask_direct(public_url: Option<String>, previous: &Proxy, runs: ProxyRuns) -> Result<Direct> {
     let before = match previous {
         Proxy::Direct(direct) => direct.clone(),
         Proxy::Router(router) => Direct {
@@ -901,7 +970,7 @@ fn ask_direct(public_url: Option<String>, previous: &Proxy, in_docker: bool) -> 
     };
     let public_url = ask_public_url(public_url)?;
 
-    let network = if in_docker {
+    let network = if runs == ProxyRuns::InDocker {
         println!();
         ui::note("Your proxy finds the app on this network as wormholesystems-api and");
         ui::note("wormholesystems-web.");
@@ -911,10 +980,10 @@ fn ask_direct(public_url: Option<String>, previous: &Proxy, in_docker: bool) -> 
     };
 
     println!();
-    let host_ports = if !in_docker
+    let host_ports = if runs == ProxyRuns::OnThisMachine
         || ui::confirm(
             "Also publish on 127.0.0.1, for a proxy running on this machine rather than in Docker?",
-            before.host_ports.is_some(),
+            Answer::from(before.host_ports.is_some()),
         )? {
         let (api, web) = before.host_ports.unwrap_or((3000, 3001));
         Some((ask_port("API port", api)?, ask_port("Frontend port", web)?))
@@ -972,17 +1041,13 @@ fn suggested_url(http_port: u16) -> String {
     }
 }
 
-fn tidy(input: &str) -> Result<String, String> {
-    Ok(input.trim().to_string())
-}
-
 fn ask_killmails(existing: &str) -> Result<Option<u32>> {
     let current = config::killmails_from_env(existing);
     println!();
     ui::note("The killmail ingest follows zKillboard's live feed and, on its first start, fills");
     ui::note("in recent history from EVE Ref's archives. Kill alerts (to Discord or a webhook),");
     ui::note("kills on the map and the threat view all read from it; without it they stay empty.");
-    if !ui::confirm("Ingest killmails?", current.is_some())? {
+    if !ui::confirm("Ingest killmails?", Answer::from(current.is_some()))? {
         return Ok(None);
     }
     let days = current.unwrap_or(config::DEFAULT_BACKFILL_DAYS);
@@ -1017,7 +1082,7 @@ fn ask_announcement(existing: &str) -> Result<Option<Announcement>> {
     println!();
     ui::note("A banner above every page, for downtime, a move, or anything people should read");
     ui::note("first. Read when the API starts; change it later in .env and restart the API.");
-    if !ui::confirm("Show an announcement?", current.is_some())? {
+    if !ui::confirm("Show an announcement?", Answer::from(current.is_some()))? {
         return Ok(None);
     }
     let keep = |key: &str| envfile::get(existing, key).filter(|v| !v.is_empty());
@@ -1044,7 +1109,7 @@ fn ask_announcement(existing: &str) -> Result<Option<Announcement>> {
     };
     let dismissible = ui::confirm(
         "Can people close it?",
-        current.as_ref().is_none_or(|a| a.dismissible),
+        Answer::from(current.as_ref().is_none_or(|a| a.dismissible)),
     )?;
     Ok(Some(Announcement {
         level: level.to_string(),
@@ -1056,7 +1121,7 @@ fn ask_announcement(existing: &str) -> Result<Option<Announcement>> {
     }))
 }
 
-fn ask_backups(existing: &str, fresh: bool) -> Result<bool> {
+fn ask_backups(existing: &str, install: Install) -> Result<bool> {
     println!();
     ui::note("A dump of the database every day into backups/ in this checkout, kept for two");
     ui::note("weeks (WS_BACKUP_DIR, WS_BACKUP_EVERY_HOURS and WS_BACKUP_KEEP_DAYS change that).");
@@ -1064,15 +1129,15 @@ fn ask_backups(existing: &str, fresh: bool) -> Result<bool> {
     // On for a new install, unless COMPOSE_PROFILES already says without them.
     let current = match envfile::get(existing, "COMPOSE_PROFILES") {
         Some(_) => config::backups_on(existing),
-        None => fresh,
+        None => install == Install::New,
     };
-    ui::confirm("Scheduled backups?", current)
+    ui::confirm("Scheduled backups?", Answer::from(current))
 }
 
 /// Pulled for a new install. One that has been building keeps the answer it had until its
 /// operator picks the other here.
-fn ask_images(existing: &str, fresh: bool) -> Result<Images> {
-    let current = if fresh && !Images::chosen(existing) {
+fn ask_images(existing: &str, install: Install) -> Result<Images> {
+    let current = if install == Install::New && !Images::chosen(existing) {
         Images::Pull
     } else {
         Images::from_env(existing)
@@ -1108,11 +1173,11 @@ fn ask_port(prompt: &str, default: u16) -> Result<u16> {
 fn ask_discord(existing: &str, base: &str) -> Result<Option<Discord>> {
     println!();
     let already = envfile::get(existing, "DISCORD_CLIENT_ID")
-        .filter(|v| !v.is_empty())
-        .is_some();
+        .as_ref()
+        .is_some_and(|v| !v.is_empty());
     if !ui::confirm(
         "Set up Discord? (account linking, slash commands, alerts to a channel)",
-        already,
+        Answer::from(already),
     )? {
         return Ok(None);
     }
@@ -1220,7 +1285,7 @@ fn save_env(dir: &Path, contents: &str) -> Result<()> {
     std::fs::rename(&temp, &path).with_context(|| format!("could not replace {}", path.display()))
 }
 
-fn write_env(dir: &Path, existing: &str, answers: &Answers, has_database: bool) -> Result<()> {
+fn write_env(dir: &Path, existing: &str, answers: &Answers, bundled_db: BundledDb) -> Result<()> {
     let mut out = answers.apply(existing, &config::overrides(dir));
     // A database nobody chose a password for is a database with the password in the README.
     // An external one has no container here to set one for. One that already exists was
@@ -1230,7 +1295,7 @@ fn write_env(dir: &Path, existing: &str, answers: &Answers, has_database: bool) 
             .unwrap_or_default()
             .is_empty()
     {
-        let password = if has_database {
+        let password = if bundled_db == BundledDb::Existing {
             LEGACY_PASSWORD.to_string()
         } else {
             generated_password()
@@ -1345,7 +1410,7 @@ mod tests {
     fn an_update_that_pulls_never_builds() {
         let dir = checkout(&format!("{INSTALLED}WS_IMAGES=pull\n"));
         let mut runner = running();
-        update(&mut runner, &dir, false, true).unwrap();
+        update(&mut runner, &dir, Sde::IfNewer, Dump::First).unwrap();
         assert!(runner.commands.contains(&"docker compose pull".to_string()));
         assert!(
             runner.commands.contains(
@@ -1362,7 +1427,7 @@ mod tests {
         bytes.extend_from_slice(b"WS_CONTACT_NAME=\xff\n");
         std::fs::write(dir.join(ENV), &bytes).unwrap();
 
-        let err = update(&mut running(), &dir, false, true).unwrap_err();
+        let err = update(&mut running(), &dir, Sde::IfNewer, Dump::First).unwrap_err();
 
         assert!(format!("{err:#}").contains(".env"), "{err:#}");
         assert_eq!(std::fs::read(dir.join(ENV)).unwrap(), bytes);
@@ -1371,7 +1436,7 @@ mod tests {
     #[test]
     fn a_rewritten_env_is_private_and_leaves_no_temp_file() {
         let dir = checkout(INSTALLED);
-        update(&mut running(), &dir, false, true).unwrap();
+        update(&mut running(), &dir, Sde::IfNewer, Dump::First).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1389,7 +1454,7 @@ mod tests {
     fn an_update_that_never_chose_builds() {
         let dir = checkout(INSTALLED);
         let mut runner = running();
-        update(&mut runner, &dir, false, true).unwrap();
+        update(&mut runner, &dir, Sde::IfNewer, Dump::First).unwrap();
         let build = runner
             .commands
             .iter()
@@ -1412,7 +1477,7 @@ mod tests {
             "COMPOSE_PROJECT_NAME=wormholesystems\nWS_SETUP=standalone\nCOMPOSE_FILE=compose.standalone.yml\nWS_PUBLIC_URL=https://map.example.com\nWS_DATABASE_URL=postgres://ws:secret@postgres:5432/ws\nWS_PROXY_NETWORK=coolify\n",
         );
         let mut runner = running();
-        update(&mut runner, &dir, false, true).unwrap();
+        update(&mut runner, &dir, Sde::IfNewer, Dump::First).unwrap();
         let env = read_env(&dir).unwrap();
         assert_eq!(
             envfile::get(&env, "COMPOSE_FILE").as_deref(),
@@ -1441,7 +1506,7 @@ mod tests {
             "COMPOSE_PROJECT_NAME=wormholesystems\nWS_DATABASE=external\nWS_DATABASE_URL=postgres://ws@db/ws\nWS_PROXY=network\nWS_PROXY_NETWORK=coolify\nWS_PUBLIC_URL=https://map.example.com\n",
         );
         std::fs::write(dir.join("compose.override.yml"), "services: {}\n").unwrap();
-        update(&mut running(), &dir, false, true).unwrap();
+        update(&mut running(), &dir, Sde::IfNewer, Dump::First).unwrap();
         assert_eq!(
             envfile::get(&read_env(&dir).unwrap(), "COMPOSE_FILE").as_deref(),
             Some(
@@ -1478,7 +1543,7 @@ mod tests {
         let mut runner = Recording::default();
         let err = discord_register(&mut runner, &dir).unwrap_err().to_string();
         assert!(err.contains("DISCORD_APPLICATION_ID"), "{err}");
-        assert!(runner.commands.is_empty());
+        assert_eq!(runner.commands, Vec::<String>::new());
 
         let dir = checkout("DISCORD_BOT_TOKEN=t\nDISCORD_APPLICATION_ID=1\n");
         discord_register(&mut runner, &dir).unwrap();
@@ -1504,7 +1569,7 @@ mod tests {
     #[test]
     fn newer_static_data_is_fetched_and_the_api_restarted() {
         let mut runner = newer_sde();
-        update_sde(&mut runner, Path::new("."), false);
+        update_sde(&mut runner, Path::new("."), Sde::IfNewer);
         let tail: Vec<&str> = runner
             .commands
             .iter()
@@ -1520,7 +1585,7 @@ mod tests {
     fn a_failed_fetch_leaves_the_api_running() {
         let mut runner = newer_sde();
         runner.failures.insert(SDE_FETCH.into());
-        update_sde(&mut runner, Path::new("."), true);
+        update_sde(&mut runner, Path::new("."), Sde::Force);
         assert!(runner.commands.contains(&SDE_FETCH.to_string()));
         assert!(!runner.commands.iter().any(|c| c.contains("restart")));
     }
@@ -1531,7 +1596,7 @@ mod tests {
         runner
             .replies
             .insert(SDE_STATUS.into(), "loaded=3409592\n".into());
-        update_sde(&mut runner, Path::new("."), true);
+        update_sde(&mut runner, Path::new("."), Sde::Force);
         assert!(!runner.commands.contains(&SDE_FETCH.to_string()));
     }
 
@@ -1549,7 +1614,7 @@ mod tests {
             "docker compose run --rm -T backup server-version".into(),
             "170004".into(),
         );
-        update(&mut runner, &dir, false, true).unwrap();
+        update(&mut runner, &dir, Sde::IfNewer, Dump::First).unwrap();
         let at = |line: &str| runner.commands.iter().position(|c| c == line);
         assert!(at(DUMP).expect("dumped") < at(UP).expect("started"));
         assert!(at("docker compose pull").unwrap() < at(DUMP).unwrap());
@@ -1564,7 +1629,7 @@ mod tests {
     fn an_update_can_skip_the_dump() {
         let dir = checkout(EXTERNAL);
         let mut runner = running();
-        update(&mut runner, &dir, false, false).unwrap();
+        update(&mut runner, &dir, Sde::IfNewer, Dump::Skip).unwrap();
         assert!(!runner.commands.iter().any(|c| c.contains("backup")));
     }
 
@@ -1573,7 +1638,7 @@ mod tests {
     fn an_update_without_a_database_dumps_nothing() {
         let dir = checkout(INSTALLED);
         let mut runner = running();
-        update(&mut runner, &dir, false, true).unwrap();
+        update(&mut runner, &dir, Sde::IfNewer, Dump::First).unwrap();
         assert!(!runner.commands.iter().any(|c| c.contains("backup")));
     }
 
@@ -1588,7 +1653,7 @@ mod tests {
             "docker compose run --rm -T backup server-version".into(),
             "160004".into(),
         );
-        restore(&mut runner, &dir, &file, true).unwrap();
+        restore(&mut runner, &dir, &file, Confirmation::Given).unwrap();
         let tail: Vec<&str> = runner
             .commands
             .iter()
@@ -1618,7 +1683,7 @@ mod tests {
         let file = elsewhere.join("old.dump");
         std::fs::write(&file, "").unwrap();
         let mut runner = running();
-        restore(&mut runner, &dir, &file, true).unwrap();
+        restore(&mut runner, &dir, &file, Confirmation::Given).unwrap();
         let parent = std::fs::canonicalize(&*elsewhere).unwrap();
         assert!(runner.commands.contains(&format!(
             "docker compose run --rm -T -v {}:/restore:ro backup restore /restore/old.dump",
@@ -1752,7 +1817,7 @@ mod tests {
     #[test]
     fn an_update_leaves_a_bundled_install_on_the_default_file() {
         let dir = checkout(&format!("{INSTALLED}WS_DOMAIN=map.example.com\n"));
-        update(&mut running(), &dir, false, true).unwrap();
+        update(&mut running(), &dir, Sde::IfNewer, Dump::First).unwrap();
         let env = read_env(&dir).unwrap();
         assert_eq!(envfile::get(&env, "COMPOSE_FILE"), None);
         assert_eq!(envfile::get(&env, "WS_PROXY").as_deref(), Some("caddy"));

@@ -91,7 +91,7 @@ pub(super) async fn record(
         actor.character_id(),
         effect.kind,
         effect.label,
-        effect.entries as i32,
+        effect.entries,
         inverse,
         parent_id,
         is_step,
@@ -465,7 +465,7 @@ pub async fn purge(pool: &PgPool) -> Result<u64> {
 pub fn start_purge(pool: PgPool) {
     crate::background::spawn_every(
         "map event purge",
-        std::time::Duration::from_secs(6 * 60 * 60),
+        std::time::Duration::from_hours(6),
         move || {
             let pool = pool.clone();
             async move { purge(&pool).await.map(drop) }

@@ -136,10 +136,21 @@ pub struct Member {
 /// The permission bits the alert commands ask about, from Discord's permission table.
 #[derive(Debug, Clone, Copy)]
 pub enum Permission {
-    Administrator = 1 << 3,
-    ManageChannels = 1 << 4,
-    MentionEveryone = 1 << 17,
-    ManageRoles = 1 << 28,
+    Administrator,
+    ManageChannels,
+    MentionEveryone,
+    ManageRoles,
+}
+
+impl Permission {
+    pub const fn bits(self) -> u64 {
+        match self {
+            Permission::Administrator => 1 << 3,
+            Permission::ManageChannels => 1 << 4,
+            Permission::MentionEveryone => 1 << 17,
+            Permission::ManageRoles => 1 << 28,
+        }
+    }
 }
 
 impl Member {
@@ -153,7 +164,7 @@ impl Member {
         else {
             return false;
         };
-        bits & Permission::Administrator as u64 != 0 || bits & permission as u64 != 0
+        bits & Permission::Administrator.bits() != 0 || bits & permission.bits() != 0
     }
 }
 
@@ -293,10 +304,10 @@ mod tests {
             user: None,
             permissions: permissions.map(str::to_string),
         };
-        let manage_channels = (Permission::ManageChannels as u64).to_string();
+        let manage_channels = Permission::ManageChannels.bits().to_string();
         assert!(member(Some(&manage_channels)).can(Permission::ManageChannels));
         assert!(!member(Some(&manage_channels)).can(Permission::ManageRoles));
-        let administrator = (Permission::Administrator as u64).to_string();
+        let administrator = Permission::Administrator.bits().to_string();
         assert!(member(Some(&administrator)).can(Permission::MentionEveryone));
         assert!(!member(None).can(Permission::ManageChannels));
         assert!(!member(Some("lots")).can(Permission::ManageChannels));

@@ -8,6 +8,7 @@
 //! writing a killmail.
 
 use std::collections::HashSet;
+use std::hash::BuildHasher;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -65,7 +66,7 @@ pub async fn ensure(pool: &PgPool, esi: &EsiClient, kind: EntityKind, ids: &[i64
     let failed = Arc::new(AtomicUsize::new(0));
     run_bounded(&missing, CONCURRENCY, |id| {
         let (pool, esi) = (pool.clone(), esi.clone());
-        let (noted, named, failed) = (noted.clone(), named.clone(), failed.clone());
+        let (noted, named, failed) = (Arc::clone(&noted), Arc::clone(&named), Arc::clone(&failed));
         async move {
             match fetch(&pool, &esi, kind, id).await {
                 Fetched::Named => {
@@ -91,16 +92,20 @@ pub async fn ensure(pool: &PgPool, esi: &EsiClient, kind: EntityKind, ids: &[i64
 
 /// The subset of `ids` we cannot name, or last named too long ago, minus the ones ESI
 /// recently said do not exist.
-pub async fn unresolved(pool: &PgPool, kind: EntityKind, ids: &HashSet<i64>) -> Vec<i64> {
+pub async fn unresolved<S: BuildHasher>(
+    pool: &PgPool,
+    kind: EntityKind,
+    ids: &HashSet<i64, S>,
+) -> Vec<i64> {
     unresolved_and_noted(pool, kind, ids).await.0
 }
 
 /// [`unresolved`], along with the ones among them noted as unresolvable long enough ago to
 /// be asked about again, which are the only ones a successful fetch has a note to clear for.
-async fn unresolved_and_noted(
+async fn unresolved_and_noted<S: BuildHasher>(
     pool: &PgPool,
     kind: EntityKind,
-    ids: &HashSet<i64>,
+    ids: &HashSet<i64, S>,
 ) -> (Vec<i64>, HashSet<i64>) {
     let ids: Vec<i64> = ids.iter().copied().collect();
     let notes = sqlx::query!(
@@ -229,13 +234,12 @@ pub async fn ensure_character_names(pool: &PgPool, esi: &EsiClient, ids: &[i64])
             // One id ESI does not know fails the whole call. Halving finds it in about ten
             // more calls, rather than costing the other 999 their names.
             Err(err) if is_not_found(&err) => {
-                match batch {
-                    [id] => note_unresolvable(pool, EntityKind::Character, *id).await,
-                    _ => {
-                        let (a, b) = batch.split_at(batch.len() / 2);
-                        batches.push(a);
-                        batches.push(b);
-                    }
+                if let [id] = batch {
+                    note_unresolvable(pool, EntityKind::Character, *id).await;
+                } else {
+                    let (a, b) = batch.split_at(batch.len() / 2);
+                    batches.push(a);
+                    batches.push(b);
                 }
                 continue;
             }
@@ -265,7 +269,10 @@ pub async fn ensure_character_names(pool: &PgPool, esi: &EsiClient, ids: &[i64])
         .execute(pool)
         .await;
         match written {
-            Ok(done) => outcome.named += done.rows_affected() as usize,
+            Ok(done) => {
+                outcome.named += usize::try_from(done.rows_affected())
+                    .expect("a batch's row count fits in usize");
+            }
             Err(err) => {
                 tracing::error!(
                     "entities: could not store {} character names: {err}",

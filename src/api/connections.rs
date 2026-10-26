@@ -218,7 +218,7 @@ pub async fn clean_stale_connections(
     Ok(Json(removed))
 }
 
-#[derive(Deserialize, utoipa::IntoParams)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ShipSearchQuery {
     /// Part of a ship type name.

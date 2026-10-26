@@ -41,7 +41,7 @@ pub async fn my_maps(
     ))
 }
 
-#[derive(Deserialize, ts_rs::TS, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, ts_rs::TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct CreateMapBody {
     pub name: String,

@@ -10,7 +10,7 @@ use crate::scan::PastedSignature;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum MassStatus {
+pub(crate) enum MassStatus {
     Stable,
     Reduced,
     Critical,
@@ -18,7 +18,7 @@ pub enum MassStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum TimeStatus {
+pub(crate) enum TimeStatus {
     Stable,
     Eol,
     Critical,
@@ -27,7 +27,7 @@ pub enum TimeStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum WormholeSize {
+pub(crate) enum WormholeSize {
     Xl,
     Large,
     Medium,
@@ -36,7 +36,7 @@ pub enum WormholeSize {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum ConnectionKind {
+pub(crate) enum ConnectionKind {
     Wormhole,
     Stargate,
     #[serde(other)]
@@ -44,7 +44,7 @@ pub enum ConnectionKind {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct MapEntry {
+pub(crate) struct MapEntry {
     pub id: i64,
     pub name: String,
     #[serde(default)]
@@ -52,7 +52,7 @@ pub struct MapEntry {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct MapNaming {
+pub(crate) struct MapNaming {
     /// `numeric` or `alphabetical`.
     #[serde(default)]
     pub alias_scheme: Option<String>,
@@ -63,7 +63,7 @@ pub struct MapNaming {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct MapInfo {
+pub(crate) struct MapInfo {
     pub name: String,
     pub naming: MapNaming,
 }
@@ -71,7 +71,7 @@ pub struct MapInfo {
 /// A placed system. Ghosts (holes nobody has flown yet) are kept apart as [`Ghost`]s:
 /// nothing can be jumped into one, but a jump can say which system it was.
 #[derive(Debug, Clone, Deserialize)]
-pub struct PlacedSystem {
+pub(crate) struct PlacedSystem {
     pub id: i64,
     pub solar_system_id: i64,
     pub name: String,
@@ -92,13 +92,13 @@ pub struct PlacedSystem {
 
 /// A wormhole a system always has.
 #[derive(Debug, Clone, Deserialize)]
-pub struct Static {
+pub(crate) struct Static {
     pub code: String,
 }
 
 /// A hole drawn on the map that nobody has been through, so its system is unknown.
 #[derive(Debug, Clone, Deserialize)]
-pub struct Ghost {
+pub(crate) struct Ghost {
     pub id: i64,
     pub alias: Option<String>,
     #[serde(default)]
@@ -108,7 +108,7 @@ pub struct Ghost {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct Connection {
+pub(crate) struct Connection {
     pub id: i64,
     pub from_system: i64,
     pub to_system: i64,
@@ -124,7 +124,11 @@ pub struct Connection {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-pub struct Signature {
+#[expect(
+    clippy::struct_field_names,
+    reason = "the server's JSON names these signature_id and signature_type_id"
+)]
+pub(crate) struct Signature {
     /// The row's key, which edits and deletes name.
     #[serde(default)]
     pub id: i64,
@@ -152,13 +156,13 @@ pub struct Signature {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct SignatureCategory {
+pub(crate) struct SignatureCategory {
     pub id: i64,
     pub name: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct SignatureType {
+pub(crate) struct SignatureType {
     pub id: i64,
     /// The wormhole code, `H296`; `None` for anything that is not a wormhole.
     pub signature: Option<String>,
@@ -178,14 +182,14 @@ pub struct SignatureType {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-pub struct SignatureCatalog {
+pub(crate) struct SignatureCatalog {
     pub categories: Vec<SignatureCategory>,
     pub types: Vec<SignatureType>,
 }
 
 /// Everything a bookmark needs from one map, fetched together after a jump.
 #[derive(Debug, Clone)]
-pub struct MapSnapshot {
+pub(crate) struct MapSnapshot {
     pub map: MapInfo,
     pub systems: Vec<PlacedSystem>,
     pub ghosts: Vec<Ghost>,
@@ -196,14 +200,14 @@ pub struct MapSnapshot {
 impl MapSnapshot {
     /// The placed system called `name`. The game writes names the way the SDE has them, but
     /// compare without case anyway.
-    pub fn system_named(&self, name: &str) -> Option<&PlacedSystem> {
+    pub(crate) fn system_named(&self, name: &str) -> Option<&PlacedSystem> {
         self.systems
             .iter()
             .find(|s| s.name.eq_ignore_ascii_case(name))
     }
 
     /// The wormhole between two placed systems, in either direction.
-    pub fn connection_between(&self, a: i64, b: i64) -> Option<&Connection> {
+    pub(crate) fn connection_between(&self, a: i64, b: i64) -> Option<&Connection> {
         self.connections.iter().find(|c| {
             c.kind == ConnectionKind::Wormhole
                 && ((c.from_system == a && c.to_system == b)
@@ -211,12 +215,12 @@ impl MapSnapshot {
         })
     }
 
-    pub fn connection(&self, id: i64) -> Option<&Connection> {
+    pub(crate) fn connection(&self, id: i64) -> Option<&Connection> {
         self.connections.iter().find(|c| c.id == id)
     }
 
     /// The signature a connection was found as, on whichever side.
-    pub fn signature_on(&self, connection_id: i64) -> Option<&Signature> {
+    pub(crate) fn signature_on(&self, connection_id: i64) -> Option<&Signature> {
         self.signatures
             .iter()
             .find(|s| s.connection_id == Some(connection_id))
@@ -225,7 +229,7 @@ impl MapSnapshot {
 
 /// What a hotkey changes on a connection. Fields left `None` stay as they are.
 #[derive(Debug, Clone, Default, Serialize)]
-pub struct StatusChange {
+pub(crate) struct StatusChange {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mass_status: Option<MassStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -234,7 +238,7 @@ pub struct StatusChange {
 
 /// A system looked up by name, for one the map does not have yet.
 #[derive(Debug, Clone, Deserialize)]
-pub struct SystemHit {
+pub(crate) struct SystemHit {
     pub id: i64,
     pub name: String,
     pub security: f64,
@@ -243,7 +247,7 @@ pub struct SystemHit {
 
 /// The per-user map settings the app follows.
 #[derive(Debug, Clone, Deserialize)]
-pub struct UserSettings {
+pub(crate) struct UserSettings {
     #[serde(default)]
     pub suggest_alias: bool,
     /// List a system's statics first when picking a wormhole's type.
@@ -253,7 +257,7 @@ pub struct UserSettings {
 
 /// One change to a signature, as the website's row makes it.
 #[derive(Debug, Clone)]
-pub enum SignatureEdit {
+pub(crate) enum SignatureEdit {
     Group(String),
     /// `None` for not known.
     Type(Option<i64>),
@@ -272,7 +276,7 @@ pub enum SignatureEdit {
 
 /// Record a jump: place the system, connect it and link the signature, as one undo.
 #[derive(Debug, Clone, Serialize)]
-pub struct TrackJump {
+pub(crate) struct TrackJump {
     pub map_id: i64,
     pub from_map_solar_system_id: i64,
     pub to_solar_system_id: i64,
@@ -292,7 +296,7 @@ pub struct TrackJump {
 
 /// Say which system a ghost turned out to be, with what the jump taught about the hole.
 #[derive(Debug, Clone, Serialize)]
-pub struct ResolveGhost {
+pub(crate) struct ResolveGhost {
     pub map_id: i64,
     pub map_solar_system_id: i64,
     pub solar_system_id: i64,
@@ -324,7 +328,7 @@ struct MapView {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct Me {
+pub(crate) struct Me {
     pub name: String,
 }
 
@@ -337,14 +341,14 @@ struct ApiErrorBody {
 }
 
 #[derive(Clone)]
-pub struct Client {
+pub(crate) struct Client {
     base: String,
     token: String,
     agent: ureq::Agent,
 }
 
 impl Client {
-    pub fn new(base: &str, token: &str) -> Client {
+    pub(crate) fn new(base: &str, token: &str) -> Client {
         let agent = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(15)))
             .http_status_as_error(false)
@@ -417,22 +421,22 @@ impl Client {
     }
 
     /// Who the token belongs to. `/api/me` answers `null` for nobody, which a token never is.
-    pub fn me(&self) -> Result<Me> {
+    pub(crate) fn me(&self) -> Result<Me> {
         self.get::<Option<Me>>("/api/me")?
             .ok_or_else(|| anyhow!("the server did not accept the token"))
     }
 
-    pub fn maps(&self) -> Result<Vec<MapEntry>> {
+    pub(crate) fn maps(&self) -> Result<Vec<MapEntry>> {
         let mut maps: Vec<MapEntry> = self.get("/api/maps")?;
         maps.retain(|m| !m.is_archived);
         Ok(maps)
     }
 
-    pub fn catalog(&self) -> Result<SignatureCatalog> {
+    pub(crate) fn catalog(&self) -> Result<SignatureCatalog> {
         self.get("/api/signature-types")
     }
 
-    pub fn snapshot(&self, map_id: i64) -> Result<MapSnapshot> {
+    pub(crate) fn snapshot(&self, map_id: i64) -> Result<MapSnapshot> {
         let view: MapView = self.get(&format!("/api/maps/{map_id}"))?;
         // Ghosts (holes nobody has been through) have no solar system to scan or jump to.
         let mut systems = Vec::new();
@@ -446,7 +450,7 @@ impl Client {
                 _ => Ok(()),
             };
             if let Err(err) = read {
-                eprintln!("map {map_id}: skipped system {id}: {err}");
+                crate::log(format_args!("map {map_id}: skipped system {id}: {err}"));
                 unreadable += 1;
             }
         }
@@ -468,7 +472,7 @@ impl Client {
 
     /// Upsert a scan into a system's signatures. Never deletes: what the scan no longer sees
     /// is left for [`Client::remove_signatures`].
-    pub fn paste(
+    pub(crate) fn paste(
         &self,
         map_id: i64,
         solar_system_id: i64,
@@ -487,7 +491,7 @@ impl Client {
 
     /// Delete signatures by row key, with the website's cascade: a hole left without a
     /// signature on that side goes, and so does a far system left with nothing.
-    pub fn remove_signatures(&self, map_id: i64, keys: &[i64]) -> Result<()> {
+    pub(crate) fn remove_signatures(&self, map_id: i64, keys: &[i64]) -> Result<()> {
         self.post::<serde_json::Value>(
             &format!("/api/maps/{map_id}/signatures/remove-bulk"),
             &serde_json::json!({ "map_id": map_id, "signature_pks": keys }),
@@ -495,13 +499,13 @@ impl Client {
         Ok(())
     }
 
-    pub fn grid(&self) -> Result<crate::jump::Grid> {
+    pub(crate) fn grid(&self) -> Result<crate::jump::Grid> {
         self.get("/api/grid-config")
     }
 
     /// Which systems each system has a stargate to. A jump along one is travel, never a
     /// new hole.
-    pub fn stargates(&self) -> Result<std::collections::HashMap<i64, Vec<i64>>> {
+    pub(crate) fn stargates(&self) -> Result<std::collections::HashMap<i64, Vec<i64>>> {
         let graph: RoutingGraph = self.get("/api/routing-graph")?;
         Ok(graph
             .adjacency
@@ -510,18 +514,18 @@ impl Client {
             .collect())
     }
 
-    pub fn user_settings(&self, map_id: i64) -> Result<UserSettings> {
+    pub(crate) fn user_settings(&self, map_id: i64) -> Result<UserSettings> {
         self.get(&format!("/api/maps/{map_id}/settings/user"))
     }
 
     /// The systems the map keeps off: a jump into one is flown, not mapped.
-    pub fn ignored(&self, map_id: i64) -> Result<Vec<i64>> {
+    pub(crate) fn ignored(&self, map_id: i64) -> Result<Vec<i64>> {
         let list: Vec<IgnoredSystem> = self.get(&format!("/api/maps/{map_id}/ignored"))?;
         Ok(list.into_iter().map(|i| i.solar_system_id).collect())
     }
 
     /// The system called exactly `name`, ignoring case.
-    pub fn find_system(&self, name: &str) -> Result<Option<SystemHit>> {
+    pub(crate) fn find_system(&self, name: &str) -> Result<Option<SystemHit>> {
         let hits: Vec<SystemHit> = self
             .agent
             .get(&self.url("/api/systems/search"))
@@ -533,7 +537,7 @@ impl Client {
         Ok(hits.into_iter().find(|h| h.name.eq_ignore_ascii_case(name)))
     }
 
-    pub fn track_jump(&self, cmd: &TrackJump) -> Result<()> {
+    pub(crate) fn track_jump(&self, cmd: &TrackJump) -> Result<()> {
         self.post::<serde_json::Value>(
             &format!("/api/maps/{}/track-jump", cmd.map_id),
             &serde_json::to_value(cmd)?,
@@ -541,7 +545,7 @@ impl Client {
         Ok(())
     }
 
-    pub fn resolve_ghost(&self, cmd: &ResolveGhost) -> Result<()> {
+    pub(crate) fn resolve_ghost(&self, cmd: &ResolveGhost) -> Result<()> {
         self.post::<serde_json::Value>(
             &format!("/api/maps/{}/systems/resolve-ghost", cmd.map_id),
             &serde_json::to_value(cmd)?,
@@ -550,7 +554,12 @@ impl Client {
     }
 
     /// Set a placement's alias; blank clears it.
-    pub fn set_alias(&self, map_id: i64, map_solar_system_id: i64, alias: &str) -> Result<()> {
+    pub(crate) fn set_alias(
+        &self,
+        map_id: i64,
+        map_solar_system_id: i64,
+        alias: &str,
+    ) -> Result<()> {
         let alias = alias.trim();
         self.post::<serde_json::Value>(
             &format!("/api/maps/{map_id}/systems/set-alias"),
@@ -563,7 +572,7 @@ impl Client {
         Ok(())
     }
 
-    pub fn edit_signature(&self, map_id: i64, key: i64, edit: &SignatureEdit) -> Result<()> {
+    pub(crate) fn edit_signature(&self, map_id: i64, key: i64, edit: &SignatureEdit) -> Result<()> {
         let mut body = serde_json::json!({ "map_id": map_id, "signature_pk": key });
         let path = match edit {
             SignatureEdit::Group(group) => {
@@ -603,7 +612,12 @@ impl Client {
         Ok(())
     }
 
-    pub fn set_status(&self, map_id: i64, connection_id: i64, change: &StatusChange) -> Result<()> {
+    pub(crate) fn set_status(
+        &self,
+        map_id: i64,
+        connection_id: i64,
+        change: &StatusChange,
+    ) -> Result<()> {
         let mut body = serde_json::to_value(change)?;
         body["map_id"] = map_id.into();
         body["connection_id"] = connection_id.into();

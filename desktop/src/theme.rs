@@ -7,13 +7,13 @@ use std::rc::Rc;
 
 use anyhow::Result;
 use gpui_kit::component::{Theme, ThemeConfig, ThemeMode, ThemeSet};
-use gpui_kit::*;
+use gpui_kit::{App, AssetSource, Hsla, Rgba, SharedString, Window, WindowAppearance, px, rgb};
 use serde::{Deserialize, Serialize};
 
 /// The face for everything, EVE's condensed look.
-pub const UI: &str = "Saira SemiCondensed";
+pub(crate) const UI: &str = "Saira SemiCondensed";
 /// Headings use the same face, heavier.
-pub const HEADING: &str = UI;
+pub(crate) const HEADING: &str = UI;
 
 const THEMES: &str = include_str!("../assets/theme.json");
 
@@ -28,7 +28,7 @@ const FONTS: [&[u8]; 7] = [
 ];
 
 /// The kit's Lucide icons, plus the WormholeSystems mark at `logo.svg`.
-pub struct Assets;
+pub(crate) struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
@@ -45,7 +45,7 @@ impl AssetSource for Assets {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Appearance {
+pub(crate) enum Appearance {
     #[default]
     System,
     Light,
@@ -53,7 +53,7 @@ pub enum Appearance {
 }
 
 impl Appearance {
-    pub fn next(self) -> Appearance {
+    pub(crate) fn next(self) -> Appearance {
         match self {
             Appearance::System => Appearance::Dark,
             Appearance::Dark => Appearance::Light,
@@ -61,7 +61,7 @@ impl Appearance {
         }
     }
 
-    pub fn icon(self) -> &'static str {
+    pub(crate) fn icon(self) -> &'static str {
         match self {
             Appearance::System => "icons/monitor.svg",
             Appearance::Light => "icons/sun.svg",
@@ -69,7 +69,7 @@ impl Appearance {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Appearance::System => "System",
             Appearance::Light => "Light",
@@ -79,12 +79,12 @@ impl Appearance {
 }
 
 /// Load the fonts and both themes. Once, before the first window.
-pub fn init(cx: &mut App) {
+pub(crate) fn init(cx: &mut App) {
     if let Err(err) = cx
         .text_system()
         .add_fonts(FONTS.iter().map(|f| Cow::Borrowed(*f)).collect())
     {
-        eprintln!("could not load the fonts: {err}");
+        crate::log(format_args!("could not load the fonts: {err}"));
     }
     let set: ThemeSet = serde_json::from_str(THEMES).expect("assets/theme.json is valid");
     let theme = Theme::global_mut(cx);
@@ -95,7 +95,7 @@ pub fn init(cx: &mut App) {
 }
 
 /// Switch to `appearance`, resolving System against the window's.
-pub fn apply(appearance: Appearance, window: &mut Window, cx: &mut App) {
+pub(crate) fn apply(appearance: Appearance, window: &mut Window, cx: &mut App) {
     let dark = match appearance {
         Appearance::Dark => true,
         Appearance::Light => false,
@@ -112,13 +112,13 @@ pub fn apply(appearance: Appearance, window: &mut Window, cx: &mut App) {
     let config: Rc<ThemeConfig> = {
         let theme = Theme::global(cx);
         if dark {
-            theme.dark_theme.clone()
+            Rc::clone(&theme.dark_theme)
         } else {
-            theme.light_theme.clone()
+            Rc::clone(&theme.light_theme)
         }
     };
     #[cfg(windows)]
-    crate::native::set_window_icon(window, dark);
+    crate::native::set_window_icon(window, mode);
     // A theme brings its own font size; keep the one set in Settings.
     let font_size = Theme::global(cx).font_size;
     Theme::change(mode, Some(window), cx);
@@ -128,20 +128,24 @@ pub fn apply(appearance: Appearance, window: &mut Window, cx: &mut App) {
 }
 
 /// The main window's text at `percent` of the base size. The overlay has its own.
-pub fn set_text_size(percent: u8, cx: &mut App) {
+pub(crate) fn set_text_size(percent: u8, cx: &mut App) {
     Theme::global_mut(cx).font_size = px(crate::ui::scaled_font(percent));
     cx.refresh_windows();
 }
 
 /// `#rrggbb` as a color.
-pub fn hex(value: u32) -> Hsla {
+pub(crate) fn hex(value: u32) -> Hsla {
     rgb(value).into()
 }
 
 /// A CSS `oklch(l c h)` color, `l` from 0 to 1. The website's tokens are written this way,
 /// so they are copied as they are rather than as approximations.
-pub fn oklch(l: f32, c: f32, h: f32) -> Hsla {
-    let (a, b) = (c * h.to_radians().cos(), c * h.to_radians().sin());
+pub(crate) fn oklch(lightness: f32, chroma: f32, hue: f32) -> Hsla {
+    let l = lightness;
+    let (a, b) = (
+        chroma * hue.to_radians().cos(),
+        chroma * hue.to_radians().sin(),
+    );
     let l_ = (l + 0.396_337_78 * a + 0.215_803_76 * b).powi(3);
     let m_ = (l - 0.105_561_346 * a - 0.063_854_17 * b).powi(3);
     let s_ = (l - 0.089_484_18 * a - 1.291_485_5 * b).powi(3);
@@ -150,7 +154,7 @@ pub fn oklch(l: f32, c: f32, h: f32) -> Hsla {
         -1.268_438 * l_ + 2.609_757_4 * m_ - 0.341_319_38 * s_,
         -0.004_196_086_3 * l_ - 0.703_418_6 * m_ + 1.707_614_7 * s_,
     ];
-    let [r, g, b] = linear.map(|v| {
+    let [red, green, blue] = linear.map(|v| {
         let v = v.clamp(0.0, 1.0);
         if v <= 0.003_130_8 {
             12.92 * v
@@ -158,22 +162,31 @@ pub fn oklch(l: f32, c: f32, h: f32) -> Hsla {
             1.055 * v.powf(1.0 / 2.4) - 0.055
         }
     });
-    Rgba { r, g, b, a: 1.0 }.into()
+    Rgba {
+        r: red,
+        g: green,
+        b: blue,
+        a: 1.0,
+    }
+    .into()
 }
 
-pub fn critical() -> Hsla {
+pub(crate) fn critical() -> Hsla {
     hex(0xef4444)
 }
-pub fn reduced() -> Hsla {
+pub(crate) fn reduced() -> Hsla {
     hex(0xf97316)
 }
-pub fn eol() -> Hsla {
+pub(crate) fn eol() -> Hsla {
     hex(0xa855f7)
 }
 
 /// A class's short label and color, from `frontend/src/lib/map/classes.ts`: `C5`, `H`, `L`,
 /// `N`, `P`, and `?` for a ghost.
-pub fn class_meta(wormhole_class_id: Option<i64>, security: Option<f64>) -> (&'static str, Hsla) {
+pub(crate) fn class_meta(
+    wormhole_class_id: Option<i64>,
+    security: Option<f64>,
+) -> (&'static str, Hsla) {
     if wormhole_class_id.is_none() && security.is_none() {
         return ("?", unknown_class());
     }
@@ -187,7 +200,7 @@ fn unknown_class() -> Hsla {
 }
 
 /// The same for a static's destination class.
-pub fn dest_class_meta(class: Option<i64>) -> (&'static str, Hsla) {
+pub(crate) fn dest_class_meta(class: Option<i64>) -> (&'static str, Hsla) {
     let drifter = || oklch(0.712, 0.194, 13.428);
     match class {
         Some(1) => ("C1", oklch(0.865, 0.127, 207.078)),
@@ -218,7 +231,7 @@ pub fn dest_class_meta(class: Option<i64>) -> (&'static str, Hsla) {
 
 /// A signature group's short label and color, from `CATEGORIES` in
 /// `frontend/src/lib/map/signatures.ts`.
-pub fn group_meta(group: &str) -> (&'static str, Option<Hsla>) {
+pub(crate) fn group_meta(group: &str) -> (&'static str, Option<Hsla>) {
     match group {
         "wormhole" => ("WH", Some(oklch(0.746, 0.16, 232.661))),
         "data" => ("Data", Some(oklch(0.789, 0.154, 211.53))),
@@ -233,7 +246,7 @@ pub fn group_meta(group: &str) -> (&'static str, Option<Hsla>) {
 }
 
 /// The website's icon for a signature category.
-pub fn group_icon(group: &str) -> &'static str {
+pub(crate) fn group_icon(group: &str) -> &'static str {
     match group {
         "wormhole" => "icons/fan.svg",
         "data" => "icons/database.svg",
@@ -248,13 +261,13 @@ pub fn group_icon(group: &str) -> &'static str {
 }
 
 /// A neutral dot for a healthy state.
-pub fn healthy() -> Hsla {
+pub(crate) fn healthy() -> Hsla {
     oklch(0.556, 0.007, 260.0)
 }
 
 /// The categories a signature can be put in, in the website's order: group, category id
 /// in the catalog, and the name its picker shows.
-pub const CATEGORIES: [(&str, i64, &str); 8] = [
+pub(crate) const CATEGORIES: [(&str, i64, &str); 8] = [
     ("wormhole", 1, "Wormhole"),
     ("data", 2, "Data Site"),
     ("relic", 3, "Relic Site"),
@@ -267,25 +280,24 @@ pub const CATEGORIES: [(&str, i64, &str); 8] = [
 
 /// Where a destination class sorts in a type picker: k-space, then Pochven, then the
 /// wormhole classes, like the website.
-pub fn dest_sort_weight(class: Option<i64>) -> i64 {
+pub(crate) fn dest_sort_weight(class: Option<i64>) -> i64 {
     match class {
         Some(7) => 0,
         Some(8) => 1,
         Some(9) => 2,
         Some(25) => 3,
-        Some(c @ 1..=6) => 10 + c,
-        Some(c @ 12..=23) => 10 + c,
+        Some(c @ (1..=6 | 12..=23)) => 10 + c,
         _ => 99,
     }
 }
 
 /// What a paste did to a row: added, refreshed, or no longer seen.
-pub fn added() -> Hsla {
+pub(crate) fn added() -> Hsla {
     oklch(0.723, 0.219, 149.579)
 }
-pub fn refreshed() -> Hsla {
+pub(crate) fn refreshed() -> Hsla {
     oklch(0.769, 0.188, 70.08)
 }
-pub fn missing() -> Hsla {
+pub(crate) fn missing() -> Hsla {
     oklch(0.637, 0.237, 25.331)
 }

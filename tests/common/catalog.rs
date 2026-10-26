@@ -4,17 +4,17 @@
 use sqlx::PgPool;
 
 /// The unidentified far side of a hole. It carries no jump mass of its own.
-pub const K162: i64 = 500;
+pub(crate) const K162: i64 = 500;
 /// A hole into C3 that admits 300,000,000 kg per jump, so a medium.
-pub const C247: i64 = 510;
+pub(crate) const C247: i64 = 510;
 /// A data site.
-pub const RELAY: i64 = 600;
+pub(crate) const RELAY: i64 = 600;
 /// The hub EVE-Scout reports holes from.
-pub const THERA: i64 = 31000005;
+pub(crate) const THERA: i64 = 31000005;
 
 /// The signature catalog: category 1 is Wormhole with [`K162`] and [`C247`], category 2 is
 /// Data with [`RELAY`], and the wormhole types behind the two holes.
-pub async fn seed_catalog(pool: &PgPool) {
+pub(crate) async fn seed_catalog(pool: &PgPool) {
     for statement in [
         "insert into signature_categories (id, name, code)
          values (1, 'Wormhole', 'wormhole'), (2, 'Data Site', 'data')",
@@ -29,12 +29,15 @@ pub async fn seed_catalog(pool: &PgPool) {
                 (510, 'C247', 'C247 - C3', 1, 3),
                 (600, null, 'Unsecured Frontier Enclave Relay', 2, null)",
     ] {
-        sqlx::query(statement).execute(pool).await.unwrap();
+        sqlx::query(statement)
+            .execute(pool)
+            .await
+            .expect("run catalog statement");
     }
 }
 
 /// [`THERA`], in the seeded constellation.
-pub async fn seed_thera(pool: &PgPool) {
+pub(crate) async fn seed_thera(pool: &PgPool) {
     sqlx::query(
         "insert into solar_systems (id, constellation_id, region_id, name, security_status)
          values ($1, 20000001, 10000001, 'Thera', -0.99)",
@@ -42,12 +45,12 @@ pub async fn seed_thera(pool: &PgPool) {
     .bind(THERA)
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert solar_systems");
 }
 
 /// A J-space system of the given class in the seeded constellation, with the class on both
 /// the system and its wormhole row, whichever a reader goes by.
-pub async fn seed_wormhole_system(pool: &PgPool, id: i64, class: i32) {
+pub(crate) async fn seed_wormhole_system(pool: &PgPool, id: i64, class: i32) {
     sqlx::query(
         "insert into solar_systems
              (id, constellation_id, region_id, name, security_status, wormhole_class_id)
@@ -58,7 +61,7 @@ pub async fn seed_wormhole_system(pool: &PgPool, id: i64, class: i32) {
     .bind(class)
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert solar_systems");
     sqlx::query(
         "insert into wormhole_systems (solar_system_id, wormhole_class_id) values ($1, $2)",
     )
@@ -66,5 +69,5 @@ pub async fn seed_wormhole_system(pool: &PgPool, id: i64, class: i32) {
     .bind(class)
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert wormhole_systems");
 }

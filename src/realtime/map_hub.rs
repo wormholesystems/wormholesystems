@@ -86,7 +86,7 @@ impl MapEvent {
 }
 
 /// The in-process event bus. Cheaply cloneable (an `Arc` inside): hold one in app state.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MapHub {
     channels: Arc<Mutex<HashMap<i64, broadcast::Sender<MapEvent>>>>,
     /// Every event on every map, for background work that cannot know which maps to watch.
@@ -152,6 +152,7 @@ impl MapHub {
 /// One viewer's receiver for a map's events. Reads like the `broadcast::Receiver` it wraps;
 /// dropping the last one for a map removes the map's channel, so a map nobody is watching
 /// costs nothing, however many ids have been asked for.
+#[derive(Debug)]
 pub struct Subscription {
     rx: broadcast::Receiver<MapEvent>,
     map_id: i64,

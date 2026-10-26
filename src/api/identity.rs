@@ -168,7 +168,7 @@ pub async fn my_characters(
     Ok(Json(characters::list(&state.db, actor).await?))
 }
 
-#[derive(Deserialize, ts_rs::TS, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, ts_rs::TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct CharacterIdBody {
     pub character_id: i64,
@@ -243,7 +243,7 @@ pub async fn remove_character(
     Ok(Json(()))
 }
 
-#[derive(Deserialize, ts_rs::TS, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, ts_rs::TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct SetWaypointBody {
     pub character_id: i64,
@@ -256,7 +256,7 @@ pub struct SetWaypointBody {
     pub clear_other_waypoints: Option<bool>,
 }
 
-#[derive(Deserialize, ts_rs::TS, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, ts_rs::TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct SetWaypointAllBody {
     pub destination_id: i64,

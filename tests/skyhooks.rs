@@ -16,14 +16,14 @@ async fn seed_planet(pool: &PgPool, id: i64, system: i64, index: i32, type_name:
     )
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert categories");
     sqlx::query(
         "insert into groups (id, category_id, name, published) values (7, 7, 'Planet', true)
          on conflict do nothing",
     )
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert groups");
     let type_id = 2000 + i64::from(index) + system % 7;
     sqlx::query(
         "insert into types (id, group_id, name, published) values ($1, 7, $2, true)
@@ -33,7 +33,7 @@ async fn seed_planet(pool: &PgPool, id: i64, system: i64, index: i32, type_name:
     .bind(type_name)
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert types");
     sqlx::query(
         "insert into planets (id, solar_system_id, type_id, celestial_index) values ($1,$2,$3,$4)",
     )
@@ -43,7 +43,7 @@ async fn seed_planet(pool: &PgPool, id: i64, system: i64, index: i32, type_name:
     .bind(index)
     .execute(pool)
     .await
-    .unwrap();
+    .expect("insert planets");
 }
 
 /// A skyhook whose window runs from `starts_in` for two hours, as ESI reports them.

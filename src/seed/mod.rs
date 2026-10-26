@@ -6,6 +6,7 @@
 //! satisfied by insert order.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 
 use serde::Deserialize;
 use sqlx::{PgPool, Postgres, QueryBuilder};
@@ -134,6 +135,28 @@ async fn seed_all(pool: &PgPool) -> Result<(), BoxError> {
 
     let mut tx = pool.begin().await?;
 
+    seed_inventory(&mut tx, &categories, &groups, &market_groups, &types).await?;
+    seed_npcs(&mut tx, &factions, &corporations).await?;
+    seed_universe(&mut tx, &regions, &constellations, &solar_systems).await?;
+
+    seed_entities(&mut tx, &corporations).await?;
+    seed_static(&mut tx, &solar_systems).await?;
+
+    fill_wormhole_classes(&mut tx).await?;
+    let build = record_build(&mut tx).await?;
+
+    tx.commit().await?;
+    tracing::info!("seeding complete (SDE build {}).", build.build_number);
+    Ok(())
+}
+
+async fn seed_inventory(
+    tx: &mut sqlx::PgConnection,
+    categories: &[inventory::Category],
+    groups: &[inventory::Group],
+    market_groups: &[inventory::MarketGroup],
+    types: &[inventory::Type],
+) -> Result<(), BoxError> {
     let n = bulk!(
         tx,
         "categories (id, name, published)",
@@ -193,7 +216,14 @@ async fn seed_all(pool: &PgPool) -> Result<(), BoxError> {
         }
     );
     tracing::info!("types: {n}");
+    Ok(())
+}
 
+async fn seed_npcs(
+    tx: &mut sqlx::PgConnection,
+    factions: &[npc::Faction],
+    corporations: &[npc::NpcCorporation],
+) -> Result<(), BoxError> {
     // factions <-> corporations form a deferred cycle; both go in this transaction.
     let n = bulk!(
         tx,
@@ -227,7 +257,15 @@ async fn seed_all(pool: &PgPool) -> Result<(), BoxError> {
         }
     );
     tracing::info!("corporations: {n}");
+    Ok(())
+}
 
+async fn seed_universe(
+    tx: &mut sqlx::PgConnection,
+    regions: &[universe::Region],
+    constellations: &[universe::Constellation],
+    solar_systems: &[universe::SolarSystem],
+) -> Result<(), BoxError> {
     let n = bulk!(
         tx,
         "regions (id, name, faction_id, wormhole_class_id)",
@@ -279,10 +317,10 @@ async fn seed_all(pool: &PgPool) -> Result<(), BoxError> {
         }
     );
     tracing::info!("solar_systems: {n}");
+    Ok(())
+}
 
-    seed_entities(&mut tx, &corporations).await?;
-    seed_static(&mut tx, &solar_systems).await?;
-
+async fn fill_wormhole_classes(tx: &mut sqlx::PgConnection) -> Result<(), BoxError> {
     // Effective wormhole class (see docs/database/universe.md): the SDE only sets a
     // per-system class for a handful of systems, so fall back to the wormhole-system
     // catalogue (all of J-space, Thera, C13), then to the region (Pochven, drifter
@@ -323,9 +361,12 @@ async fn seed_all(pool: &PgPool) -> Result<(), BoxError> {
         .execute(&mut *tx)
         .await?;
     }
+    Ok(())
+}
 
-    // Record the loaded build + seed revision so startup can skip re-seeding when
-    // nothing changed.
+/// Record the loaded build + seed revision so startup can skip re-seeding when nothing
+/// changed.
+async fn record_build(tx: &mut sqlx::PgConnection) -> Result<SdeBuild, BoxError> {
     let build = bundled_build()?;
     sqlx::query!(
         "insert into sde_build (id, build_number, release_date, seed_revision, loaded_at) \
@@ -339,10 +380,7 @@ async fn seed_all(pool: &PgPool) -> Result<(), BoxError> {
     )
     .execute(&mut *tx)
     .await?;
-
-    tx.commit().await?;
-    tracing::info!("seeding complete (SDE build {}).", build.build_number);
-    Ok(())
+    Ok(build)
 }
 
 // ---- larger SDE entities: dogma catalogue + celestial topology ----
@@ -354,6 +392,14 @@ async fn seed_entities(
     tx: &mut sqlx::PgConnection,
     corporations: &[npc::NpcCorporation],
 ) -> Result<(), BoxError> {
+    seed_dogma(tx).await?;
+    seed_celestials(tx).await?;
+    seed_stations(tx, corporations).await?;
+    seed_station_services(tx).await?;
+    Ok(())
+}
+
+async fn seed_dogma(tx: &mut sqlx::PgConnection) -> Result<(), BoxError> {
     {
         let units = crate::sde::load_all::<dogma::DogmaUnit>()?;
         let n = bulk!(
@@ -401,6 +447,10 @@ async fn seed_entities(
         );
         tracing::info!("type_attributes: {n}");
     }
+    Ok(())
+}
+
+async fn seed_celestials(tx: &mut sqlx::PgConnection) -> Result<(), BoxError> {
     {
         let stargates = crate::sde::load_all::<universe::Stargate>()?;
         let n = bulk!(
@@ -469,131 +519,138 @@ async fn seed_entities(
         );
         tracing::info!("asteroid_belts: {n}");
     }
-    {
-        // Station owners are NPC corps; null any owner we didn't seed so the
-        // (deferred) corporations FK still validates at commit. The SDE carries no
-        // station names, so they are synthesized the way the game builds them:
-        // "{System} {Planet} - Moon {N} - {Corp} {Operation}".
-        let corp_ids: HashSet<i64> = corporations.iter().map(|c| c.id).collect();
-        let corp_names: HashMap<i64, String> = corporations
-            .iter()
-            .filter_map(|c| Some((c.id, c.name.en.clone()?)))
-            .collect();
-        let operations = crate::sde::load_all::<npc::StationOperation>()?;
-        let op_names: HashMap<i64, String> = operations
-            .iter()
-            .filter_map(|o| Some((o.id, o.operation_name.en.clone()?)))
-            .collect();
-        let system_names: HashMap<i64, String> = sqlx::query!("select id, name from solar_systems")
-            .fetch_all(&mut *tx)
-            .await?
-            .into_iter()
-            .map(|r| (r.id, r.name))
-            .collect();
+    Ok(())
+}
 
-        fn roman(n: i32) -> String {
-            const NUMERALS: [(i32, &str); 13] = [
-                (1000, "M"),
-                (900, "CM"),
-                (500, "D"),
-                (400, "CD"),
-                (100, "C"),
-                (90, "XC"),
-                (50, "L"),
-                (40, "XL"),
-                (10, "X"),
-                (9, "IX"),
-                (5, "V"),
-                (4, "IV"),
-                (1, "I"),
-            ];
-            let mut n = n;
-            let mut out = String::new();
-            for (value, numeral) in NUMERALS {
-                while n >= value {
-                    out.push_str(numeral);
-                    n -= value;
-                }
+async fn seed_stations(
+    tx: &mut sqlx::PgConnection,
+    corporations: &[npc::NpcCorporation],
+) -> Result<(), BoxError> {
+    // Station owners are NPC corps; null any owner we didn't seed so the
+    // (deferred) corporations FK still validates at commit. The SDE carries no
+    // station names, so they are synthesized the way the game builds them:
+    // "{System} {Planet} - Moon {N} - {Corp} {Operation}".
+    let corp_ids: HashSet<i64> = corporations.iter().map(|c| c.id).collect();
+    let corp_names: HashMap<i64, String> = corporations
+        .iter()
+        .filter_map(|c| Some((c.id, c.name.en.clone()?)))
+        .collect();
+    let operations = crate::sde::load_all::<npc::StationOperation>()?;
+    let op_names: HashMap<i64, String> = operations
+        .iter()
+        .filter_map(|o| Some((o.id, o.operation_name.en.clone()?)))
+        .collect();
+    let system_names: HashMap<i64, String> = sqlx::query!("select id, name from solar_systems")
+        .fetch_all(&mut *tx)
+        .await?
+        .into_iter()
+        .map(|r| (r.id, r.name))
+        .collect();
+
+    let stations = crate::sde::load_all::<npc::NpcStation>()?;
+    let n = bulk!(
+        tx,
+        "stations (id, solar_system_id, type_id, owner_corporation_id, operation_id, name)",
+        "on conflict (id) do update set solar_system_id = excluded.solar_system_id, type_id = excluded.type_id, owner_corporation_id = excluded.owner_corporation_id, operation_id = excluded.operation_id, name = excluded.name",
+        &stations,
+        |b, s| {
+            let owner = Some(s.owner_id).filter(|id| corp_ids.contains(id));
+            let mut name = system_names
+                .get(&{ s.solar_system_id })
+                .cloned()
+                .unwrap_or_default();
+            if let Some(planet) = s.celestial_index.filter(|p| *p > 0) {
+                name.push(' ');
+                name.push_str(&roman(planet));
             }
-            out
+            if let Some(moon) = s.orbit_index.filter(|m| *m > 0) {
+                let _ = write!(name, " - Moon {moon}");
+            }
+            if let Some(corp) = corp_names.get(&{ s.owner_id }) {
+                name.push_str(" - ");
+                name.push_str(corp);
+            }
+            if s.use_operation_name
+                && let Some(op) = op_names.get(&{ s.operation_id })
+            {
+                name.push(' ');
+                name.push_str(op);
+            }
+            b.push_bind(s.id)
+                .push_bind(s.solar_system_id)
+                .push_bind(s.type_id)
+                .push_bind(owner)
+                .push_bind(s.operation_id)
+                .push_bind(Some(name))
         }
+    );
+    tracing::info!("stations: {n}");
+    Ok(())
+}
 
-        let stations = crate::sde::load_all::<npc::NpcStation>()?;
-        let n = bulk!(
-            tx,
-            "stations (id, solar_system_id, type_id, owner_corporation_id, operation_id, name)",
-            "on conflict (id) do update set solar_system_id = excluded.solar_system_id, type_id = excluded.type_id, owner_corporation_id = excluded.owner_corporation_id, operation_id = excluded.operation_id, name = excluded.name",
-            &stations,
-            |b, s| {
-                let owner = Some(s.owner_id).filter(|id| corp_ids.contains(id));
-                let mut name = system_names
-                    .get(&{ s.solar_system_id })
-                    .cloned()
-                    .unwrap_or_default();
-                if let Some(planet) = s.celestial_index.filter(|p| *p > 0) {
-                    name.push(' ');
-                    name.push_str(&roman(planet));
-                }
-                if let Some(moon) = s.orbit_index.filter(|m| *m > 0) {
-                    name.push_str(&format!(" - Moon {moon}"));
-                }
-                if let Some(corp) = corp_names.get(&{ s.owner_id }) {
-                    name.push_str(" - ");
-                    name.push_str(corp);
-                }
-                if s.use_operation_name
-                    && let Some(op) = op_names.get(&{ s.operation_id })
-                {
-                    name.push(' ');
-                    name.push_str(op);
-                }
-                b.push_bind(s.id)
-                    .push_bind(s.solar_system_id)
-                    .push_bind(s.type_id)
-                    .push_bind(owner)
-                    .push_bind(s.operation_id)
-                    .push_bind(Some(name))
-            }
-        );
-        tracing::info!("stations: {n}");
+fn roman(n: i32) -> String {
+    const NUMERALS: [(i32, &str); 13] = [
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
+    ];
+    let mut n = n;
+    let mut out = String::new();
+    for (value, numeral) in NUMERALS {
+        while n >= value {
+            out.push_str(numeral);
+            n -= value;
+        }
     }
-    {
-        // Station services and the per-operation service sets, for the navigation
-        // Find ("nearest repair / cloning / ..." lookups).
-        let services = crate::sde::load_all::<npc::StationService>()?;
-        let n = bulk!(
-            tx,
-            "station_services (id, name)",
-            "on conflict (id) do update set name = excluded.name",
-            &services,
-            |b, s| {
-                b.push_bind(s.id)
-                    .push_bind(s.service_name.en.clone().unwrap_or_default())
-            }
-        );
-        tracing::info!("station_services: {n}");
+    out
+}
 
-        let operations = crate::sde::load_all::<npc::StationOperation>()?;
-        let service_ids: HashSet<i64> = services.iter().map(|s| s.id).collect();
-        let pairs: Vec<(i64, i64)> = operations
-            .iter()
-            .flat_map(|op| {
-                op.services
-                    .iter()
-                    .map(|svc| (op.id, *svc as i64))
-                    .filter(|(_, svc)| service_ids.contains(svc))
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        let n = bulk!(
-            tx,
-            "station_operation_services (operation_id, service_id)",
-            "on conflict (operation_id, service_id) do nothing",
-            &pairs,
-            |b, (op, svc)| { b.push_bind(op).push_bind(svc) }
-        );
-        tracing::info!("station_operation_services: {n}");
-    }
+async fn seed_station_services(tx: &mut sqlx::PgConnection) -> Result<(), BoxError> {
+    // Station services and the per-operation service sets, for the navigation
+    // Find ("nearest repair / cloning / ..." lookups).
+    let services = crate::sde::load_all::<npc::StationService>()?;
+    let n = bulk!(
+        tx,
+        "station_services (id, name)",
+        "on conflict (id) do update set name = excluded.name",
+        &services,
+        |b, s| {
+            b.push_bind(s.id)
+                .push_bind(s.service_name.en.clone().unwrap_or_default())
+        }
+    );
+    tracing::info!("station_services: {n}");
+
+    let operations = crate::sde::load_all::<npc::StationOperation>()?;
+    let service_ids: HashSet<i64> = services.iter().map(|s| s.id).collect();
+    let pairs: Vec<(i64, i64)> = operations
+        .iter()
+        .flat_map(|op| {
+            op.services
+                .iter()
+                .map(|svc| (op.id, i64::from(*svc)))
+                .filter(|(_, svc)| service_ids.contains(svc))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let n = bulk!(
+        tx,
+        "station_operation_services (operation_id, service_id)",
+        "on conflict (operation_id, service_id) do nothing",
+        &pairs,
+        |b, (op, svc)| { b.push_bind(op).push_bind(svc) }
+    );
+    tracing::info!("station_operation_services: {n}");
     Ok(())
 }
 
@@ -668,6 +725,15 @@ async fn seed_static(
     tx: &mut sqlx::PgConnection,
     solar_systems: &[universe::SolarSystem],
 ) -> Result<(), BoxError> {
+    seed_wormhole_effects(tx).await?;
+    seed_wormhole_types(tx).await?;
+    seed_wormhole_systems(tx).await?;
+    seed_signatures(tx).await?;
+    seed_jove_observatories(tx, solar_systems).await?;
+    Ok(())
+}
+
+async fn seed_wormhole_effects(tx: &mut sqlx::PgConnection) -> Result<(), BoxError> {
     // wormhole effects + modifiers
     let effects: HashMap<String, HashMap<String, HashMap<String, Vec<String>>>> =
         read_json("data/static/wormhole_effects.json")?;
@@ -686,7 +752,7 @@ async fn seed_static(
                         effect.clone(),
                         kind,
                         stat.clone(),
-                        (i + 1) as i32,
+                        i32::try_from(i + 1)?,
                         value.clone(),
                     ));
                 }
@@ -710,7 +776,10 @@ async fn seed_static(
         }
     );
     tracing::info!("wormhole_effect_modifiers: {n}");
+    Ok(())
+}
 
+async fn seed_wormhole_types(tx: &mut sqlx::PgConnection) -> Result<(), BoxError> {
     // wormhole types + sources
     let wh: WormholesFile = read_json("data/static/wormholes.json")?;
     let wh_types: Vec<(String, WhType)> = wh.wormholes.into_iter().collect();
@@ -746,7 +815,10 @@ async fn seed_static(
         |b, s| { b.push_bind(&s.0).push_bind(s.1) }
     );
     tracing::info!("wormhole_type_sources: {n}");
+    Ok(())
+}
 
+async fn seed_wormhole_systems(tx: &mut sqlx::PgConnection) -> Result<(), BoxError> {
     // wormhole systems + statics (need a real class; skip rows without one)
     let whs: WhSystemsFile = read_json("data/static/wormhole_systems.json")?;
     let wh_systems: Vec<WhSystem> = whs
@@ -767,7 +839,7 @@ async fn seed_static(
         &wh_systems,
         |b, s| {
             b.push_bind(s.id)
-                .push_bind(s.class.unwrap())
+                .push_bind(s.class.expect("filtered to systems with a class"))
                 .push_bind(s.effect.clone())
                 .push_bind(s.shattered)
         }
@@ -780,7 +852,10 @@ async fn seed_static(
         |b, s| { b.push_bind(s.0).push_bind(&s.1) }
     );
     tracing::info!("wormhole_system_statics: {n}");
+    Ok(())
+}
 
+async fn seed_signatures(tx: &mut sqlx::PgConnection) -> Result<(), BoxError> {
     // signature catalogue
     let sig: SignaturesFile = read_json("data/static/signatures.json")?;
     let mut spawn_areas = Vec::new();
@@ -817,7 +892,13 @@ async fn seed_static(
         |b, s| { b.push_bind(s.0).push_bind(s.1) }
     );
     tracing::info!("signature_type_spawn_areas: {n}");
+    Ok(())
+}
 
+async fn seed_jove_observatories(
+    tx: &mut sqlx::PgConnection,
+    solar_systems: &[universe::SolarSystem],
+) -> Result<(), BoxError> {
     // jove observatories: source is region -> [system names]; resolve names to ids.
     let by_name: HashMap<String, i64> = solar_systems.iter().map(|s| (en(&s.name), s.id)).collect();
     let jove: HashMap<String, Vec<String>> = read_json("data/static/jove_observatories.json")?;
@@ -835,6 +916,5 @@ async fn seed_static(
         |b, id| { b.push_bind(*id) }
     );
     tracing::info!("jove_observatories: {n}");
-
     Ok(())
 }

@@ -19,6 +19,15 @@ pub struct Credentials {
     bearer: Option<String>,
 }
 
+// By hand so a log line never carries the session cookie or the bearer token.
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Credentials")
+            .field("bearer", &self.bearer.as_ref().map(|_| "<redacted>"))
+            .finish_non_exhaustive()
+    }
+}
+
 impl<S: Send + Sync> FromRequestParts<S> for Credentials {
     type Rejection = std::convert::Infallible;
 
@@ -130,7 +139,7 @@ pub(crate) async fn require_role_on_map(
 }
 
 /// The share token, when the caller has one.
-#[derive(Deserialize, utoipa::IntoParams)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ShareQuery {
     /// A share token, for reading a map that was opened with a link rather than a grant.

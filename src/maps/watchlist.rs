@@ -120,26 +120,16 @@ pub(super) async fn apply_set_pinned(tx: &mut Tx<'_>, cmd: SetWatchlistPinned) -
         entry_id: cmd.entry_id,
         value: !cmd.value,
     });
-    let label = if cmd.value {
-        "pinned a watchlist entry"
+    let (kind, label) = if cmd.value {
+        ("watchlist.pinned", "pinned a watchlist entry")
     } else {
-        "unpinned a watchlist entry"
+        ("watchlist.unpinned", "unpinned a watchlist entry")
     };
-    Ok(Effect::new(
-        label_kind(cmd.value),
-        label,
-        CommandOutput::Watchlist(Box::new(entry)),
+    Ok(
+        Effect::new(kind, label, CommandOutput::Watchlist(Box::new(entry)))
+            .undo_with(inverse)
+            .emit(MapEvent::WatchlistChanged { map_id: cmd.map_id }),
     )
-    .undo_with(inverse)
-    .emit(MapEvent::WatchlistChanged { map_id: cmd.map_id }))
-}
-
-fn label_kind(pinned: bool) -> &'static str {
-    if pinned {
-        "watchlist.pinned"
-    } else {
-        "watchlist.unpinned"
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, utoipa::ToSchema)]

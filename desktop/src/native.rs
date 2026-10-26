@@ -7,31 +7,53 @@
 //! The only `unsafe` code in the app: plain calls into the window system on the window
 //! GPUI created.
 
-#![allow(unsafe_code)]
-
+#[cfg(windows)]
+use gpui_kit::component::ThemeMode;
 use gpui_kit::{Pixels, Point, Window, point, px};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-/// Clicks pass through the whole window to the game (`true`), or the window
-/// takes input (cursor over a box or the pencil, dragging).
-pub fn set_click_through(window: &Window, on: bool) {
+/// Where clicks on the overlay window go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Clicks {
+    /// Through the whole window to the game.
+    PassThrough,
+    /// To the window (cursor over a box or the pencil, dragging).
+    Taken,
+}
+
+/// Lets clicks through the window to the game, or has the window take them.
+pub(crate) fn set_clicks(window: &Window, clicks: Clicks) {
     let Ok(handle) = HasWindowHandle::window_handle(window) else {
         return;
     };
-    apply(handle.as_raw(), on);
+    apply(handle.as_raw(), clicks);
 }
 
 /// The cursor in the window's coordinates, wherever it is on screen (a
 /// click-through window gets no mouse events to track it with).
-pub fn cursor_position(window: &Window) -> Option<Point<Pixels>> {
+pub(crate) fn cursor_position(window: &Window) -> Option<Point<Pixels>> {
     let handle = HasWindowHandle::window_handle(window).ok()?;
     cursor(handle.as_raw(), window.scale_factor())
 }
 
+/// The `HWND` behind a Win32 window handle.
 #[cfg(windows)]
-#[allow(clippy::cast_possible_wrap)] // style bits are small flags
-fn apply(handle: RawWindowHandle, click_through: bool) {
-    use windows_sys::Win32::Foundation::HWND;
+#[expect(
+    clippy::as_conversions,
+    reason = "raw-window-handle carries the HWND as an integer; Win32 takes it back as the pointer it is"
+)]
+fn hwnd(handle: &raw_window_handle::Win32WindowHandle) -> windows_sys::Win32::Foundation::HWND {
+    handle.hwnd.get() as windows_sys::Win32::Foundation::HWND
+}
+
+/// Extended style bits as the signed value `GetWindowLongPtrW` deals in.
+#[cfg(windows)]
+fn style_bits(bits: u32) -> isize {
+    isize::try_from(bits).expect("window style bits fit in isize")
+}
+
+#[cfg(windows)]
+fn apply(handle: RawWindowHandle, clicks: Clicks) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GWL_EXSTYLE, GetWindowLongPtrW, HWND_TOPMOST, LWA_ALPHA, SWP_FRAMECHANGED, SWP_NOACTIVATE,
         SWP_NOMOVE, SWP_NOSIZE, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos,
@@ -41,23 +63,25 @@ fn apply(handle: RawWindowHandle, click_through: bool) {
     let RawWindowHandle::Win32(h) = handle else {
         return;
     };
-    let hwnd = h.hwnd.get() as HWND;
-    // SAFETY: `hwnd` is the live window GPUI just gave us a handle to; these
-    // calls only change its extended style and z-order.
+    let hwnd = hwnd(&h);
+    // SAFETY: `hwnd` is the live window GPUI just gave us a handle to; this only reads its
+    // extended style.
+    let mut style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    // layered (needed for click-through), no taskbar button, never activated by a click:
+    // EVE keeps the keyboard
+    style |= style_bits(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE);
+    match clicks {
+        Clicks::PassThrough => style |= style_bits(WS_EX_TRANSPARENT),
+        Clicks::Taken => style &= !style_bits(WS_EX_TRANSPARENT),
+    }
+    // SAFETY: as above; this only changes the window's extended style.
+    unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style) };
+    never_activate(hwnd);
+    // a layered window needs its opacity set once, or it stays invisible
+    // SAFETY: as above; this only sets the window's opacity.
+    unsafe { SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA) };
+    // SAFETY: as above; this only changes the window's z-order and redraws its frame.
     unsafe {
-        let mut style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        // layered (needed for click-through), no taskbar button, never
-        // activated by a click: EVE keeps the keyboard
-        style |= (WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) as isize;
-        if click_through {
-            style |= WS_EX_TRANSPARENT as isize;
-        } else {
-            style &= !(WS_EX_TRANSPARENT as isize);
-        }
-        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style);
-        never_activate(hwnd);
-        // a layered window needs its opacity set once, or it stays invisible
-        SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
         SetWindowPos(
             hwnd,
             HWND_TOPMOST,
@@ -66,15 +90,14 @@ fn apply(handle: RawWindowHandle, click_through: bool) {
             0,
             0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-        );
-    }
+        )
+    };
 }
 
 /// Give the window the light or dark app icon, as the theme goes. The exe's own icon, the
 /// one Explorer shows, stays the light one.
 #[cfg(windows)]
-pub fn set_window_icon(window: &Window, dark: bool) {
-    use windows_sys::Win32::Foundation::HWND;
+pub(crate) fn set_window_icon(window: &Window, mode: ThemeMode) {
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetSystemMetrics, ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_SHARED, LoadImageW, SM_CXICON,
@@ -87,19 +110,22 @@ pub fn set_window_icon(window: &Window, dark: bool) {
     let RawWindowHandle::Win32(h) = handle.as_raw() else {
         return;
     };
-    let hwnd = h.hwnd.get() as HWND;
-    // Resources 1 and 2, embedded by build.rs.
-    let id = if dark { 2usize } else { 1 };
-    // SAFETY: `hwnd` is live; the icons are shared resources of this module, which
-    // Windows keeps for as long as the process runs.
-    unsafe {
-        let module = GetModuleHandleW(std::ptr::null());
-        for (which, metric) in [(ICON_SMALL, SM_CXSMICON), (ICON_BIG, SM_CXICON)] {
-            let px = GetSystemMetrics(metric);
-            let icon = LoadImageW(module, id as *const u16, IMAGE_ICON, px, px, LR_SHARED);
-            if !icon.is_null() {
-                SendMessageW(hwnd, WM_SETICON, which as usize, icon as isize);
-            }
+    let hwnd = hwnd(&h);
+    // Resources 1 and 2, embedded by build.rs, named by number the way MAKEINTRESOURCE does.
+    let id = std::ptr::without_provenance::<u16>(if mode.is_dark() { 2 } else { 1 });
+    // SAFETY: a null name asks for this process's own module, which lives as long as the
+    // process.
+    let module = unsafe { GetModuleHandleW(std::ptr::null()) };
+    for (which, metric) in [(ICON_SMALL, SM_CXSMICON), (ICON_BIG, SM_CXICON)] {
+        // SAFETY: reads a system metric; no pointers involved.
+        let size = unsafe { GetSystemMetrics(metric) };
+        // SAFETY: `module` is ours and `id` names one of its icon resources. A shared icon is
+        // kept by Windows for as long as the process runs.
+        let icon = unsafe { LoadImageW(module, id, IMAGE_ICON, size, size, LR_SHARED) };
+        if !icon.is_null() {
+            let which = usize::try_from(which).expect("ICON_SMALL and ICON_BIG are 0 and 1");
+            // SAFETY: `hwnd` is live and `icon` a valid shared icon handle.
+            unsafe { SendMessageW(hwnd, WM_SETICON, which, icon.addr().cast_signed()) };
         }
     }
 }
@@ -119,32 +145,42 @@ fn never_activate(hwnd: windows_sys::Win32::Foundation::HWND) {
     // GPUI's procedure, which every other message goes on to. One overlay at a time.
     static GPUI: AtomicIsize = AtomicIsize::new(0);
 
+    #[expect(
+        clippy::as_conversions,
+        clippy::cast_possible_wrap,
+        reason = "MA_NOACTIVATE is 3, and LRESULT is the slot a window procedure answers in"
+    )]
+    const NO_ACTIVATE: LRESULT = MA_NOACTIVATE as LRESULT;
+
     unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
         if msg == WM_MOUSEACTIVATE {
-            return MA_NOACTIVATE as LRESULT;
+            return NO_ACTIVATE;
         }
-        // SAFETY: GPUI holds the procedure that was installed before ours, so it is a
-        // live `WNDPROC` for this window.
-        unsafe {
-            let gpui = std::mem::transmute::<isize, WNDPROC>(GPUI.load(Ordering::Relaxed));
-            CallWindowProcW(gpui, hwnd, msg, wp, lp)
-        }
+        // SAFETY: GPUI holds the procedure that was installed before ours, so the stored
+        // value is a live `WNDPROC` for this window.
+        let gpui = unsafe { std::mem::transmute::<isize, WNDPROC>(GPUI.load(Ordering::Relaxed)) };
+        // SAFETY: hands the message on, unchanged, to the procedure it was meant for.
+        unsafe { CallWindowProcW(gpui, hwnd, msg, wp, lp) }
     }
 
-    let ours =
-        proc as unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT as usize as isize;
-    // SAFETY: `hwnd` is live; swapping its procedure is what subclassing is.
-    unsafe {
-        if GetWindowLongPtrW(hwnd, GWLP_WNDPROC) == ours {
-            return;
-        }
-        let gpui = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, ours);
-        GPUI.store(gpui, Ordering::Relaxed);
+    #[expect(
+        clippy::as_conversions,
+        reason = "SetWindowLongPtrW takes the new window procedure as a pointer-sized integer"
+    )]
+    let ours = (proc as unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT as usize)
+        .cast_signed();
+    // SAFETY: `hwnd` is live; this only reads its window procedure.
+    if unsafe { GetWindowLongPtrW(hwnd, GWLP_WNDPROC) } == ours {
+        return;
     }
+    // SAFETY: `hwnd` is live; swapping its procedure is what subclassing is, and `ours` hands
+    // every other message to the one it replaces.
+    let gpui = unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, ours) };
+    GPUI.store(gpui, Ordering::Relaxed);
 }
 
 #[cfg(target_os = "macos")]
-fn apply(handle: RawWindowHandle, click_through: bool) {
+fn apply(handle: RawWindowHandle, clicks: Clicks) {
     use objc2_app_kit::{NSView, NSWindowCollectionBehavior};
 
     let RawWindowHandle::AppKit(h) = handle else {
@@ -156,7 +192,7 @@ fn apply(handle: RawWindowHandle, click_through: bool) {
     let Some(window) = view.window() else {
         return;
     };
-    window.setIgnoresMouseEvents(click_through);
+    window.setIgnoresMouseEvents(clicks == Clicks::PassThrough);
     // on every Space, over full-screen apps (EVE in its own Space), not in
     // the window cycle, and stays put when the app is in the background
     window.setCollectionBehavior(
@@ -168,27 +204,48 @@ fn apply(handle: RawWindowHandle, click_through: bool) {
     window.setHidesOnDeactivate(false);
 }
 
+/// A screen coordinate in physical pixels (GPUI is per-monitor DPI aware) as logical pixels.
 #[cfg(windows)]
-#[allow(clippy::cast_precision_loss)] // screen coordinates are small
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_precision_loss,
+    reason = "screen coordinates are far below 2^24, where f32 is exact"
+)]
+fn logical(physical: i32, scale: f32) -> Pixels {
+    px(physical as f32 / scale)
+}
+
+#[cfg(windows)]
 fn cursor(handle: RawWindowHandle, scale: f32) -> Option<Point<Pixels>> {
-    use windows_sys::Win32::Foundation::{HWND, POINT};
+    use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
     use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
     let RawWindowHandle::Win32(h) = handle else {
         return None;
     };
-    let hwnd = h.hwnd.get() as HWND;
+    let hwnd = hwnd(&h);
     let mut p = POINT { x: 0, y: 0 };
-    // SAFETY: `hwnd` is the live window GPUI gave us a handle to and `p` a
-    // local the calls write into.
-    let ok = unsafe { GetCursorPos(&raw mut p) != 0 && ScreenToClient(hwnd, &raw mut p) != 0 };
-    // physical pixels (GPUI is per-monitor DPI aware) to logical
-    ok.then(|| point(px(p.x as f32 / scale), px(p.y as f32 / scale)))
+    // SAFETY: `p` is a local the call writes the cursor's screen position into.
+    let found = unsafe { GetCursorPos(&raw mut p) } != 0;
+    // SAFETY: `hwnd` is the live window GPUI gave us a handle to and `p` a local the call
+    // rewrites in that window's coordinates.
+    let ok = found && unsafe { ScreenToClient(hwnd, &raw mut p) } != 0;
+    ok.then(|| point(logical(p.x, scale), logical(p.y, scale)))
+}
+
+/// A distance in screen points as GPUI pixels.
+#[cfg(target_os = "macos")]
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    reason = "screen points are far inside f32's range, and a fraction of a point is invisible"
+)]
+fn points(v: f64) -> Pixels {
+    px(v as f32)
 }
 
 #[cfg(target_os = "macos")]
-#[allow(clippy::cast_possible_truncation)] // points fit in f32
 fn cursor(handle: RawWindowHandle, _scale: f32) -> Option<Point<Pixels>> {
     use objc2_app_kit::{NSEvent, NSView};
 
@@ -202,7 +259,7 @@ fn cursor(handle: RawWindowHandle, _scale: f32) -> Option<Point<Pixels>> {
     // fills its frame, and GPUI's origin is top-left
     let m = NSEvent::mouseLocation();
     Some(point(
-        px((m.x - frame.origin.x) as f32),
-        px((frame.origin.y + frame.size.height - m.y) as f32),
+        points(m.x - frame.origin.x),
+        points(frame.origin.y + frame.size.height - m.y),
     ))
 }

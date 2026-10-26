@@ -6,15 +6,15 @@ use crate::api::{
     Connection, MapNaming, MassStatus, PlacedSystem, Signature, TimeStatus, WormholeSize,
 };
 
-pub const DEFAULT_FORMAT_WORMHOLE: &str = "{alias} {sig} {class}";
-pub const DEFAULT_FORMAT_KSPACE: &str = "{alias} {class} {sig} {name} {region}";
+pub(crate) const DEFAULT_FORMAT_WORMHOLE: &str = "{alias} {sig} {class}";
+pub(crate) const DEFAULT_FORMAT_KSPACE: &str = "{alias} {class} {sig} {name} {region}";
 /// The leading `*` sorts the way home to the top of the in-game folder.
-pub const DEFAULT_FORMAT_RETURN: &str = "*{alias} {sig} {class}";
-pub const DEFAULT_IGNORED_ALIAS: &str = "HOME";
+pub(crate) const DEFAULT_FORMAT_RETURN: &str = "*{alias} {sig} {class}";
+pub(crate) const DEFAULT_IGNORED_ALIAS: &str = "HOME";
 
 /// A system as a bookmark describes it.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct BookmarkSystem {
+pub(crate) struct BookmarkSystem {
     pub alias: Option<String>,
     pub name: String,
     pub region: Option<String>,
@@ -28,7 +28,7 @@ pub struct BookmarkSystem {
 
 /// What a bookmark says about the hole itself.
 #[derive(Debug, Clone, Default)]
-pub struct BookmarkContext {
+pub(crate) struct BookmarkContext {
     /// The alias of the system the bookmark is made in, for `{current}`.
     pub current_alias: Option<String>,
     pub signature_id: Option<String>,
@@ -41,7 +41,7 @@ pub struct BookmarkContext {
 
 /// The map's formats. A blank or missing one falls back to the default.
 #[derive(Debug, Clone, Default)]
-pub struct BookmarkFormats {
+pub(crate) struct BookmarkFormats {
     pub wormhole: Option<String>,
     pub kspace: Option<String>,
     pub ret: Option<String>,
@@ -67,7 +67,7 @@ fn is_ignored_alias(alias: Option<&str>, ignored: Option<&str>) -> bool {
 /// Whether naming `destination` describes the way back up the chain. Chain aliases extend
 /// their parent's, so an ancestor is always a prefix of the alias you are standing on, while
 /// a sibling branch (`B` seen from `AB`) is not.
-pub fn is_return_bookmark(
+pub(crate) fn is_return_bookmark(
     destination: Option<&str>,
     opposite: Option<&str>,
     ignored: Option<&str>,
@@ -87,7 +87,7 @@ pub fn is_return_bookmark(
 }
 
 /// Classes 1 to 6 and 12 to 18 are wormhole space; 7, 8 and 9 high, low and null; 25 Pochven.
-pub fn class_short(id: i64) -> Option<&'static str> {
+pub(crate) fn class_short(id: i64) -> Option<&'static str> {
     Some(match id {
         1 => "C1",
         2 => "C2",
@@ -115,7 +115,7 @@ pub fn class_short(id: i64) -> Option<&'static str> {
     })
 }
 
-pub fn is_wormhole_class(id: Option<i64>) -> bool {
+pub(crate) fn is_wormhole_class(id: Option<i64>) -> bool {
     matches!(id, Some(1..=6 | 12..=18))
 }
 
@@ -132,7 +132,7 @@ fn ccp_round_security(security: f64) -> f64 {
     scaled.signum() * scaled.abs().round() / 10.0
 }
 
-pub fn class_from_security(security: f64) -> i64 {
+pub(crate) fn class_from_security(security: f64) -> i64 {
     let rounded = ccp_round_security(security);
     if rounded >= 0.5 {
         7
@@ -145,7 +145,7 @@ pub fn class_from_security(security: f64) -> i64 {
 
 /// `C3` for wormhole space, otherwise `HS` / `LS` / `NS` / `P`. Blank when the destination is
 /// unknown, since a security of zero would label an unscanned hole as lowsec.
-pub fn bookmark_class(wormhole_class_id: Option<i64>, security: Option<f64>) -> String {
+pub(crate) fn bookmark_class(wormhole_class_id: Option<i64>, security: Option<f64>) -> String {
     if wormhole_class_id.is_none() && security.is_none() {
         return String::new();
     }
@@ -159,7 +159,7 @@ pub fn bookmark_class(wormhole_class_id: Option<i64>, security: Option<f64>) -> 
 }
 
 /// The scanner id's first three characters: `ABC-123` is bookmarked as `ABC`.
-pub fn short_signature_id(signature_id: Option<&str>) -> String {
+pub(crate) fn short_signature_id(signature_id: Option<&str>) -> String {
     signature_id
         .map(|s| s.chars().take(3).collect())
         .unwrap_or_default()
@@ -204,7 +204,7 @@ fn token_value(token: &str, system: &BookmarkSystem, context: &BookmarkContext) 
 
 /// Substitute `{token}` placeholders and collapse the gaps empty ones leave. An unknown
 /// placeholder stays as written, so a typo in the format is visible.
-pub fn render_bookmark(
+pub(crate) fn render_bookmark(
     template: &str,
     system: &BookmarkSystem,
     context: &BookmarkContext,
@@ -222,13 +222,12 @@ pub fn render_bookmark(
                         .all(|c| c.is_alphanumeric() || c == '_') =>
             {
                 let token = &after[..close];
-                match token_value(token, system, context) {
-                    Some(value) => out.push_str(&value),
-                    None => {
-                        out.push('{');
-                        out.push_str(token);
-                        out.push('}');
-                    }
+                if let Some(value) = token_value(token, system, context) {
+                    out.push_str(&value);
+                } else {
+                    out.push('{');
+                    out.push_str(token);
+                    out.push('}');
                 }
                 rest = &after[close + 1..];
             }
@@ -249,7 +248,7 @@ fn non_blank(format: Option<&String>) -> Option<&str> {
 /// The bookmark name for a system across a connection. `opposite_alias` is the alias at the
 /// other end, where the bookmark is made: it fills `{current}`, and when it marks this bookmark as the way back up the chain, or the system is
 /// home, the return format replaces the wormhole or k-space one.
-pub fn format_bookmark(
+pub(crate) fn format_bookmark(
     system: &BookmarkSystem,
     context: &BookmarkContext,
     formats: &BookmarkFormats,
@@ -275,7 +274,7 @@ pub fn format_bookmark(
     render_bookmark(template, system, &context)
 }
 
-pub fn bookmark_system_of(system: &PlacedSystem) -> BookmarkSystem {
+pub(crate) fn bookmark_system_of(system: &PlacedSystem) -> BookmarkSystem {
     BookmarkSystem {
         alias: system.alias.clone(),
         name: system.name.clone(),
@@ -290,7 +289,7 @@ pub fn bookmark_system_of(system: &PlacedSystem) -> BookmarkSystem {
 /// The bookmark for `end` of a connection, made while standing in `near` at the other end.
 /// It carries the signature scanned on the near side, since that is where the scanner was;
 /// the name describes the far side, which is where the hole goes.
-pub fn connection_bookmark(
+pub(crate) fn connection_bookmark(
     connection: &Connection,
     end: &PlacedSystem,
     near: &PlacedSystem,
@@ -560,7 +559,7 @@ mod tests {
     fn each_end_carries_the_signature_read_on_the_other() {
         let home = placed(1, 30000142, "Jita", "A", None, 0.95);
         let c5 = placed(2, 31000005, "J122515", "A1", Some(5), -0.99);
-        let hole = Connection {
+        let link = Connection {
             id: 7,
             from_system: 1,
             to_system: 2,
@@ -593,16 +592,16 @@ mod tests {
         };
         // Standing in the C5, the way back to Jita carries the C5's own signature.
         assert_eq!(
-            connection_bookmark(&hole, &home, &c5, &sigs, codes, &formats),
+            connection_bookmark(&link, &home, &c5, &sigs, codes, &formats),
             "*A FAR K162"
         );
         assert_eq!(
-            connection_bookmark(&hole, &c5, &home, &sigs, codes, &formats),
+            connection_bookmark(&link, &c5, &home, &sigs, codes, &formats),
             "A1 HOM H296"
         );
         // Not scanned on the near side yet: no signature.
         assert_eq!(
-            connection_bookmark(&hole, &c5, &home, &sigs[1..], codes, &formats),
+            connection_bookmark(&link, &c5, &home, &sigs[1..], codes, &formats),
             "A1"
         );
     }
@@ -610,7 +609,7 @@ mod tests {
     #[test]
     fn a_jump_away_from_home_copies_the_way_back() {
         let formats = BookmarkFormats::default();
-        let hole = |from, to| Connection {
+        let link = |from, to| Connection {
             id: 9,
             from_system: from,
             to_system: to,
@@ -624,14 +623,14 @@ mod tests {
         let one = placed(2, 31000001, "J100001", "1", Some(3), -1.0);
         let deeper = placed(3, 31000002, "J100002", "11", Some(5), -1.0);
         // Nested: out of 1 into 11, the bookmark is the star one back to 1.
-        let back = connection_bookmark(&hole(2, 3), &one, &deeper, &[], |_| None, &formats);
+        let back = connection_bookmark(&link(2, 3), &one, &deeper, &[], |_| None, &formats);
         assert_eq!(back, "*1 C3");
         // Flying back into 1, the bookmark is the hole on into 11.
-        let on = connection_bookmark(&hole(2, 3), &deeper, &one, &[], |_| None, &formats);
+        let on = connection_bookmark(&link(2, 3), &deeper, &one, &[], |_| None, &formats);
         assert_eq!(on, "11 C5");
         // Out of a home named with the ignored alias, the way back is a star one too.
         let home = placed(1, 30000142, "Jita", "HOME", None, 0.95);
-        let back = connection_bookmark(&hole(1, 2), &home, &one, &[], |_| None, &formats);
+        let back = connection_bookmark(&link(1, 2), &home, &one, &[], |_| None, &formats);
         assert!(back.starts_with('*'), "{back}");
         // A home system without an alias is still the way back.
         let home = PlacedSystem {
@@ -639,7 +638,7 @@ mod tests {
             is_home: true,
             ..placed(1, 30002086, "Turnur", "", None, 0.4)
         };
-        let back = connection_bookmark(&hole(1, 2), &home, &one, &[], |_| None, &formats);
+        let back = connection_bookmark(&link(1, 2), &home, &one, &[], |_| None, &formats);
         assert_eq!(back, "* LS");
     }
 }

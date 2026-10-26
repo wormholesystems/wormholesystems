@@ -84,6 +84,11 @@ async fn ship_mass_tx(tx: &mut Tx<'_>, ship_type_id: i64) -> Result<i64> {
     ship_mass(&mut **tx, ship_type_id).await
 }
 
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    reason = "a hull mass in kg is a whole number far inside i64"
+)]
 async fn ship_mass<'e, E>(executor: E, ship_type_id: i64) -> Result<i64>
 where
     E: sqlx::Executor<'e, Database = sqlx::Postgres>,

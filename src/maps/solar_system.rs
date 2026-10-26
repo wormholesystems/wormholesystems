@@ -191,7 +191,7 @@ pub(super) async fn apply_remove_systems(tx: &mut Tx<'_>, cmd: RemoveSystems) ->
     };
     Ok(
         Effect::new("systems.removed", label, CommandOutput::Count(deleted))
-            .entries(deleted as i64)
+            .entries(deleted)
             .undo_with(MapCommand::RestoreSystems(snapshot))
             .emit(MapEvent::MapUpdated { map_id: cmd.map_id }),
     )
@@ -226,7 +226,7 @@ pub(super) async fn apply_clear_map(tx: &mut Tx<'_>, cmd: ClearMap) -> Result<Ef
         format!("cleared the map ({deleted} systems)"),
         CommandOutput::Count(deleted),
     )
-    .entries(deleted as i64)
+    .entries(deleted)
     .undo_with(MapCommand::RestoreSystems(snapshot))
     .emit(MapEvent::MapUpdated { map_id: cmd.map_id }))
 }
@@ -345,7 +345,7 @@ pub(super) async fn apply_move_systems(tx: &mut Tx<'_>, cmd: MoveSystems) -> Res
         moves: before,
     });
     Ok(Effect::new("systems.moved", label, CommandOutput::None)
-        .entries(count as i64)
+        .entries(count)
         .undo_with(inverse)
         .emit(MapEvent::MapUpdated { map_id: cmd.map_id }))
 }
@@ -449,7 +449,7 @@ pub async fn set_occupier(pool: &PgPool, actor: Actor, cmd: SetOccupier) -> Resu
 pub(super) async fn apply_set_occupier(tx: &mut Tx<'_>, cmd: SetOccupier) -> Result<Effect> {
     let before = intel(tx, cmd.map_id, cmd.map_solar_system_id).await?;
     let change = IntelChange {
-        occupier: Some(cmd.occupier.clone()),
+        occupier: TextChange::Set(cmd.occupier.clone()),
         ..IntelChange::default()
     };
     write_intel(tx, cmd.map_id, cmd.map_solar_system_id, &change).await?;
@@ -507,7 +507,7 @@ pub(super) async fn apply_set_notes(tx: &mut Tx<'_>, cmd: SetNotes) -> Result<Ef
         ));
     }
     let change = IntelChange {
-        notes: Some(cmd.notes.clone()),
+        notes: TextChange::Set(cmd.notes.clone()),
         ..IntelChange::default()
     };
     write_intel(tx, cmd.map_id, cmd.map_solar_system_id, &change).await?;
@@ -532,13 +532,33 @@ struct Intel {
     notes: Option<String>,
 }
 
-/// Which intel columns a write sets. `None` leaves a column as it is; the inner `None` of
-/// the text columns clears it.
+/// Which intel columns a write sets. `None` leaves the status as it is.
 #[derive(Default)]
 struct IntelChange {
     status: Option<super::SystemStatus>,
-    occupier: Option<Option<String>>,
-    notes: Option<Option<String>>,
+    occupier: TextChange,
+    notes: TextChange,
+}
+
+/// A text column a write leaves alone or sets, where setting `None` clears it.
+#[derive(Default)]
+enum TextChange {
+    #[default]
+    Keep,
+    Set(Option<String>),
+}
+
+impl TextChange {
+    fn is_set(&self) -> bool {
+        matches!(self, TextChange::Set(_))
+    }
+
+    fn value(&self) -> Option<&str> {
+        match self {
+            TextChange::Set(value) => value.as_deref(),
+            TextChange::Keep => None,
+        }
+    }
 }
 
 /// A placement's intel, or a plain refusal when it is still a ghost. Intel is keyed by
@@ -578,6 +598,10 @@ async fn write_intel(
     map_solar_system_id: i64,
     change: &IntelChange,
 ) -> Result<()> {
+    #[expect(
+        clippy::as_conversions,
+        reason = "sqlx's `as` type override for a typed parameter, not a value conversion"
+    )]
     sqlx::query!(
         "insert into map_solar_system_details
              (map_id, solar_system_id, status, occupying_group, notes)
@@ -592,10 +616,10 @@ async fn write_intel(
         map_id,
         map_solar_system_id,
         change.status as Option<super::SystemStatus>,
-        change.occupier.is_some(),
-        change.occupier.clone().flatten(),
-        change.notes.is_some(),
-        change.notes.clone().flatten(),
+        change.occupier.is_set(),
+        change.occupier.value(),
+        change.notes.is_set(),
+        change.notes.value(),
     )
     .execute(&mut **tx)
     .await?;

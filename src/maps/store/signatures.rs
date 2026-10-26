@@ -37,7 +37,7 @@ pub struct SignatureRow {
 
 /// A signature that is not on the map yet.
 #[derive(Debug, Clone, Copy)]
-pub struct NewSignature<'a> {
+pub(crate) struct NewSignature<'a> {
     pub solar_system_id: i64,
     pub signature_id: &'a str,
     pub group: SignatureGroup,
@@ -286,7 +286,7 @@ pub(crate) async fn set_connection(
 
 /// Where a signature that was just deleted had been, and what it was linked to.
 #[derive(Debug, Clone, Copy)]
-pub struct DeletedSignature {
+pub(crate) struct DeletedSignature {
     pub solar_system_id: i64,
     pub connection_id: Option<i64>,
 }

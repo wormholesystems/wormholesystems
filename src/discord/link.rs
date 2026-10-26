@@ -59,7 +59,7 @@ pub async fn connect(State(state): State<AppState>, jar: CookieJar) -> Response 
     let jar = jar.add(oauth_flow::browser_cookie(
         FlowKind::DiscordLink,
         &csrf,
-        state.secure_cookies,
+        state.cookie_security(),
     ));
     (jar, Redirect::to(url.as_str())).into_response()
 }
@@ -68,6 +68,15 @@ pub async fn connect(State(state): State<AppState>, jar: CookieJar) -> Response 
 pub struct CallbackQuery {
     code: String,
     state: String,
+}
+
+// By hand, so the one-time code stays out of logs.
+impl std::fmt::Debug for CallbackQuery {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CallbackQuery")
+            .field("state", &self.state)
+            .finish_non_exhaustive()
+    }
 }
 
 /// `GET /discord/callback`, finish the link.

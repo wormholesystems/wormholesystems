@@ -22,7 +22,7 @@ use crate::server_status::ServerWatch;
 /// ESI caches an affiliation for an hour, so asking more often would only hand back the
 /// same answer. The lag between leaving a corp and losing its maps is at most about two of
 /// these: ESI's cache, then our next pass.
-const INTERVAL: Duration = Duration::from_secs(60 * 60);
+const INTERVAL: Duration = Duration::from_hours(1);
 
 /// The most ids `POST /characters/affiliation` takes in one call.
 const BATCH: usize = 1000;
@@ -85,6 +85,10 @@ pub async fn refresh(pool: &PgPool, esi: &EsiClient) -> sqlx::Result<u64> {
 /// An organisation that could not be named is stored as null rather than failing the batch
 /// or keeping the old one. That errs towards less access, never more, and the next pass
 /// fills it in.
+#[expect(
+    clippy::as_conversions,
+    reason = "`expr as Type` is sqlx's parameter type override, which the macro expands to a cast"
+)]
 async fn store(pool: &PgPool, affiliations: &[Affiliation]) -> sqlx::Result<u64> {
     let ids: Vec<i64> = affiliations.iter().map(|a| a.character_id).collect();
     let corporations: Vec<i64> = affiliations.iter().map(|a| a.corporation_id).collect();
@@ -117,5 +121,5 @@ async fn store(pool: &PgPool, affiliations: &[Affiliation]) -> sqlx::Result<u64>
     )
     .fetch_one(pool)
     .await?;
-    Ok(changed as u64)
+    Ok(u64::try_from(changed).expect("a row count is never negative"))
 }

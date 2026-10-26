@@ -50,7 +50,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
 
 /// How much of New Eden this install has loaded. The landing page states these, so they
 /// are the real contents of this database rather than numbers written into a page.
-#[derive(Serialize, ts_rs::TS, utoipa::ToSchema)]
+#[derive(Debug, Serialize, ts_rs::TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct ReferenceCounts {
     pub solar_systems: i64,
@@ -89,7 +89,7 @@ pub async fn reference_counts(State(state): State<AppState>) -> ApiResult<Refere
 /// What this deployment can actually do, so the interface can say what is switched off
 /// rather than offering something that will quietly never arrive. Self-hosters configure
 /// Discord separately from the rest, and most of them do not configure it at all.
-#[derive(Serialize, ts_rs::TS, utoipa::ToSchema)]
+#[derive(Debug, Serialize, ts_rs::TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct Instance {
     pub discord: DiscordCapability,
@@ -98,7 +98,7 @@ pub struct Instance {
     pub announcement: Option<crate::announcement::Announcement>,
 }
 
-#[derive(Serialize, ts_rs::TS, utoipa::ToSchema)]
+#[derive(Debug, Serialize, ts_rs::TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct DiscordCapability {
     /// Whether an account can be linked at all: the OAuth half of the application.
@@ -157,7 +157,7 @@ pub async fn grid_config(State(_state): State<AppState>) -> ApiResult<GridConfig
     Ok(Json(crate::maps::grid()))
 }
 
-#[derive(Deserialize, utoipa::IntoParams)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct EffectsQuery {
     /// The effect, as the map names it (`Pulsar`, `Wolf-Rayet Star`, ...).
@@ -184,7 +184,7 @@ pub async fn effect_modifiers(
     Ok(Json(mods))
 }
 
-#[derive(Deserialize, utoipa::IntoParams)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct SearchQuery {
     /// What to look for; at least two characters.
@@ -212,7 +212,7 @@ pub async fn search_systems(
 /// The static half of the routing graph, typed and built once: k-space stargate
 /// adjacency (Zarzakh excluded since its gates are faction-gated), per-system security
 /// for the safer/less-secure cost functions, and the station indexes the planner offers.
-#[derive(Clone, serde::Serialize, ts_rs::TS, utoipa::ToSchema)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct RoutingGraph {
     pub adjacency: std::collections::HashMap<i64, Vec<i64>>,
@@ -224,7 +224,7 @@ pub struct RoutingGraph {
 }
 
 /// A named set of stations: a service, or the corporation that owns them.
-#[derive(Clone, serde::Serialize, ts_rs::TS, utoipa::ToSchema)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct StationGroup {
     pub id: i64,
@@ -235,14 +235,14 @@ pub struct StationGroup {
     pub stations: Vec<StationRef>,
 }
 
-#[derive(Clone, serde::Serialize, ts_rs::TS, utoipa::ToSchema)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct FactionRef {
     pub id: i64,
     pub name: String,
 }
 
-#[derive(Clone, serde::Serialize, ts_rs::TS, utoipa::ToSchema)]
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct StationRef {
     pub id: i64,
@@ -352,10 +352,24 @@ async fn build_routing_graph(db: &sqlx::PgPool) -> Result<RoutingGraph, ApiError
     let stations: Vec<i64> = sqlx::query_scalar!("select distinct solar_system_id from stations")
         .fetch_all(db)
         .await?;
-    // The legacy "essential" station services, each carrying its concrete stations so a
-    // result can name the station. Security Offices (27) are a known quirk: only
-    // CONCORD-owned stations below 0.5 displayed security actually run one, despite the
-    // operation listing the service everywhere.
+    let services = essential_services(db).await?;
+    let corporations = corporation_stations(db).await?;
+
+    Ok(RoutingGraph {
+        adjacency,
+        security,
+        jove,
+        stations,
+        services,
+        corporations,
+    })
+}
+
+/// The legacy "essential" station services, each carrying its concrete stations so a
+/// result can name the station. Security Offices (27) are a known quirk: only
+/// CONCORD-owned stations below 0.5 displayed security actually run one, despite the
+/// operation listing the service everywhere.
+async fn essential_services(db: &sqlx::PgPool) -> Result<Vec<StationGroup>, ApiError> {
     const ESSENTIAL_SERVICES: [i64; 6] = [5, 10, 13, 14, 15, 27];
     const SECURITY_OFFICE: i64 = 27;
     const CONCORD_CORPORATION: i64 = 1000125;
@@ -380,7 +394,7 @@ async fn build_routing_graph(db: &sqlx::PgPool) -> Result<RoutingGraph, ApiError
         row.service_id != SECURITY_OFFICE
             || crate::util::security::ccp_round_security(row.security_status) < 0.5
     });
-    let services = group_stations(rows.map(|row| {
+    Ok(group_stations(rows.map(|row| {
         (
             row.service_id,
             row.service_name,
@@ -390,11 +404,13 @@ async fn build_routing_graph(db: &sqlx::PgPool) -> Result<RoutingGraph, ApiError
                 solar_system_id: row.solar_system_id,
             },
         )
-    }));
+    })))
+}
 
-    // The NPC corporations that own stations, in the same shape as the services above, so
-    // "the nearest Quafe Company station" is the same question as "the nearest repair shop"
-    // and the client answers both with one relaxation over the graph it already has.
+/// The NPC corporations that own stations, in the same shape as the services above, so
+/// "the nearest Quafe Company station" is the same question as "the nearest repair shop"
+/// and the client answers both with one relaxation over the graph it already has.
+async fn corporation_stations(db: &sqlx::PgPool) -> Result<Vec<StationGroup>, ApiError> {
     let rows = sqlx::query!(
         r#"select st.owner_corporation_id as "corporation_id!", c.name as "corporation_name!",
                   c.faction_id, f.name as "faction_name?",
@@ -427,15 +443,7 @@ async fn build_routing_graph(db: &sqlx::PgPool) -> Result<RoutingGraph, ApiError
     for group in &mut corporations {
         group.faction = faction_of.remove(&group.id);
     }
-
-    Ok(RoutingGraph {
-        adjacency,
-        security,
-        jove,
-        stations,
-        services,
-        corporations,
-    })
+    Ok(corporations)
 }
 
 /// Fold `(group id, group name, station)` rows, already ordered by group, into one entry
@@ -488,7 +496,7 @@ pub async fn resolve_systems(
     Ok(Json(systems_for(&state.db, &ids).await?))
 }
 
-#[derive(Deserialize, utoipa::IntoParams)]
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct ResolveQuery {
     /// Comma-separated solar system ids, at most 200.

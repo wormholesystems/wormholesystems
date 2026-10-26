@@ -34,6 +34,13 @@ struct Cached {
     loaded_at: Instant,
 }
 
+// By hand, so the tokens it holds stay out of logs.
+impl std::fmt::Debug for TokenCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenCache").finish_non_exhaustive()
+    }
+}
+
 impl TokenCache {
     pub fn new() -> Self {
         Self::default()
@@ -49,13 +56,13 @@ impl TokenCache {
         character_id: i64,
         wanted: &[Scope],
     ) -> Result<Token> {
-        let slot = self
-            .slots
-            .lock()
-            .expect("token cache lock")
-            .entry(character_id)
-            .or_default()
-            .clone();
+        let slot = Arc::clone(
+            self.slots
+                .lock()
+                .expect("token cache lock")
+                .entry(character_id)
+                .or_default(),
+        );
         let mut slot = slot.lock().await;
         if let Some(cached) = slot.as_ref() {
             let expiring = cached.token.expires_within(REFRESH_LEEWAY);

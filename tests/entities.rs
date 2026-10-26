@@ -24,11 +24,16 @@ async fn stub_esi() -> (EsiClient, Arc<AtomicUsize>) {
     let hits = Arc::new(AtomicUsize::new(0));
     let app = Router::new()
         .route("/corporations/{id}", get(corporation))
-        .with_state(hits.clone());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
+        .with_state(Arc::clone(&hits));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let base = format!(
+        "http://{}",
+        listener.local_addr().expect("read listener address")
+    );
     tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
+        axum::serve(listener, app).await.expect("serve test app");
     });
     (
         EsiClient::with_config(reqwest::Client::new(), base, "2025-08-26"),
@@ -62,7 +67,7 @@ async fn noted(pool: &PgPool, kind: &str, id: i64) -> bool {
     .bind(id)
     .fetch_one(pool)
     .await
-    .unwrap()
+    .expect("query unresolvable_entities")
 }
 
 #[sqlx::test]

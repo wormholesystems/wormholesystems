@@ -8,7 +8,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 
-pub trait Runner {
+pub(crate) trait Runner {
     /// Run to completion with the output going to the terminal, so a long build shows its
     /// progress rather than sitting silent.
     fn run(&mut self, dir: &Path, program: &str, args: &[&str]) -> Result<()>;
@@ -18,7 +18,7 @@ pub trait Runner {
     fn capture(&mut self, dir: &Path, program: &str, args: &[&str]) -> Result<String>;
 }
 
-pub struct Real;
+pub(crate) struct Real;
 
 impl Runner for Real {
     fn run(&mut self, dir: &Path, program: &str, args: &[&str]) -> Result<()> {
@@ -72,7 +72,7 @@ fn said(stderr: &str) -> String {
 /// succeeds unless it is in `failures`.
 #[cfg(test)]
 #[derive(Default)]
-pub struct Recording {
+pub(crate) struct Recording {
     pub commands: Vec<String>,
     pub replies: std::collections::HashMap<String, String>,
     pub failures: std::collections::HashSet<String>,
@@ -123,7 +123,10 @@ mod tests {
 
     #[test]
     fn only_the_end_of_a_long_complaint_is_kept() {
-        let long: String = (1..=40).map(|n| format!("line {n}\n")).collect();
+        let long = (1..=40)
+            .map(|n| format!("line {n}\n"))
+            .collect::<Vec<_>>()
+            .concat();
         let kept = said(&long);
         assert!(kept.ends_with("line 40"));
         assert!(!kept.contains("line 25\n"));

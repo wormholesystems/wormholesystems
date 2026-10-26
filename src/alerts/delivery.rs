@@ -35,11 +35,21 @@ pub struct Field {
 }
 
 impl Field {
-    pub fn new(name: impl Into<String>, value: impl Into<String>, inline: bool) -> Field {
+    /// A field that sits beside its neighbours.
+    pub fn inline(name: impl Into<String>, value: impl Into<String>) -> Field {
         Field {
             name: name.into(),
             value: value.into(),
-            inline,
+            inline: true,
+        }
+    }
+
+    /// A field on a line of its own.
+    pub fn full_width(name: impl Into<String>, value: impl Into<String>) -> Field {
+        Field {
+            name: name.into(),
+            value: value.into(),
+            inline: false,
         }
     }
 }
@@ -106,18 +116,21 @@ impl Message {
     }
 
     /// Ping a role, and allow only that role to be pinged.
+    #[must_use]
     pub fn mention_role(mut self, role_id: &str) -> Message {
         self.content = Some(format!("<@&{role_id}>"));
         self.allowed_mentions.roles = vec![role_id.to_string()];
         self
     }
 
+    #[must_use]
     pub fn mention_user(mut self, user_id: &str) -> Message {
         self.content = Some(format!("<@{user_id}>"));
         self.allowed_mentions.users = vec![user_id.to_string()];
         self
     }
 
+    #[must_use]
     pub fn mention_everyone(mut self) -> Message {
         self.content = Some("@everyone".to_string());
         self.allowed_mentions.parse = vec!["everyone"];
@@ -190,6 +203,10 @@ pub async fn post_dm(
     discord_user_id: &str,
     message: &Message,
 ) -> Result<(), SendError> {
+    #[derive(serde::Deserialize)]
+    struct Channel {
+        id: String,
+    }
     let opened = http
         .post(format!("{}/users/@me/channels", crate::discord::API))
         .timeout(SEND_TIMEOUT)
@@ -200,10 +217,6 @@ pub async fn post_dm(
         .map_err(|err| SendError::Failed(err.to_string()))?;
     if !opened.status().is_success() {
         return Err(dm_channel_refused(opened.status()));
-    }
-    #[derive(serde::Deserialize)]
-    struct Channel {
-        id: String,
     }
     let channel: Channel = opened
         .json()
@@ -276,7 +289,7 @@ fn parse_retry_after(header: &str) -> Option<Duration> {
 }
 
 fn backoff(attempt: usize) -> Duration {
-    Duration::from_millis(250 * 2u64.pow(attempt as u32))
+    Duration::from_millis(250 * 2u64.pow(u32::try_from(attempt).expect("a handful of retries")))
 }
 
 /// Fails unless every link an embed carries is absolute, the markdown ones in its text
@@ -378,7 +391,7 @@ mod tests {
         let message = Message::new(Embed::default()).mention_role("42");
         assert_eq!(message.content.as_deref(), Some("<@&42>"));
         assert_eq!(message.allowed_mentions.roles, vec!["42".to_string()]);
-        assert!(message.allowed_mentions.parse.is_empty());
+        assert_eq!(message.allowed_mentions.parse, Vec::<&str>::new());
     }
 
     #[test]

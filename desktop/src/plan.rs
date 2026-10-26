@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::api::{
-    Client, MapSnapshot, ResolveGhost, Signature, SignatureCatalog, SignatureType, SystemHit,
-    TrackJump,
+    Client, MapSnapshot, PlacedSystem, ResolveGhost, Signature, SignatureCatalog, SignatureType,
+    SystemHit, TrackJump,
 };
 use crate::jump::{self, AliasScheme, Grid};
 use crate::naming::{BookmarkFormats, connection_bookmark};
@@ -85,6 +85,45 @@ pub(crate) fn aliases(snapshot: &MapSnapshot) -> Vec<String> {
         .collect()
 }
 
+/// The system a jump to `to` landed in: the one on the map, else the one the server knows
+/// by that name.
+fn target_of(
+    client: &impl MapApi,
+    existing: Option<&PlacedSystem>,
+    to: &str,
+) -> anyhow::Result<Option<Target>> {
+    Ok(match existing {
+        Some(s) => Some(Target {
+            solar_system_id: s.solar_system_id,
+            name: s.name.clone(),
+            class: s.wormhole_class_id,
+            security: s.security_status,
+        }),
+        None => client.find_system(to)?.map(|hit| Target {
+            solar_system_id: hit.id,
+            name: hit.name,
+            class: hit.wormhole_class_id,
+            security: hit.security,
+        }),
+    })
+}
+
+/// The names of the ghosts behind `ghosts`, by connection.
+fn ghost_aliases(ghosts: &HashMap<i64, i64>, snapshot: &MapSnapshot) -> HashMap<i64, String> {
+    ghosts
+        .iter()
+        .filter_map(|(&connection, ghost)| {
+            let alias = snapshot
+                .ghosts
+                .iter()
+                .find(|g| g.id == *ghost)?
+                .alias
+                .clone()?;
+            (!alias.trim().is_empty()).then_some((connection, alias))
+        })
+        .collect()
+}
+
 /// The website's jump prompt, minus the prompting: which system it was, whether it is part
 /// of the chain at all, and if so what to ask.
 pub(crate) fn plan_jump(
@@ -101,22 +140,8 @@ pub(crate) fn plan_jump(
         return Ok(Plan::Skip(format!("{from} is not on the map")));
     };
     let existing = snapshot.system_named(to).cloned();
-    let target = match &existing {
-        Some(s) => Target {
-            solar_system_id: s.solar_system_id,
-            name: s.name.clone(),
-            class: s.wormhole_class_id,
-            security: s.security_status,
-        },
-        None => match client.find_system(to)? {
-            Some(hit) => Target {
-                solar_system_id: hit.id,
-                name: hit.name,
-                class: hit.wormhole_class_id,
-                security: hit.security,
-            },
-            None => return Ok(Plan::Skip(format!("No system called {to}"))),
-        },
+    let Some(target) = target_of(client, existing.as_ref(), to)? else {
+        return Ok(Plan::Skip(format!("No system called {to}")));
     };
     if context
         .stargates
@@ -151,18 +176,7 @@ pub(crate) fn plan_jump(
     let ghosts = jump::ghosts_from(&origin, &snapshot);
     let unflown = ghosts.keys().copied().collect();
     let candidates = jump::candidates(&in_origin, &types, target.class, &unflown);
-    let ghost_aliases = ghosts
-        .iter()
-        .filter_map(|(&connection, ghost)| {
-            let alias = snapshot
-                .ghosts
-                .iter()
-                .find(|g| g.id == *ghost)?
-                .alias
-                .clone()?;
-            (!alias.trim().is_empty()).then_some((connection, alias))
-        })
-        .collect();
+    let ghost_aliases = ghost_aliases(&ghosts, &snapshot);
     // A system already on the map keeps the name the chain knows it by.
     let alias = match existing.as_ref().and_then(|e| e.alias.clone()) {
         Some(alias) if !alias.trim().is_empty() => Some(alias),
@@ -206,23 +220,38 @@ pub(crate) fn plan_jump(
         );
     }
     Ok(
-        match submit(client, &context.catalog, &context.codes, &ask, None, true)? {
+        match submit(
+            client,
+            &context.catalog,
+            &context.codes,
+            &ask,
+            None,
+            LoneGhost::Take,
+        )? {
             Some((jump, bookmark)) => Plan::Mapped(jump, bookmark),
             None => Plan::Skip(format!("Mapped {to}, but it is not on the map now")),
         },
     )
 }
 
-/// Map the jump `ask` is about as going through `picked`, or a hole nobody scanned. With
-/// `lone_ghost`, an unscanned jump off a system with exactly one unflown hole drawn is
-/// taken to be that hole. One command either way, so a wrong pick is one undo.
+/// What an unscanned jump off a system with exactly one unflown hole drawn went through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LoneGhost {
+    /// That hole.
+    Take,
+    /// A hole of its own.
+    Ignore,
+}
+
+/// Map the jump `ask` is about as going through `picked`, or a hole nobody scanned, which
+/// `lone_ghost` says what to make of. One command either way, so a wrong pick is one undo.
 pub(crate) fn submit(
     client: &impl MapApi,
     catalog: &SignatureCatalog,
     codes: &HashMap<i64, String>,
     ask: &Ask,
     picked: Option<&Signature>,
-    lone_ghost: bool,
+    lone_ghost: LoneGhost,
 ) -> anyhow::Result<Option<(LastJump, String)>> {
     let ty = picked
         .and_then(|s| s.signature_type_id)
@@ -234,7 +263,9 @@ pub(crate) fn submit(
     let time_status = picked.and_then(|s| s.time_status);
     let ghost = match picked {
         Some(sig) => sig.connection_id.and_then(|c| ask.ghosts.get(&c).copied()),
-        None if lone_ghost && ask.ghosts.len() == 1 => ask.ghosts.values().next().copied(),
+        None if lone_ghost == LoneGhost::Take && ask.ghosts.len() == 1 => {
+            ask.ghosts.values().next().copied()
+        }
         None => None,
     };
     // A hole scanned and named before anyone flew it keeps that name.
@@ -534,7 +565,15 @@ mod tests {
         // The pick goes on the jump.
         let picked = ask.options[0].clone();
         let catalog = SignatureCatalog::default();
-        let landed = submit(&map, &catalog, &HashMap::new(), &ask, Some(&picked), false).unwrap();
+        let landed = submit(
+            &map,
+            &catalog,
+            &HashMap::new(),
+            &ask,
+            Some(&picked),
+            LoneGhost::Ignore,
+        )
+        .unwrap();
         assert_eq!(map.tracked.borrow()[0].signature_pk, Some(1));
         assert_eq!(landed.map(|(jump, _)| jump.connection_id), Some(50));
     }

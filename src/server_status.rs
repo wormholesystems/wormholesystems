@@ -42,13 +42,12 @@ impl ServerState {
         !matches!(self, ServerState::Offline | ServerState::Unreachable)
     }
 
-    /// What a successful `/status` reply means. ESI keeps answering through downtime with
-    /// the last figures it had, so zero players is the only reliable sign the server has
-    /// gone away; VIP is reported separately and outranks the count.
-    pub fn classify(vip: bool, players: i64) -> ServerState {
-        if vip {
-            ServerState::Vip
-        } else if players > 0 {
+    /// What a successful `/status` reply's headcount means, when it is not in VIP mode.
+    /// ESI keeps answering through downtime with the last figures it had, so zero players
+    /// is the only reliable sign the server has gone away. VIP is reported separately and
+    /// outranks the count: they are CCP, and nobody else can get in.
+    pub fn by_headcount(players: i64) -> ServerState {
+        if players > 0 {
             ServerState::Online
         } else {
             ServerState::Offline
@@ -85,7 +84,7 @@ impl ServerStatus {
 }
 
 /// A cheap handle on the latest status. Clone it into anything that needs to check.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ServerWatch(watch::Receiver<ServerStatus>);
 
 impl ServerWatch {
@@ -138,7 +137,8 @@ pub fn start(pool: PgPool, esi: EsiClient, users: UserHub, every: Duration) -> S
             let _ = tx.send(stored);
         }
         crate::background::spawn_every("server status poll", every, move || {
-            let (pool, esi, users, tx) = (pool.clone(), esi.clone(), users.clone(), tx.clone());
+            let (pool, esi, users, tx) =
+                (pool.clone(), esi.clone(), users.clone(), Arc::clone(&tx));
             async move {
                 // Held back by our own ESI backoff, which says nothing about Tranquility:
                 // keep what we last knew rather than calling it unreachable.
@@ -155,7 +155,7 @@ pub fn start(pool: PgPool, esi: EsiClient, users: UserHub, every: Duration) -> S
                 };
                 let _ = tx.send(status);
                 if changed {
-                    users.broadcast(UserEvent::ServerStatusChanged);
+                    users.broadcast(&UserEvent::ServerStatusChanged);
                 }
                 // Reported last: a status that could not be stored is still the status.
                 saved.map_err(|err| format!("could not store the server status: {err}"))
@@ -169,7 +169,11 @@ async fn poll(esi: &EsiClient) -> Option<ServerStatus> {
     let now = Utc::now();
     Some(match esi.server_status().await {
         Ok(tq) => ServerStatus {
-            state: ServerState::classify(tq.vip, tq.players),
+            state: if tq.vip {
+                ServerState::Vip
+            } else {
+                ServerState::by_headcount(tq.players)
+            },
             players: tq.players,
             server_version: Some(tq.server_version),
             start_time: Some(tq.start_time),
@@ -194,10 +198,12 @@ pub async fn load(pool: &PgPool) -> sqlx::Result<Option<ServerStatus>> {
     .fetch_optional(pool)
     .await?;
     Ok(row.map(|r| ServerStatus {
-        state: if r.reachable {
-            ServerState::classify(r.vip, r.players)
-        } else {
+        state: if !r.reachable {
             ServerState::Unreachable
+        } else if r.vip {
+            ServerState::Vip
+        } else {
+            ServerState::by_headcount(r.players)
         },
         players: r.players,
         server_version: r.server_version,
@@ -234,12 +240,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_reply_is_classified_by_vip_then_by_headcount() {
-        assert_eq!(ServerState::classify(false, 24_000), ServerState::Online);
-        assert_eq!(ServerState::classify(false, 0), ServerState::Offline);
-        // VIP wins even with players on: they are CCP, and nobody else can get in.
-        assert_eq!(ServerState::classify(true, 12), ServerState::Vip);
-        assert_eq!(ServerState::classify(true, 0), ServerState::Vip);
+    fn a_reply_is_classified_by_headcount() {
+        assert_eq!(ServerState::by_headcount(24_000), ServerState::Online);
+        assert_eq!(ServerState::by_headcount(0), ServerState::Offline);
     }
 
     #[test]

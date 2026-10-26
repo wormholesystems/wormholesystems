@@ -18,6 +18,7 @@ const ZARZAKH: i64 = 30100000;
 ///
 /// Around 8,000 systems and 14,000 gates: small enough to hold, expensive enough that
 /// re-reading it per killmail would be the most expensive thing the ingest does.
+#[derive(Debug)]
 pub struct Universe {
     adjacency: HashMap<i64, Vec<i64>>,
 }
@@ -42,7 +43,7 @@ impl Universe {
     }
 
     fn neighbours(&self, id: i64) -> &[i64] {
-        self.adjacency.get(&id).map(Vec::as_slice).unwrap_or(&[])
+        self.adjacency.get(&id).map_or(&[], Vec::as_slice)
     }
 }
 
@@ -154,7 +155,7 @@ impl Search {
         while let Some(at) = stack.pop() {
             let jumps = self.distance[&at];
             let origin = self.origin_of[&at];
-            for next in wormholes.get(&at).map(Vec::as_slice).unwrap_or(&[]) {
+            for next in wormholes.get(&at).map_or(&[][..], Vec::as_slice) {
                 if self.distance.contains_key(next) || self.blocked.contains(next) {
                     continue;
                 }
