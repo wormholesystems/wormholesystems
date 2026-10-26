@@ -208,9 +208,9 @@ async fn an_account_with_characters_left_is_not_removed(pool: PgPool) {
 /// Days left on a session, rounded.
 async fn days_left(pool: &PgPool, session: &str) -> i64 {
     sqlx::query_scalar::<_, f64>(
-        "select extract(epoch from expires_at - now())::float8 / 86400 from sessions where id = $1",
+        "select extract(epoch from expires_at - now())::float8 / 86400 from sessions where id_hash = $1",
     )
-    .bind(session)
+    .bind(wormholesystems::tokens::hash(session))
     .fetch_one(pool)
     .await
     .unwrap()
@@ -219,9 +219,9 @@ async fn days_left(pool: &PgPool, session: &str) -> i64 {
 
 async fn set_days_left(pool: &PgPool, session: &str, days: i64) {
     sqlx::query(
-        "update sessions set expires_at = now() + make_interval(days => $2::int) where id = $1",
+        "update sessions set expires_at = now() + make_interval(days => $2::int) where id_hash = $1",
     )
-    .bind(session)
+    .bind(wormholesystems::tokens::hash(session))
     .bind(days as i32)
     .execute(pool)
     .await
@@ -275,6 +275,33 @@ async fn a_session_in_use_keeps_renewing(pool: PgPool) {
         days_left(&pool, &session).await,
         -1,
         "an expired one is not revived"
+    );
+}
+
+/// The database holds only a hash of the session id, so reading the table does not hand
+/// out cookies: the stored value does not sign anyone in, the cookie value does.
+#[sqlx::test]
+async fn sessions_are_stored_hashed(pool: PgPool) {
+    let user = persist_identity(&pool, &claims(100, "h1"), corp(2001), None, None)
+        .await
+        .unwrap();
+    let session = create_session(&pool, user, 100).await.unwrap();
+
+    let stored: Vec<String> = sqlx::query_scalar("select id_hash from sessions")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, [wormholesystems::tokens::hash(&session)]);
+    assert_ne!(stored[0], session);
+
+    let actor = actor_for_session(&pool, &session).await.unwrap().unwrap();
+    assert_eq!((actor.user_id, actor.character_id), (user, 100));
+    assert!(
+        actor_for_session(&pool, &stored[0])
+            .await
+            .unwrap()
+            .is_none(),
+        "the stored hash is not a session id"
     );
 }
 

@@ -64,7 +64,8 @@ here.
   active within the last 5 minutes are polled.
 
 Sessions live in Postgres (`sessions`): an opaque id in the `ws_session` cookie, the user,
-and the session's active character. A session lasts 400 days since it was last used, the
+and the session's active character. Only the SHA-256 of the id is stored (`id_hash`), like
+personal access tokens, so a copy of the table does not sign anyone in. A session lasts 400 days since it was last used, the
 longest a browser keeps a cookie: the API pushes `expires_at` out again when a session is
 used (at most daily), and the frontend sets the cookie again on each page load while signed
 in. Only signing out, or leaving it alone that long, ends one.

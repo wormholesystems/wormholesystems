@@ -22,7 +22,9 @@ export default async function globalTeardown() {
 			 )`,
 			[[E2E_CHARACTER_ID, ...ownAccounts]],
 		);
-		await db.query('delete from sessions where id = $1', [E2E_SESSION]);
+		await db.query(`delete from sessions where id_hash = encode(sha256($1::text::bytea), 'hex')`, [
+			E2E_SESSION,
+		]);
 		const user = await db.query('select user_id from characters where id = $1', [E2E_CHARACTER_ID]);
 		await db.query('delete from characters where id = $1', [E2E_CHARACTER_ID]);
 		if (user.rows[0]) {
