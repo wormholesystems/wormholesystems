@@ -222,6 +222,11 @@ pub async fn remove_signatures_bulk(
     Ok(Json(()))
 }
 
+/// The catalog is seeded SDE data, so it is built and serialized once per process, like
+/// the routing graph.
+static SIGNATURE_CATALOG_JSON: tokio::sync::OnceCell<axum::body::Bytes> =
+    tokio::sync::OnceCell::const_new();
+
 /// `GET /api/signature-types`: the seeded signature catalog (categories + types with
 /// spawn areas). Reference data, so no actor/role check; cacheable for a day.
 #[utoipa::path(
@@ -233,12 +238,22 @@ pub async fn remove_signatures_bulk(
 )]
 pub async fn signature_catalog(
     State(state): State<AppState>,
-) -> Result<impl axum::response::IntoResponse, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
+    // No types means the catalog is not seeded yet; that answer is served but not kept.
+    super::reference::cached_json(
+        &SIGNATURE_CATALOG_JSON,
+        || build_signature_catalog(&state.db),
+        |catalog: &SignatureCatalog| catalog.types.is_empty(),
+    )
+    .await
+}
+
+async fn build_signature_catalog(db: &sqlx::PgPool) -> Result<SignatureCatalog, ApiError> {
     let categories = sqlx::query_as!(
         SignatureCategoryInfo,
         "select id, name, code from signature_categories order by id",
     )
-    .fetch_all(&state.db)
+    .fetch_all(db)
     .await?;
     let types = sqlx::query!(
         r#"select st.id, st.signature, st.name, st.signature_category_id, st.target_class,
@@ -252,7 +267,7 @@ pub async fn signature_catalog(
            group by st.id, wt.code
            order by st.id"#,
     )
-    .fetch_all(&state.db)
+    .fetch_all(db)
     .await?
     .into_iter()
     .map(|r| SignatureTypeInfo {
@@ -269,8 +284,5 @@ pub async fn signature_catalog(
         signature_strength: r.signature_strength,
     })
     .collect();
-    Ok((
-        [(axum::http::header::CACHE_CONTROL, "public, max-age=86400")],
-        Json(SignatureCatalog { categories, types }),
-    ))
+    Ok(SignatureCatalog { categories, types })
 }

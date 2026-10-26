@@ -4,6 +4,7 @@
 use super::extract::Credentials;
 use axum::Json;
 use axum::extract::{Path, Query, State};
+use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -265,22 +266,52 @@ static ROUTING_GRAPH_JSON: tokio::sync::OnceCell<axum::body::Bytes> =
 )]
 pub async fn routing_graph(
     State(state): State<AppState>,
-) -> Result<impl axum::response::IntoResponse, ApiError> {
-    let body = match ROUTING_GRAPH_JSON.get() {
-        Some(body) => body.clone(),
-        None => {
-            let graph = build_routing_graph(&state.db).await?;
+) -> Result<axum::response::Response, ApiError> {
+    // An empty adjacency means the SDE is not seeded yet. Serving it is fine; pinning it
+    // for the process lifetime would keep the planner empty until a restart, so only a
+    // real graph is cached.
+    cached_json(
+        &ROUTING_GRAPH_JSON,
+        || build_routing_graph(&state.db),
+        |graph| graph.adjacency.is_empty(),
+    )
+    .await
+}
+
+/// Serve seeded reference data that is built and serialized once per process. Cold
+/// requests that race share one build (`get_or_try_init`), so a burst of first loads runs
+/// the queries once. A result that `is_unseeded` is served but not kept, so seeding the
+/// database later does not need a restart.
+pub(super) async fn cached_json<T, F, Fut>(
+    cell: &'static tokio::sync::OnceCell<axum::body::Bytes>,
+    build: F,
+    is_unseeded: impl FnOnce(&T) -> bool,
+) -> Result<axum::response::Response, ApiError>
+where
+    T: Serialize,
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<T, ApiError>>,
+{
+    enum Uncached {
+        Unseeded(axum::body::Bytes),
+        Failed(ApiError),
+    }
+    let body = match cell
+        .get_or_try_init(|| async {
+            let value = build().await.map_err(Uncached::Failed)?;
             let body = axum::body::Bytes::from(
-                serde_json::to_string(&graph).expect("routing graph serializes"),
+                serde_json::to_vec(&value).expect("reference data serializes"),
             );
-            // An empty adjacency means the SDE is not seeded yet. Serving it is fine;
-            // pinning it for the process lifetime would keep the planner empty until
-            // a restart, so only a real graph is cached.
-            if !graph.adjacency.is_empty() {
-                let _ = ROUTING_GRAPH_JSON.set(body.clone());
+            if is_unseeded(&value) {
+                return Err(Uncached::Unseeded(body));
             }
-            body
-        }
+            Ok(body)
+        })
+        .await
+    {
+        Ok(body) => body.clone(),
+        Err(Uncached::Unseeded(body)) => body,
+        Err(Uncached::Failed(err)) => return Err(err),
     };
     Ok((
         [
@@ -288,7 +319,8 @@ pub async fn routing_graph(
             (axum::http::header::CONTENT_TYPE, "application/json"),
         ],
         body,
-    ))
+    )
+        .into_response())
 }
 
 async fn build_routing_graph(db: &sqlx::PgPool) -> Result<RoutingGraph, ApiError> {

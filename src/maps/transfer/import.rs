@@ -78,6 +78,21 @@ pub async fn import_map(
     Ok(summary)
 }
 
+/// Whether the acting character may create a map from a file, so the route can refuse
+/// before it reads the file.
+pub async fn check_may_import_as_new(
+    pool: &PgPool,
+    actor: Actor,
+    creators: &AffiliationAllowlist,
+) -> Result<()> {
+    if !owns_character(pool, actor.user_id, actor.character_id).await?
+        || !crate::maps::map::may_create_map(pool, actor, creators).await?
+    {
+        return Err(MapError::Forbidden);
+    }
+    Ok(())
+}
+
 /// Create a fresh map owned by the acting character and load the payload into it. When the
 /// file carries a routes section, the seeded trade-hub watchlist makes way for the file's
 /// list. An explicit `name` wins over the file's. Creating a map this way is limited to
@@ -89,12 +104,7 @@ pub async fn import_map_as_new(
     parsed: ParsedExport,
     name: Option<String>,
 ) -> Result<Map> {
-    if !owns_character(pool, actor.user_id, actor.character_id).await? {
-        return Err(MapError::Forbidden);
-    }
-    if !crate::maps::map::may_create_map(pool, actor, creators).await? {
-        return Err(MapError::Forbidden);
-    }
+    check_may_import_as_new(pool, actor, creators).await?;
     let name = name
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
