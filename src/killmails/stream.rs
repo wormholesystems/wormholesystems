@@ -1,5 +1,6 @@
 //! The live feed: zKillboard's R2Z2 stream, one killmail at a time.
 
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::time::{Duration, Instant};
 
@@ -320,10 +321,16 @@ async fn ingest(
         return Ok(false); // not there: not yet, or no longer
     }
     let body = res.error_for_status()?.text().await?;
-    let Ok(km) = serde_json::from_str::<R2Z2Killmail>(&body) else {
-        // Empty/garbage frame: advance past it.
-        advance(pool, next).await?;
-        return Ok(true);
+    let km = match serde_json::from_str::<R2Z2Killmail>(&body) {
+        Ok(km) => km,
+        Err(err) => {
+            // Empty/garbage frame: advance past it, but say so. A change upstream would
+            // otherwise skip every kill without a word.
+            metrics::counter!("ws_killmail_ingest_unparsed_total").increment(1);
+            tracing::warn!("killmail ingest: skipping {next}, the frame does not parse: {err}");
+            advance(pool, next).await?;
+            return Ok(true);
+        }
     };
 
     let solar_system_id = km.esi.solar_system_id.unwrap_or(0);
@@ -389,10 +396,11 @@ async fn alert_loop(
         let batch = std::mem::replace(&mut pending, Vec::with_capacity(ALERT_BATCH));
         let (pool, alerts) = (pool.clone(), alerts.clone());
         crate::background::guarded("killmail alerts", move || async move {
-            let mut kills = Vec::with_capacity(batch.len());
-            for p in batch {
-                kills.push(kill_for(&pool, p.killmail_id, p.solar_system_id, &p.detail).await);
+            // Most of the time nobody watches for kills, and naming them is wasted work.
+            if !alerts.watches_killmails(&pool).await {
+                return;
             }
+            let kills = kills_for(&pool, &batch).await;
             let out = alerts.killmails(&pool, &kills).await;
             alerts.enqueue(&pool, out).await;
         })
@@ -400,58 +408,82 @@ async fn alert_loop(
     }
 }
 
-/// A kill as the alerts read it. Names come from what is already stored, since "Someone
-/// lost a Loki" now beats a complete message a minute later.
-async fn kill_for(
-    pool: &PgPool,
-    killmail_id: i64,
-    solar_system_id: i64,
-    detail: &Detail,
-) -> crate::alerts::killmail::Kill {
+/// The batch as the alerts read it. Names come from what is already stored, since "Someone
+/// lost a Loki" now beats a complete message a minute later. One query names the whole
+/// batch.
+async fn kills_for(pool: &PgPool, batch: &[Pending]) -> Vec<crate::alerts::killmail::Kill> {
     use crate::alerts::filters::Candidates;
-    let named = sqlx::query!(
-        r#"select vc.name as "victim_name?", vt.name as "victim_ship?",
-                  fc.name as "attacker_name?", vt.group_id as "victim_ship_group?",
-                  ft.group_id as "attacker_ship_group?"
-           from (select 1) as one
-           left join characters vc on vc.id = $1
-           left join characters fc on fc.id = $2
-           left join types vt on vt.id = $3
-           left join types ft on ft.id = $4"#,
-        detail.victim_character_id,
-        detail.final_blow_character_id,
-        detail.victim_ship_type_id,
-        detail.final_blow_ship_type_id,
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-
-    crate::alerts::killmail::Kill {
-        id: killmail_id,
-        solar_system_id,
-        candidates: Candidates {
-            victim_character: detail.victim_character_id,
-            victim_corporation: detail.victim_corporation_id,
-            victim_alliance: detail.victim_alliance_id,
-            victim_ship_type: detail.victim_ship_type_id,
-            victim_ship_group: named.as_ref().and_then(|n| n.victim_ship_group),
-            attacker_character: detail.final_blow_character_id,
-            attacker_corporation: detail.final_blow_corporation_id,
-            attacker_alliance: detail.final_blow_alliance_id,
-            attacker_ship_type: detail.final_blow_ship_type_id,
-            attacker_ship_group: named.as_ref().and_then(|n| n.attacker_ship_group),
-        },
-        victim_name: named.as_ref().and_then(|n| n.victim_name.clone()),
-        victim_ship: named.as_ref().and_then(|n| n.victim_ship.clone()),
-        victim_ship_type_id: detail.victim_ship_type_id,
-        attacker_name: named.as_ref().and_then(|n| n.attacker_name.clone()),
-        total_value: detail.total_value,
-        attacker_count: detail.attacker_count,
-        is_solo: detail.is_solo,
-        is_npc: detail.is_npc,
+    let (mut characters, mut types) = (Vec::new(), Vec::new());
+    for p in batch {
+        characters.extend([
+            p.detail.victim_character_id,
+            p.detail.final_blow_character_id,
+        ]);
+        types.extend([
+            p.detail.victim_ship_type_id,
+            p.detail.final_blow_ship_type_id,
+        ]);
     }
+    let characters: Vec<i64> = characters.into_iter().flatten().collect();
+    let types: Vec<i64> = types.into_iter().flatten().collect();
+    let rows = sqlx::query!(
+        r#"select false as "is_type!", id as "id!", name as "name!", null::bigint as group_id
+           from characters where id = any($1)
+           union all
+           select true, id, name, group_id from types where id = any($2)"#,
+        &characters,
+        &types,
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_else(|err| {
+        tracing::warn!("killmail alerts: could not name the kills: {err}");
+        Vec::new()
+    });
+    let mut names = HashMap::new();
+    let mut ships = HashMap::new();
+    for row in rows {
+        if row.is_type {
+            ships.insert(row.id, (row.name, row.group_id));
+        } else {
+            names.insert(row.id, row.name);
+        }
+    }
+    let name = |id: Option<i64>| id.and_then(|id| names.get(&id).cloned());
+    let ship = |id: Option<i64>| id.and_then(|id| ships.get(&id));
+
+    batch
+        .iter()
+        .map(|p| {
+            let detail = &p.detail;
+            let victim_ship = ship(detail.victim_ship_type_id);
+            let attacker_ship = ship(detail.final_blow_ship_type_id);
+            crate::alerts::killmail::Kill {
+                id: p.killmail_id,
+                solar_system_id: p.solar_system_id,
+                candidates: Candidates {
+                    victim_character: detail.victim_character_id,
+                    victim_corporation: detail.victim_corporation_id,
+                    victim_alliance: detail.victim_alliance_id,
+                    victim_ship_type: detail.victim_ship_type_id,
+                    victim_ship_group: victim_ship.and_then(|s| s.1),
+                    attacker_character: detail.final_blow_character_id,
+                    attacker_corporation: detail.final_blow_corporation_id,
+                    attacker_alliance: detail.final_blow_alliance_id,
+                    attacker_ship_type: detail.final_blow_ship_type_id,
+                    attacker_ship_group: attacker_ship.and_then(|s| s.1),
+                },
+                victim_name: name(detail.victim_character_id),
+                victim_ship: victim_ship.map(|s| s.0.clone()),
+                victim_ship_type_id: detail.victim_ship_type_id,
+                attacker_name: name(detail.final_blow_character_id),
+                total_value: detail.total_value,
+                attacker_count: detail.attacker_count,
+                is_solo: detail.is_solo,
+                is_npc: detail.is_npc,
+            }
+        })
+        .collect()
 }
 
 /// Tell every map holding this system that something died in it. The event carries no

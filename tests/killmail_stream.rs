@@ -118,6 +118,11 @@ async fn kills_are_stored_back_to_back_and_alerted_on(pool: PgPool) {
     .await
     .unwrap();
 
+    sqlx::query!("insert into characters (id, name) values (1, 'Dead Pilot')")
+        .execute(&pool)
+        .await
+        .unwrap();
+
     let zkb = serve(Router::new().route("/ephemeral/{name}", get(frame))).await;
     let config = wormholesystems::config::KillmailConfig {
         listen: true,
@@ -160,6 +165,13 @@ async fn kills_are_stored_back_to_back_and_alerted_on(pool: PgPool) {
     assert!(
         wait_for(async || inbox.lock().unwrap().len() == 2).await,
         "one message per kill"
+    );
+    let messages = inbox.lock().unwrap().clone();
+    assert!(
+        messages
+            .iter()
+            .all(|m| m.to_string().contains("Dead Pilot")),
+        "the victim is named from what is stored: {messages:?}"
     );
 }
 
