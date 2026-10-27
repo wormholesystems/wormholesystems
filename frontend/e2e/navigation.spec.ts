@@ -264,8 +264,14 @@ test('the pickers suggest systems already in play, before anything is typed', as
 	await page.getByTestId('system-picker-origin').click();
 	const suggestion = page.getByTestId('picker-suggestion').filter({ hasText: 'J122515' });
 	// A chip, not a result row: it says why it is offered on hover rather than in a column.
-	await suggestion.hover();
-	await expect(page.locator('[data-slot="tooltip-content"]')).toHaveText('Selected system');
+	// Hovered again until it shows: the picker is still settling as it opens, and a pointer
+	// that arrives on a chip about to be redrawn never gets the tooltip.
+	await expect(async () => {
+		await suggestion.hover();
+		await expect(page.locator('[data-slot="tooltip-content"]')).toHaveText('Selected system', {
+			timeout: 1_000,
+		});
+	}).toPass({ timeout: 10_000 });
 	await suggestion.click();
 	await expect(page.getByTestId('system-picker-origin')).toContainText('J122515');
 
