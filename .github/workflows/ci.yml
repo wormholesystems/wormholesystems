@@ -1,12 +1,10 @@
 name: CI
 
-# Three jobs, three questions:
+# Four jobs, four questions:
 #   rust      does the backend build, lint and pass its tests against a real Postgres
 #   frontend  does the frontend type-check and pass its unit tests
+#   e2e       does the whole stack pass the Playwright suite, on its own seeded database
 #   offline   can the release image compile without a database
-#
-# The end-to-end suite is not here: it needs the whole stack plus a seeded universe, which
-# means downloading and loading the SDE. Run it locally with `npm run test:e2e`.
 on:
   push:
     branches: ["**"]
@@ -87,6 +85,92 @@ jobs:
 
       - name: Generated OpenAPI document is committed
         run: git diff --exit-code docs/openapi.json
+
+  e2e:
+    name: end-to-end
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: wormholesystems
+          POSTGRES_PASSWORD: wormholesystems
+          POSTGRES_DB: wormholesystems
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U wormholesystems"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      SQLX_OFFLINE: "true"
+      WS_CONTACT_NAME: "WormholeSystems CI"
+      WS_CONTACT_EMAIL: "ci@wormhole.systems"
+      # The suite makes its own `wormholesystems_e2e` next to this one, and the API seeds
+      # it from the SDE on its first boot.
+      DATABASE_URL: postgres://wormholesystems:wormholesystems@localhost:5432/wormholesystems
+      # The specs create their identities in the database and ESI is stubbed, so nobody
+      # signs in through EVE; the API only needs these to start.
+      EVE_CLIENT_ID: ci
+      EVE_CLIENT_SECRET: ci
+      EVE_REDIRECT_URI: http://localhost:5173/auth/callback
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # The same SDE cache as the rust job: the API seeds the e2e database from it.
+      - name: Which SDE build is current
+        id: sde
+        run: |
+          build=$(curl -fsS --max-time 20 https://developers.eveonline.com/static-data/tranquility/latest.jsonl \
+            | sed -n 's/.*"buildNumber": *\([0-9]*\).*/\1/p')
+          echo "build=${build:-unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the SDE
+        id: sde-cache
+        uses: actions/cache@v4
+        with:
+          path: data/sde
+          key: sde-${{ steps.sde.outputs.build }}
+
+      - name: Fetch the SDE
+        if: steps.sde-cache.outputs.cache-hit != 'true'
+        run: cargo run --locked -- sde-fetch
+
+      # Built ahead, so Playwright's wait for the API is the boot and the seed, not the
+      # compile.
+      - name: Build the API
+        run: cargo build --locked
+
+      - name: Install
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: End-to-end tests
+        working-directory: frontend
+        run: npx playwright test
+
+      - name: Keep the report of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+          retention-days: 7
 
   frontend:
     name: frontend
