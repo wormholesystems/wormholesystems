@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 # sqlx 0.9 (and its CLI) require rustc >= 1.94.
 rust-version = "1.94"
+# The integration tests are one binary (`tests/it`), not one per file; see `[[test]]` below.
+autotests = false
 
 # `wsctl` is a workspace member rather than another binary here: it pulls in a prompt
 # toolkit the server has no use for, and `default-members` keeps it out of the image build.
@@ -160,3 +162,26 @@ tower = { version = "0.5", features = ["util"] }
 # A real WebSocket client, for the tests that drive the map socket over a socket.
 tokio-tungstenite = "0.29"
 futures-util = "0.3"
+
+# One binary for the integration tests: each file under `tests/` was its own crate, and each
+# linked the whole server, about 400 MB apiece. The two below need a process of their own,
+# since each installs something process-wide (the metrics recorder, the tracing subscriber).
+[[test]]
+name = "it"
+path = "tests/it/main.rs"
+
+[[test]]
+name = "metrics"
+path = "tests/metrics.rs"
+
+[[test]]
+name = "otel"
+path = "tests/otel.rs"
+
+# Dev and test builds keep line tables (backtraces still name the line) and drop the rest of
+# the debug info, most of what every test binary weighed. Dependencies keep none.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

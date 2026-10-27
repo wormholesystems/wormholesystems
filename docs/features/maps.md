@@ -472,11 +472,11 @@ resulting rows.
 The tests are split by area, each its own integration-test binary, with shared fixtures
 in `tests/common/`:
 
-- `tests/maps_map.rs` — create / update / delete / list / get
-- `tests/maps_access.rs` — grant / change role / revoke + the owner invariant
-- `tests/maps_solar_system.rs` — placing / moving / removing / aliasing systems
-- `tests/maps_connection.rs` — connecting / disconnecting + marking connection state
-- `tests/maps_signatures.rs` — signature CRUD, linking, and the connection↔signature sync
+- `tests/it/maps_map.rs` — create / update / delete / list / get
+- `tests/it/maps_access.rs` — grant / change role / revoke + the owner invariant
+- `tests/it/maps_solar_system.rs` — placing / moving / removing / aliasing systems
+- `tests/it/maps_connection.rs` — connecting / disconnecting + marking connection state
+- `tests/it/maps_signatures.rs` — signature CRUD, linking, and the connection↔signature sync
 
 Coverage targets, per action: the **happy path** asserting the exact effect (return-value
 fields *and* the resulting rows match the inputs), each **authorization** boundary (role

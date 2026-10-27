@@ -1,0 +1,934 @@
+//! Solar systems: placing / moving / removing / aliasing systems on a map.
+
+use crate::common;
+
+use common::map::place_at;
+use common::{SYS_A, SYS_B, SYS_C, member_with_role, world};
+use sqlx::PgPool;
+use wormholesystems::maps::history::{MapIdBody, redo, undo};
+use wormholesystems::maps::solar_system::{
+    AddSystem, ClearMap, MoveSystem, MoveSystems, RemoveSystem, RemoveSystems, SetAlias, SetHome,
+    SetNotes, SetOccupier, SetPinned, SetRally, SetStatus, SystemMove, add_system, clear_map,
+    move_system, move_systems, remove_system, remove_systems, set_alias, set_home, set_notes,
+    set_occupier, set_pinned, set_rally, set_status,
+};
+use wormholesystems::maps::{MapError, Role, SystemStatus};
+
+#[sqlx::test]
+async fn add_system_returns_fields_and_persists(pool: PgPool) {
+    let w = world(&pool).await;
+    let viewer = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Viewer).await;
+
+    // A viewer can't edit the graph.
+    assert!(matches!(
+        add_system(
+            &pool,
+            viewer,
+            AddSystem {
+                map_id: w.map_id,
+                solar_system_id: SYS_A,
+                x: 0.0,
+                y: 0.0,
+                alias: None
+            }
+        )
+        .await,
+        Err(MapError::Forbidden),
+    ));
+
+    let placed = add_system(
+        &pool,
+        w.owner,
+        AddSystem {
+            map_id: w.map_id,
+            solar_system_id: SYS_A,
+            x: 1.5,
+            y: -2.5,
+            alias: Some("Staging".into()),
+        },
+    )
+    .await
+    .unwrap();
+    // Return value reflects the inputs exactly.
+    assert_eq!(placed.map_id, w.map_id);
+    assert_eq!(placed.solar_system_id, Some(SYS_A));
+    assert_eq!((placed.position_x, placed.position_y), (1.5, -2.5));
+    assert_eq!(placed.alias.as_deref(), Some("Staging"));
+    // And the row matches.
+    let (sid, x, y, alias): (i64, f64, f64, Option<String>) = sqlx::query_as(
+        "select solar_system_id, position_x, position_y, alias from map_solar_systems where id = $1",
+    )
+    .bind(placed.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (sid, x, y, alias.as_deref()),
+        (SYS_A, 1.5, -2.5, Some("Staging"))
+    );
+
+    // Duplicate placement → Conflict.
+    assert!(matches!(
+        add_system(
+            &pool,
+            w.owner,
+            AddSystem {
+                map_id: w.map_id,
+                solar_system_id: SYS_A,
+                x: 5.0,
+                y: 5.0,
+                alias: None
+            }
+        )
+        .await,
+        Err(MapError::Conflict(_)),
+    ));
+    // Unknown system id → Validation.
+    assert!(matches!(
+        add_system(
+            &pool,
+            w.owner,
+            AddSystem {
+                map_id: w.map_id,
+                solar_system_id: 88888888,
+                x: 0.0,
+                y: 0.0,
+                alias: None
+            }
+        )
+        .await,
+        Err(MapError::Validation(_)),
+    ));
+}
+
+#[sqlx::test]
+async fn remove_system_keeps_details(pool: PgPool) {
+    let w = world(&pool).await;
+    let placed = add_system(
+        &pool,
+        w.owner,
+        AddSystem {
+            map_id: w.map_id,
+            solar_system_id: SYS_A,
+            x: 0.0,
+            y: 0.0,
+            alias: None,
+        },
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into map_solar_system_details (map_id, solar_system_id, status) values ($1, $2, 'hostile')",
+    )
+    .bind(w.map_id)
+    .bind(SYS_A)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    remove_system(
+        &pool,
+        w.owner,
+        RemoveSystem {
+            map_id: w.map_id,
+            map_solar_system_id: placed.id,
+        },
+    )
+    .await
+    .unwrap();
+
+    let placements: i64 =
+        sqlx::query_scalar("select count(*) from map_solar_systems where map_id = $1")
+            .bind(w.map_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(placements, 0);
+    let details: i64 = sqlx::query_scalar(
+        "select count(*) from map_solar_system_details where map_id = $1 and solar_system_id = $2",
+    )
+    .bind(w.map_id)
+    .bind(SYS_A)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(details, 1, "details should survive system removal");
+
+    // A placement not on this map → NotFound.
+    assert!(matches!(
+        remove_system(
+            &pool,
+            w.owner,
+            RemoveSystem {
+                map_id: w.map_id,
+                map_solar_system_id: 4242
+            }
+        )
+        .await,
+        Err(MapError::NotFound),
+    ));
+}
+
+#[sqlx::test]
+async fn move_and_alias_update_the_row(pool: PgPool) {
+    let w = world(&pool).await;
+    let placed = add_system(
+        &pool,
+        w.owner,
+        AddSystem {
+            map_id: w.map_id,
+            solar_system_id: SYS_A,
+            x: 0.0,
+            y: 0.0,
+            alias: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    move_system(
+        &pool,
+        w.owner,
+        MoveSystem {
+            map_id: w.map_id,
+            map_solar_system_id: placed.id,
+            x: 3.0,
+            y: 4.0,
+        },
+    )
+    .await
+    .unwrap();
+    set_alias(
+        &pool,
+        w.owner,
+        SetAlias {
+            map_id: w.map_id,
+            map_solar_system_id: placed.id,
+            alias: Some("Home".into()),
+        },
+    )
+    .await
+    .unwrap();
+
+    let (x, y, alias): (f64, f64, Option<String>) =
+        sqlx::query_as("select position_x, position_y, alias from map_solar_systems where id = $1")
+            .bind(placed.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!((x, y), (3.0, 4.0));
+    assert_eq!(alias.as_deref(), Some("Home"));
+
+    // Clearing the alias.
+    set_alias(
+        &pool,
+        w.owner,
+        SetAlias {
+            map_id: w.map_id,
+            map_solar_system_id: placed.id,
+            alias: None,
+        },
+    )
+    .await
+    .unwrap();
+    let alias: Option<String> =
+        sqlx::query_scalar("select alias from map_solar_systems where id = $1")
+            .bind(placed.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(alias, None);
+
+    // Unknown placement → NotFound.
+    assert!(matches!(
+        move_system(
+            &pool,
+            w.owner,
+            MoveSystem {
+                map_id: w.map_id,
+                map_solar_system_id: 4242,
+                x: 1.0,
+                y: 1.0
+            }
+        )
+        .await,
+        Err(MapError::NotFound),
+    ));
+}
+
+/// What "pinned" and "home" protect, exactly.
+///
+/// Pinned means the system does not move and does not get deleted. Home means it does not
+/// get deleted, but it can still be dragged around. Neither is an error to try: a marquee
+/// across the chain is the same gesture as selecting one system, and refusing the whole
+/// delete because the box happened to contain the home system would punish the gesture.
+#[sqlx::test]
+async fn pinned_and_home_systems_are_passed_over_rather_than_refused(pool: PgPool) {
+    let w = world(&pool).await;
+    let home = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
+    let pinned = place_at(&pool, w.owner, w.map_id, SYS_B, 200.0).await;
+    let ordinary = place_at(&pool, w.owner, w.map_id, SYS_C, 400.0).await;
+    mark_home(&pool, w.owner, w.map_id, home).await;
+    pin(&pool, w.owner, w.map_id, pinned).await;
+
+    // A selection spanning all three takes only the one that is not protected, and says so
+    // by succeeding rather than by erroring.
+    let removed = remove_systems(
+        &pool,
+        w.owner,
+        RemoveSystems {
+            map_id: w.map_id,
+            map_solar_system_ids: vec![home, pinned, ordinary],
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(removed, 1);
+    assert_eq!(placed_ids(&pool, w.owner, w.map_id).await.len(), 2);
+
+    // Selecting only protected systems is a quiet no-op, not a failure.
+    let removed = remove_systems(
+        &pool,
+        w.owner,
+        RemoveSystems {
+            map_id: w.map_id,
+            map_solar_system_ids: vec![home, pinned],
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(removed, 0);
+    assert_eq!(placed_ids(&pool, w.owner, w.map_id).await.len(), 2);
+
+    // Asking for one of them on its own is the same: nothing happens, nothing complains.
+    remove_system(
+        &pool,
+        w.owner,
+        RemoveSystem {
+            map_id: w.map_id,
+            map_solar_system_id: home,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(placed_ids(&pool, w.owner, w.map_id).await.len(), 2);
+}
+
+#[sqlx::test]
+async fn unpinning_gives_the_system_back(pool: PgPool) {
+    let w = world(&pool).await;
+    let pinned = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
+    pin(&pool, w.owner, w.map_id, pinned).await;
+
+    remove_system(
+        &pool,
+        w.owner,
+        RemoveSystem {
+            map_id: w.map_id,
+            map_solar_system_id: pinned,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(placed_ids(&pool, w.owner, w.map_id).await.len(), 1);
+
+    // A guard, not a life sentence.
+    unpin(&pool, w.owner, w.map_id, pinned).await;
+    remove_system(
+        &pool,
+        w.owner,
+        RemoveSystem {
+            map_id: w.map_id,
+            map_solar_system_id: pinned,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        placed_ids(&pool, w.owner, w.map_id).await,
+        Vec::<i64>::new()
+    );
+}
+
+#[sqlx::test]
+async fn a_pinned_system_will_not_move_but_the_home_system_will(pool: PgPool) {
+    let w = world(&pool).await;
+    let home = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
+    let pinned = place_at(&pool, w.owner, w.map_id, SYS_B, 200.0).await;
+    mark_home(&pool, w.owner, w.map_id, home).await;
+    pin(&pool, w.owner, w.map_id, pinned).await;
+
+    // Being home says nothing about moving.
+    move_system(
+        &pool,
+        w.owner,
+        MoveSystem {
+            map_id: w.map_id,
+            map_solar_system_id: home,
+            x: 640.0,
+            y: 80.0,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        position(&pool, w.owner, w.map_id, home).await,
+        (640.0, 80.0)
+    );
+
+    // Pinning does, and the server holds it rather than trusting the client's drag lock.
+    move_system(
+        &pool,
+        w.owner,
+        MoveSystem {
+            map_id: w.map_id,
+            map_solar_system_id: pinned,
+            x: 900.0,
+            y: 900.0,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        position(&pool, w.owner, w.map_id, pinned).await,
+        (200.0, 0.0)
+    );
+
+    // Dragging a multi-selection moves everything in it except the pinned one.
+    move_systems(
+        &pool,
+        w.owner,
+        MoveSystems {
+            map_id: w.map_id,
+            moves: vec![
+                SystemMove {
+                    map_solar_system_id: home,
+                    x: 20.0,
+                    y: 20.0,
+                },
+                SystemMove {
+                    map_solar_system_id: pinned,
+                    x: 20.0,
+                    y: 20.0,
+                },
+            ],
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(position(&pool, w.owner, w.map_id, home).await, (20.0, 20.0));
+    assert_eq!(
+        position(&pool, w.owner, w.map_id, pinned).await,
+        (200.0, 0.0)
+    );
+}
+
+async fn mark_home(pool: &PgPool, actor: wormholesystems::maps::Actor, map_id: i64, id: i64) {
+    set_home(
+        pool,
+        actor,
+        SetHome {
+            map_id,
+            map_solar_system_id: id,
+            value: true,
+        },
+    )
+    .await
+    .expect("set_home");
+}
+
+async fn pin(pool: &PgPool, actor: wormholesystems::maps::Actor, map_id: i64, id: i64) {
+    set_pinned(
+        pool,
+        actor,
+        SetPinned {
+            map_id,
+            map_solar_system_id: id,
+            value: true,
+        },
+    )
+    .await
+    .expect("set_pinned");
+}
+
+async fn unpin(pool: &PgPool, actor: wormholesystems::maps::Actor, map_id: i64, id: i64) {
+    set_pinned(
+        pool,
+        actor,
+        SetPinned {
+            map_id,
+            map_solar_system_id: id,
+            value: false,
+        },
+    )
+    .await
+    .expect("set_pinned");
+}
+
+async fn position(
+    pool: &PgPool,
+    actor: wormholesystems::maps::Actor,
+    map_id: i64,
+    id: i64,
+) -> (f64, f64) {
+    let view = wormholesystems::maps::map::get_map(
+        pool,
+        actor,
+        wormholesystems::maps::map::GetMap { map_id },
+    )
+    .await
+    .expect("get_map");
+    let s = view.systems.iter().find(|s| s.id() == id).expect("placed");
+    s.position()
+}
+
+async fn placed_ids(pool: &PgPool, actor: wormholesystems::maps::Actor, map_id: i64) -> Vec<i64> {
+    wormholesystems::maps::map::get_map(pool, actor, wormholesystems::maps::map::GetMap { map_id })
+        .await
+        .expect("get_map")
+        .systems
+        .iter()
+        .map(wormholesystems::maps::MapSystemView::id)
+        .collect()
+}
+
+/// Home is one-per-map, and undo puts the previous holder back rather than leaving the map
+/// with none.
+#[sqlx::test]
+async fn a_map_has_one_home_and_undo_returns_the_last_one(pool: PgPool) {
+    let w = world(&pool).await;
+    let first = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
+    let second = place_at(&pool, w.owner, w.map_id, SYS_B, 200.0).await;
+
+    mark_home(&pool, w.owner, w.map_id, first).await;
+    mark_home(&pool, w.owner, w.map_id, second).await;
+    assert_eq!(home_of(&pool, w.map_id).await, Some(second));
+
+    undo(&pool, w.owner, MapIdBody { map_id: w.map_id })
+        .await
+        .unwrap();
+    assert_eq!(home_of(&pool, w.map_id).await, Some(first));
+
+    // A rally point is its own mark: setting one leaves the home system alone.
+    rally(&pool, w.owner, w.map_id, second).await.unwrap();
+    assert_eq!(home_of(&pool, w.map_id).await, Some(first));
+}
+
+/// A map holds two rally points, oldest first. A third replaces the oldest, and undo
+/// brings that one back in its old place, so the next eviction still picks it.
+#[sqlx::test]
+async fn a_third_rally_point_replaces_the_oldest_and_undo_brings_it_back(pool: PgPool) {
+    let w = world(&pool).await;
+    let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
+    let b = place_at(&pool, w.owner, w.map_id, SYS_B, 200.0).await;
+    let c = place_at(&pool, w.owner, w.map_id, SYS_C, 400.0).await;
+
+    rally(&pool, w.owner, w.map_id, a).await.unwrap();
+    rally(&pool, w.owner, w.map_id, b).await.unwrap();
+    assert_eq!(rallies_of(&pool, w.map_id).await, vec![a, b]);
+
+    rally(&pool, w.owner, w.map_id, c).await.unwrap();
+    assert_eq!(rallies_of(&pool, w.map_id).await, vec![b, c]);
+
+    undo(&pool, w.owner, MapIdBody { map_id: w.map_id })
+        .await
+        .unwrap();
+    assert_eq!(rallies_of(&pool, w.map_id).await, vec![a, b]);
+    redo(&pool, w.owner, MapIdBody { map_id: w.map_id })
+        .await
+        .unwrap();
+    assert_eq!(rallies_of(&pool, w.map_id).await, vec![b, c]);
+
+    // Setting one that already is a rally point makes it the newest instead of adding it
+    // twice.
+    rally(&pool, w.owner, w.map_id, b).await.unwrap();
+    assert_eq!(rallies_of(&pool, w.map_id).await, vec![c, b]);
+}
+
+/// Clearing a rally point clears only that one, and clearing a system that is not one
+/// changes nothing.
+#[sqlx::test]
+async fn a_rally_point_clears_on_its_own(pool: PgPool) {
+    let w = world(&pool).await;
+    let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
+    let b = place_at(&pool, w.owner, w.map_id, SYS_B, 200.0).await;
+    let c = place_at(&pool, w.owner, w.map_id, SYS_C, 400.0).await;
+    rally(&pool, w.owner, w.map_id, a).await.unwrap();
+    rally(&pool, w.owner, w.map_id, b).await.unwrap();
+
+    unrally(&pool, w.owner, w.map_id, a).await.unwrap();
+    assert_eq!(rallies_of(&pool, w.map_id).await, vec![b]);
+    unrally(&pool, w.owner, w.map_id, c).await.unwrap();
+    assert_eq!(rallies_of(&pool, w.map_id).await, vec![b]);
+
+    undo(&pool, w.owner, MapIdBody { map_id: w.map_id })
+        .await
+        .unwrap();
+    undo(&pool, w.owner, MapIdBody { map_id: w.map_id })
+        .await
+        .unwrap();
+    assert_eq!(rallies_of(&pool, w.map_id).await, vec![a, b]);
+
+    let viewer = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Viewer).await;
+    assert!(matches!(
+        rally(&pool, viewer, w.map_id, c).await,
+        Err(MapError::Forbidden),
+    ));
+    assert!(matches!(
+        unrally(&pool, viewer, w.map_id, a).await,
+        Err(MapError::Forbidden),
+    ));
+    assert_eq!(rallies_of(&pool, w.map_id).await, vec![a, b]);
+}
+
+/// Removing a rally system and undoing it puts it back as old as it was.
+#[sqlx::test]
+async fn a_restored_rally_point_keeps_its_place(pool: PgPool) {
+    let w = world(&pool).await;
+    let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
+    let b = place_at(&pool, w.owner, w.map_id, SYS_B, 200.0).await;
+    let c = place_at(&pool, w.owner, w.map_id, SYS_C, 400.0).await;
+    rally(&pool, w.owner, w.map_id, a).await.unwrap();
+    rally(&pool, w.owner, w.map_id, b).await.unwrap();
+
+    remove_system(
+        &pool,
+        w.owner,
+        RemoveSystem {
+            map_id: w.map_id,
+            map_solar_system_id: a,
+        },
+    )
+    .await
+    .unwrap();
+    undo(&pool, w.owner, MapIdBody { map_id: w.map_id })
+        .await
+        .unwrap();
+    assert_eq!(rallies_of(&pool, w.map_id).await, vec![a, b]);
+
+    rally(&pool, w.owner, w.map_id, c).await.unwrap();
+    assert_eq!(rallies_of(&pool, w.map_id).await, vec![b, c]);
+}
+
+async fn rally(
+    pool: &PgPool,
+    actor: wormholesystems::maps::Actor,
+    map_id: i64,
+    id: i64,
+) -> Result<(), MapError> {
+    set_rally(
+        pool,
+        actor,
+        SetRally {
+            map_id,
+            map_solar_system_id: id,
+            value: true,
+        },
+    )
+    .await
+}
+
+async fn unrally(
+    pool: &PgPool,
+    actor: wormholesystems::maps::Actor,
+    map_id: i64,
+    id: i64,
+) -> Result<(), MapError> {
+    set_rally(
+        pool,
+        actor,
+        SetRally {
+            map_id,
+            map_solar_system_id: id,
+            value: false,
+        },
+    )
+    .await
+}
+
+async fn home_of(pool: &PgPool, map_id: i64) -> Option<i64> {
+    sqlx::query_scalar!(
+        "select id from map_solar_systems where map_id = $1 and is_home",
+        map_id
+    )
+    .fetch_optional(pool)
+    .await
+    .expect("query map_solar_systems")
+}
+
+/// The map's rally points, oldest first.
+async fn rallies_of(pool: &PgPool, map_id: i64) -> Vec<i64> {
+    sqlx::query_scalar!(
+        "select id from map_solar_systems where map_id = $1 and is_rally
+         order by rallied_at, id",
+        map_id
+    )
+    .fetch_all(pool)
+    .await
+    .expect("query map_solar_systems")
+}
+
+/// The intel recorded against a placed system: status, occupier and notes.
+async fn intel_of(pool: &PgPool, map_id: i64) -> Option<(String, Option<String>, Option<String>)> {
+    sqlx::query_as(
+        "select status::text, occupying_group, notes from map_solar_system_details
+         where map_id = $1",
+    )
+    .bind(map_id)
+    .fetch_optional(pool)
+    .await
+    .expect("query map_solar_system_details")
+}
+
+/// Status, occupier and notes share one row, and each write touches its own column only:
+/// setting the notes must not reset a status somebody else set, and undo puts back just
+/// the one it changed.
+#[sqlx::test]
+async fn each_intel_write_sets_its_own_column_and_undoes_alone(pool: PgPool) {
+    let w = world(&pool).await;
+    let id = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
+    let (map_id, map_solar_system_id) = (w.map_id, id);
+
+    set_occupier(
+        &pool,
+        w.owner,
+        SetOccupier {
+            map_id,
+            map_solar_system_id,
+            occupier: Some("Hard Knocks".into()),
+        },
+    )
+    .await
+    .unwrap();
+    let occupied = Some(("unknown".to_string(), Some("Hard Knocks".to_string()), None));
+    assert_eq!(intel_of(&pool, map_id).await, occupied);
+
+    set_status(
+        &pool,
+        w.owner,
+        SetStatus {
+            map_id,
+            map_solar_system_id,
+            status: SystemStatus::Hostile,
+        },
+    )
+    .await
+    .unwrap();
+    set_notes(
+        &pool,
+        w.owner,
+        SetNotes {
+            map_id,
+            map_solar_system_id,
+            notes: Some("rolled at downtime".into()),
+            expected: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        intel_of(&pool, map_id).await,
+        Some((
+            "hostile".to_string(),
+            Some("Hard Knocks".to_string()),
+            Some("rolled at downtime".to_string()),
+        ))
+    );
+
+    let body = MapIdBody { map_id };
+    undo(&pool, w.owner, body.clone()).await.unwrap();
+    undo(&pool, w.owner, body.clone()).await.unwrap();
+    assert_eq!(intel_of(&pool, map_id).await, occupied);
+    redo(&pool, w.owner, body).await.unwrap();
+    assert_eq!(
+        intel_of(&pool, map_id).await,
+        Some(("hostile".to_string(), Some("Hard Knocks".to_string()), None))
+    );
+
+    // Clearing is a write of its own, not a skipped one.
+    set_occupier(
+        &pool,
+        w.owner,
+        SetOccupier {
+            map_id,
+            map_solar_system_id,
+            occupier: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        intel_of(&pool, map_id).await,
+        Some(("hostile".to_string(), None, None))
+    );
+}
+
+/// Two people editing the same notes: the second save names the notes it started from,
+/// which are no longer what is stored, so it is refused instead of overwriting the first.
+/// Undo is not a save from an editor and still walks back through both.
+#[sqlx::test]
+async fn a_note_saved_over_a_newer_one_is_refused(pool: PgPool) {
+    let w = world(&pool).await;
+    let member = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Member).await;
+    let id = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
+    let save = |notes: &str, expected: Option<&str>| SetNotes {
+        map_id: w.map_id,
+        map_solar_system_id: id,
+        notes: Some(notes.into()),
+        expected: Some(expected.map(Into::into)),
+    };
+    let notes = async || intel_of(&pool, w.map_id).await.and_then(|(_, _, n)| n);
+
+    // Both opened the editor on an empty note; the owner saves first.
+    set_notes(&pool, w.owner, save("static rolled", None))
+        .await
+        .unwrap();
+    assert!(matches!(
+        set_notes(&pool, member, save("frig hole", None)).await,
+        Err(MapError::Conflict(_)),
+    ));
+    assert_eq!(notes().await.as_deref(), Some("static rolled"));
+
+    // Having seen theirs, the member writes over it on purpose.
+    set_notes(&pool, member, save("frig hole", Some("static rolled")))
+        .await
+        .unwrap();
+    assert_eq!(notes().await.as_deref(), Some("frig hole"));
+
+    // The stored inverse carries no expectation, so undo cannot trip over its own check.
+    let inverse: serde_json::Value = sqlx::query_scalar!(
+        r#"select inverse as "inverse!" from map_events where map_id = $1
+           order by id desc limit 1"#,
+        w.map_id,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(inverse.get("expected").is_none(), "{inverse}");
+
+    let body = MapIdBody { map_id: w.map_id };
+    undo(&pool, w.owner, body.clone()).await.unwrap();
+    assert_eq!(notes().await.as_deref(), Some("static rolled"));
+    undo(&pool, w.owner, body.clone()).await.unwrap();
+    assert_eq!(notes().await, None);
+    redo(&pool, w.owner, body.clone()).await.unwrap();
+    redo(&pool, w.owner, body).await.unwrap();
+    assert_eq!(notes().await.as_deref(), Some("frig hole"));
+}
+
+/// On the wire, `"expected": null` means "I saw no notes" and is checked; only a missing
+/// field skips the check.
+#[test]
+fn an_expected_null_note_is_still_checked() {
+    let body = |extra: serde_json::Value| {
+        let mut cmd = serde_json::json!({ "map_id": 1, "map_solar_system_id": 2, "notes": "x" });
+        cmd.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value::<SetNotes>(cmd).unwrap().expected
+    };
+    assert_eq!(body(serde_json::json!({ "expected": null })), Some(None));
+    assert_eq!(
+        body(serde_json::json!({ "expected": "seen" })),
+        Some(Some("seen".into()))
+    );
+    assert_eq!(body(serde_json::json!({})), None);
+}
+
+/// Clearing deletes the placements it snapshotted and nothing else. One placed by somebody
+/// else between the clear's read and its delete is not in the snapshot, so taking it too
+/// would be a removal that undo cannot put back.
+#[sqlx::test]
+async fn clearing_leaves_a_placement_it_did_not_snapshot(pool: PgPool) {
+    let w = world(&pool).await;
+    place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
+    place_at(&pool, w.owner, w.map_id, SYS_B, 100.0).await;
+
+    // Somebody else's placement, not committed yet. Their lock on the connections stalls
+    // the clear's snapshot after it has read which placements to take.
+    let mut other = pool.begin().await.unwrap();
+    let late: i64 = sqlx::query_scalar(
+        "insert into map_solar_systems (map_id, solar_system_id, position_x, position_y)
+         values ($1, $2, 200, 0) returning id",
+    )
+    .bind(w.map_id)
+    .bind(SYS_C)
+    .fetch_one(&mut *other)
+    .await
+    .unwrap();
+    sqlx::query("lock table map_connections in access exclusive mode")
+        .execute(&mut *other)
+        .await
+        .unwrap();
+
+    let clearing = tokio::spawn({
+        let pool = pool.clone();
+        let (owner, map_id) = (w.owner, w.map_id);
+        async move { clear_map(&pool, owner, ClearMap { map_id }).await }
+    });
+    // Wait until the clear is the one waiting on the lock.
+    loop {
+        let waiting: i64 = sqlx::query_scalar(
+            "select count(*) from pg_stat_activity
+             where datname = current_database() and wait_event_type = 'Lock'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        if waiting > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    other.commit().await.unwrap();
+
+    assert_eq!(clearing.await.unwrap().unwrap(), 2);
+    assert_eq!(placed_ids(&pool, w.owner, w.map_id).await, vec![late]);
+}
+
+/// A multi-drag moves every system it names in one write, the last position winning for a
+/// system named twice, and undo and redo move them all back and forth together.
+#[sqlx::test]
+async fn moving_several_systems_undoes_and_redoes_together(pool: PgPool) {
+    let w = world(&pool).await;
+    let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
+    let b = place_at(&pool, w.owner, w.map_id, SYS_B, 100.0).await;
+    let c = place_at(&pool, w.owner, w.map_id, SYS_C, 200.0).await;
+    let to = |id, x, y| SystemMove {
+        map_solar_system_id: id,
+        x,
+        y,
+    };
+    let positions = async || {
+        let mut out = Vec::new();
+        for id in [a, b, c] {
+            out.push(position(&pool, w.owner, w.map_id, id).await);
+        }
+        out
+    };
+
+    move_systems(
+        &pool,
+        w.owner,
+        MoveSystems {
+            map_id: w.map_id,
+            moves: vec![
+                to(c, 1.0, 1.0),
+                to(a, 10.0, 20.0),
+                to(b, 30.0, 40.0),
+                to(c, 50.0, 60.0),
+            ],
+        },
+    )
+    .await
+    .unwrap();
+    let moved = vec![(10.0, 20.0), (30.0, 40.0), (50.0, 60.0)];
+    let start = vec![(0.0, 0.0), (100.0, 0.0), (200.0, 0.0)];
+    assert_eq!(positions().await, moved);
+
+    let body = MapIdBody { map_id: w.map_id };
+    undo(&pool, w.owner, body.clone()).await.unwrap();
+    assert_eq!(positions().await, start);
+    redo(&pool, w.owner, body).await.unwrap();
+    assert_eq!(positions().await, moved);
+}
