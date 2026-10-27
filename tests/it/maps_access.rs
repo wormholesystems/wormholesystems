@@ -5,7 +5,6 @@ use crate::common;
 
 use chrono::{Duration, Utc};
 use common::{add_character, member_with_role, new_user, world};
-use sqlx::PgPool;
 use wormholesystems::maps::access::reader_for;
 use wormholesystems::maps::access::{
     RevokeAccess, SetAccess, TransferOwnership, effective_role, list_access, revoke_access,
@@ -17,8 +16,9 @@ use wormholesystems::maps::map::{
 };
 use wormholesystems::maps::{Actor, MapError, Role, SubjectType};
 
-#[sqlx::test]
-async fn set_access_grants_and_then_changes_role_in_place(pool: PgPool) {
+#[tokio::test]
+async fn set_access_grants_and_then_changes_role_in_place() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let user = new_user(&pool).await;
     add_character(&pool, user, 1002, 2002, None).await;
@@ -69,8 +69,9 @@ async fn set_access_grants_and_then_changes_role_in_place(pool: PgPool) {
     assert_eq!(rows, 1, "re-grant must upsert, not duplicate");
 }
 
-#[sqlx::test]
-async fn grant_respects_privilege_ceiling(pool: PgPool) {
+#[tokio::test]
+async fn grant_respects_privilege_ceiling() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let manager = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Manager).await;
 
@@ -106,8 +107,9 @@ async fn grant_respects_privilege_ceiling(pool: PgPool) {
     .unwrap();
 }
 
-#[sqlx::test]
-async fn owner_invariant_blocks_downgrade_and_revoke(pool: PgPool) {
+#[tokio::test]
+async fn owner_invariant_blocks_downgrade_and_revoke() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
 
     // The sole owner cannot be downgraded...
@@ -148,8 +150,9 @@ async fn owner_invariant_blocks_downgrade_and_revoke(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn revoke_removes_grant(pool: PgPool) {
+#[tokio::test]
+async fn revoke_removes_grant() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let member = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Member).await;
     assert_eq!(
@@ -191,8 +194,9 @@ async fn revoke_removes_grant(pool: PgPool) {
     ));
 }
 
-#[sqlx::test]
-async fn access_via_corporation_grant(pool: PgPool) {
+#[tokio::test]
+async fn access_via_corporation_grant() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
 
     // Grant a corporation; a character in that corp gains access, by corp not by id.
@@ -226,9 +230,10 @@ async fn access_via_corporation_grant(pool: PgPool) {
 /// act as the *active* character. A user can therefore read a map through one character
 /// while the one they are flying is not covered by any grant, which is what the map's
 /// limited-access warning is about.
-#[sqlx::test]
-async fn map_view_flags_an_active_character_without_its_own_grant(pool: PgPool) {
+#[tokio::test]
+async fn map_view_flags_an_active_character_without_its_own_grant() {
     use wormholesystems::maps::Actor;
+    let (pool, _db) = common::db::fresh().await;
 
     let w = world(&pool).await;
     let user = new_user(&pool).await;
@@ -271,8 +276,9 @@ async fn map_view_flags_an_active_character_without_its_own_grant(pool: PgPool) 
     assert!(!view.character_has_access);
 }
 
-#[sqlx::test]
-async fn a_grant_can_be_given_a_date_it_runs_out_on(pool: PgPool) {
+#[tokio::test]
+async fn a_grant_can_be_given_a_date_it_runs_out_on() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let scout = new_user(&pool).await;
     add_character(&pool, scout, 1500, 2001, None).await;
@@ -336,8 +342,9 @@ async fn a_grant_can_be_given_a_date_it_runs_out_on(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn ownership_is_handed_on_rather_than_granted(pool: PgPool) {
+#[tokio::test]
+async fn ownership_is_handed_on_rather_than_granted() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let mate = member_with_role(&pool, w.owner, w.map_id, 1010, 2001, Role::Manager).await;
 
@@ -411,8 +418,9 @@ async fn ownership_is_handed_on_rather_than_granted(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn a_shared_map_can_be_read_by_somebody_with_no_account(pool: PgPool) {
+#[tokio::test]
+async fn a_shared_map_can_be_read_by_somebody_with_no_account() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let stranger = new_user(&pool).await;
     add_character(&pool, stranger, 1600, 2001, None).await;
@@ -488,8 +496,9 @@ async fn a_shared_map_can_be_read_by_somebody_with_no_account(pool: PgPool) {
 /// A grant that has run out stops counting everywhere, not just in `effective_role`. The
 /// map list, the presence panel and the Discord picker each expanded the subject union
 /// themselves and forgot the filter, so an expired scout kept the map in his list.
-#[sqlx::test]
-async fn an_expired_grant_is_gone_from_every_answer(pool: PgPool) {
+#[tokio::test]
+async fn an_expired_grant_is_gone_from_every_answer() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let scout = new_user(&pool).await;
     add_character(&pool, scout, 1500, 2500, None).await;

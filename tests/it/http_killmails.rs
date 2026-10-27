@@ -38,8 +38,9 @@ async fn listed(pool: &PgPool, cookie: &str, path: &str) -> Vec<i64> {
 
 /// Following the selection shows that one system, and nothing while no system on the map
 /// is selected: neither an empty selection nor a system off the map falls back to all.
-#[sqlx::test]
-async fn the_selected_system_filter_shows_only_that_system(pool: PgPool) {
+#[tokio::test]
+async fn the_selected_system_filter_shows_only_that_system() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     for system in [SYS_A, SYS_B] {
         add_system(

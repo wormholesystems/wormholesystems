@@ -59,8 +59,9 @@ fn skyhook(planet_id: i64, system: i64, starts_in: Duration) -> RaidableSkyhook 
     }
 }
 
-#[sqlx::test]
-async fn a_sync_mirrors_esi_rather_than_accumulating(pool: PgPool) {
+#[tokio::test]
+async fn a_sync_mirrors_esi_rather_than_accumulating() {
+    let (pool, _db) = common::db::fresh().await;
     seed_universe(&pool).await;
     seed_planet(&pool, 40000001, SYS_A, 3, "Planet (Lava)").await;
     seed_planet(&pool, 40000002, SYS_B, 6, "Planet (Ice)").await;
@@ -88,8 +89,9 @@ async fn a_sync_mirrors_esi_rather_than_accumulating(pool: PgPool) {
     assert_eq!(listed[0].planet_id, 40000002);
 }
 
-#[sqlx::test]
-async fn a_moved_window_updates_in_place(pool: PgPool) {
+#[tokio::test]
+async fn a_moved_window_updates_in_place() {
+    let (pool, _db) = common::db::fresh().await;
     seed_universe(&pool).await;
     seed_planet(&pool, 40000001, SYS_A, 3, "Planet (Lava)").await;
 
@@ -106,8 +108,9 @@ async fn a_moved_window_updates_in_place(pool: PgPool) {
     assert!(listed[0].vulnerable_from > first);
 }
 
-#[sqlx::test]
-async fn a_planet_the_sde_has_never_heard_of_is_skipped_without_failing(pool: PgPool) {
+#[tokio::test]
+async fn a_planet_the_sde_has_never_heard_of_is_skipped_without_failing() {
+    let (pool, _db) = common::db::fresh().await;
     seed_universe(&pool).await;
     seed_planet(&pool, 40000001, SYS_A, 3, "Planet (Lava)").await;
 
@@ -126,8 +129,9 @@ async fn a_planet_the_sde_has_never_heard_of_is_skipped_without_failing(pool: Pg
     assert_eq!(list(&pool).await.unwrap().len(), 1);
 }
 
-#[sqlx::test]
-async fn a_row_reads_as_it_does_in_the_overview(pool: PgPool) {
+#[tokio::test]
+async fn a_row_reads_as_it_does_in_the_overview() {
+    let (pool, _db) = common::db::fresh().await;
     seed_universe(&pool).await;
     seed_planet(&pool, 40000001, SYS_A, 4, "Planet (Lava)").await;
     store(&pool, &[skyhook(40000001, SYS_A, Duration::minutes(-5))])
@@ -142,8 +146,9 @@ async fn a_row_reads_as_it_does_in_the_overview(pool: PgPool) {
     assert_eq!(row.region, "Test Region");
 }
 
-#[sqlx::test]
-async fn a_window_that_has_closed_is_not_listed(pool: PgPool) {
+#[tokio::test]
+async fn a_window_that_has_closed_is_not_listed() {
+    let (pool, _db) = common::db::fresh().await;
     seed_universe(&pool).await;
     seed_planet(&pool, 40000001, SYS_A, 3, "Planet (Lava)").await;
 

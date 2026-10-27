@@ -6,12 +6,12 @@ use axum::http::StatusCode;
 use common::app::{app, get, request_json, session_cookie};
 use common::world;
 use serde_json::json;
-use sqlx::PgPool;
 
 /// Only the caller's own characters can map for them: a stranger's id, or one that does
 /// not exist, is refused rather than stored.
-#[sqlx::test]
-async fn tracked_pilots_must_be_the_callers_own(pool: PgPool) {
+#[tokio::test]
+async fn tracked_pilots_must_be_the_callers_own() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
     let path = format!("/api/maps/{}/settings/user", w.map_id);
@@ -60,9 +60,10 @@ async fn tracked_pilots_must_be_the_callers_own(pool: PgPool) {
 
 /// The defaults a user with no row is shown are the ones a fresh row gets from the columns,
 /// so nothing about a map changes under someone the moment they first change a setting.
-#[sqlx::test]
-async fn the_missing_row_and_a_bare_row_read_the_same(pool: PgPool) {
+#[tokio::test]
+async fn the_missing_row_and_a_bare_row_read_the_same() {
     use wormholesystems::maps::user_settings::{MapUserSettings, insert_defaults, load};
+    let (pool, _db) = common::db::fresh().await;
 
     let w = world(&pool).await;
     let missing = load(&pool, w.map_id, w.owner.user_id).await.unwrap();
@@ -78,8 +79,9 @@ async fn the_missing_row_and_a_bare_row_read_the_same(pool: PgPool) {
 
 /// A partial update leaves everything it does not name at the default, on a first change
 /// as on any later one.
-#[sqlx::test]
-async fn a_first_change_sets_only_what_it_names(pool: PgPool) {
+#[tokio::test]
+async fn a_first_change_sets_only_what_it_names() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
     let path = format!("/api/maps/{}/settings/user", w.map_id);

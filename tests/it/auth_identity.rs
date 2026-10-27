@@ -2,6 +2,7 @@
 //! character-transfer (owner-hash change) reassignment, linking, preferred selection, and
 //! the session lifecycle. These are pure DB logic, so they're driven directly with a pool.
 
+use crate::common;
 use sqlx::PgPool;
 use wormholesystems::app::CookieSecurity;
 use wormholesystems::esi::jwt::Claims;
@@ -52,8 +53,9 @@ async fn is_preferred(pool: &PgPool, character_id: i64) -> bool {
         .expect("query characters")
 }
 
-#[sqlx::test]
-async fn new_character_creates_a_preferred_character_and_caches_its_corp(pool: PgPool) {
+#[tokio::test]
+async fn new_character_creates_a_preferred_character_and_caches_its_corp() {
+    let (pool, _db) = common::db::fresh().await;
     let user = persist_identity(&pool, &claims(100, "h1"), corp(2001), None, None)
         .await
         .unwrap();
@@ -72,8 +74,9 @@ async fn new_character_creates_a_preferred_character_and_caches_its_corp(pool: P
     assert_eq!(corp_count, 1);
 }
 
-#[sqlx::test]
-async fn returning_login_reuses_the_account_and_refreshes_corp(pool: PgPool) {
+#[tokio::test]
+async fn returning_login_reuses_the_account_and_refreshes_corp() {
+    let (pool, _db) = common::db::fresh().await;
     let user = persist_identity(&pool, &claims(100, "h1"), corp(2001), None, None)
         .await
         .unwrap();
@@ -97,8 +100,9 @@ async fn returning_login_reuses_the_account_and_refreshes_corp(pool: PgPool) {
     assert_eq!(users, 1, "no extra account created");
 }
 
-#[sqlx::test]
-async fn owner_hash_change_reassigns_the_character_to_a_new_account(pool: PgPool) {
+#[tokio::test]
+async fn owner_hash_change_reassigns_the_character_to_a_new_account() {
+    let (pool, _db) = common::db::fresh().await;
     let old = persist_identity(&pool, &claims(100, "h1"), corp(2001), None, None)
         .await
         .unwrap();
@@ -120,8 +124,9 @@ async fn owner_hash_change_reassigns_the_character_to_a_new_account(pool: PgPool
     );
 }
 
-#[sqlx::test]
-async fn linking_attaches_a_character_without_making_it_preferred(pool: PgPool) {
+#[tokio::test]
+async fn linking_attaches_a_character_without_making_it_preferred() {
+    let (pool, _db) = common::db::fresh().await;
     let user = persist_identity(&pool, &claims(100, "h1"), corp(2001), None, None)
         .await
         .unwrap();
@@ -145,8 +150,9 @@ async fn linking_attaches_a_character_without_making_it_preferred(pool: PgPool) 
 /// Both people signed up separately, then one hands their character to the other. Each
 /// account had a preferred character of its own, and carrying that flag across gave the
 /// receiving account two, which the unique index refuses: the link failed outright.
-#[sqlx::test]
-async fn linking_a_character_that_already_has_its_own_account(pool: PgPool) {
+#[tokio::test]
+async fn linking_a_character_that_already_has_its_own_account() {
+    let (pool, _db) = common::db::fresh().await;
     let first = persist_identity(&pool, &claims(100, "h1"), corp(2001), None, None)
         .await
         .unwrap();
@@ -180,8 +186,9 @@ async fn linking_a_character_that_already_has_its_own_account(pool: PgPool) {
 }
 
 /// The emptied account goes, but not one that still has somebody in it.
-#[sqlx::test]
-async fn an_account_with_characters_left_is_not_removed(pool: PgPool) {
+#[tokio::test]
+async fn an_account_with_characters_left_is_not_removed() {
+    let (pool, _db) = common::db::fresh().await;
     let first = persist_identity(&pool, &claims(100, "h1"), corp(2001), None, None)
         .await
         .unwrap();
@@ -259,8 +266,9 @@ fn the_session_cookie_outlasts_the_browser() {
 
 /// Staying signed in: a session lasts as long as a browser keeps a cookie, and using it
 /// starts that again. One that already ran out stays out.
-#[sqlx::test]
-async fn a_session_in_use_keeps_renewing(pool: PgPool) {
+#[tokio::test]
+async fn a_session_in_use_keeps_renewing() {
+    let (pool, _db) = common::db::fresh().await;
     let user = persist_identity(&pool, &claims(100, "h1"), corp(2001), None, None)
         .await
         .unwrap();
@@ -286,8 +294,9 @@ async fn a_session_in_use_keeps_renewing(pool: PgPool) {
 
 /// The database holds only a hash of the session id, so reading the table does not hand
 /// out cookies: the stored value does not sign anyone in, the cookie value does.
-#[sqlx::test]
-async fn sessions_are_stored_hashed(pool: PgPool) {
+#[tokio::test]
+async fn sessions_are_stored_hashed() {
+    let (pool, _db) = common::db::fresh().await;
     let user = persist_identity(&pool, &claims(100, "h1"), corp(2001), None, None)
         .await
         .unwrap();
@@ -311,8 +320,9 @@ async fn sessions_are_stored_hashed(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn session_lifecycle_and_character_switch(pool: PgPool) {
+#[tokio::test]
+async fn session_lifecycle_and_character_switch() {
+    let (pool, _db) = common::db::fresh().await;
     let user = persist_identity(&pool, &claims(100, "h1"), corp(2001), None, None)
         .await
         .unwrap();
@@ -350,8 +360,9 @@ async fn session_lifecycle_and_character_switch(pool: PgPool) {
     assert!(actor_for_session(&pool, &session).await.unwrap().is_none());
 }
 
-#[sqlx::test]
-async fn a_login_from_a_signed_in_browser_keeps_its_session_and_character(pool: PgPool) {
+#[tokio::test]
+async fn a_login_from_a_signed_in_browser_keeps_its_session_and_character() {
+    let (pool, _db) = common::db::fresh().await;
     let user = persist_identity(&pool, &claims(100, "h1"), corp(2001), None, None)
         .await
         .unwrap();
@@ -395,8 +406,9 @@ async fn a_login_from_a_signed_in_browser_keeps_its_session_and_character(pool: 
     assert!(actor_for_session(&pool, &fresh).await.unwrap().is_some());
 }
 
-#[sqlx::test]
-async fn a_new_session_starts_as_the_preferred_character(pool: PgPool) {
+#[tokio::test]
+async fn a_new_session_starts_as_the_preferred_character() {
+    let (pool, _db) = common::db::fresh().await;
     let user = persist_identity(&pool, &claims(100, "h1"), corp(2001), None, None)
         .await
         .unwrap();
@@ -436,8 +448,9 @@ async fn a_new_session_starts_as_the_preferred_character(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn preferring_a_character_of_another_account_is_refused(pool: PgPool) {
+#[tokio::test]
+async fn preferring_a_character_of_another_account_is_refused() {
+    let (pool, _db) = common::db::fresh().await;
     let user = persist_identity(&pool, &claims(100, "h1"), corp(2001), None, None)
         .await
         .unwrap();
@@ -452,8 +465,9 @@ async fn preferring_a_character_of_another_account_is_refused(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn an_account_left_without_a_preference_gets_one_back(pool: PgPool) {
+#[tokio::test]
+async fn an_account_left_without_a_preference_gets_one_back() {
+    let (pool, _db) = common::db::fresh().await;
     let user = persist_identity(&pool, &claims(100, "h1"), corp(2001), None, None)
         .await
         .unwrap();
@@ -478,11 +492,12 @@ async fn an_account_left_without_a_preference_gets_one_back(pool: PgPool) {
     assert!(!is_preferred(&pool, 400).await);
 }
 
-#[sqlx::test]
-async fn a_saved_token_replaces_the_old_one_and_keeps_its_scopes(pool: PgPool) {
+#[tokio::test]
+async fn a_saved_token_replaces_the_old_one_and_keeps_its_scopes() {
     use std::time::{Duration, SystemTime};
     use wormholesystems::db::PgTokenStore;
     use wormholesystems::esi::{Token, TokenStore};
+    let (pool, _db) = common::db::fresh().await;
 
     persist_identity(&pool, &claims(100, "h1"), corp(2001), None, None)
         .await

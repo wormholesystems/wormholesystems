@@ -11,11 +11,11 @@ use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::http::{Request, StatusCode};
 use axum::routing::post;
-use sqlx::PgPool;
 use tower::ServiceExt;
 
-#[sqlx::test]
-async fn a_request_span_is_exported_by_its_route(pool: PgPool) {
+#[tokio::test]
+async fn a_request_span_is_exported_by_its_route() {
+    let (pool, _db) = common::db::fresh().await;
     let seen: Arc<Mutex<Vec<Bytes>>> = Arc::default();
     let keep = Arc::clone(&seen);
     let collector = Router::new().route(

@@ -7,10 +7,10 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use common::app::{app, get, send};
 use common::catalog::seed_catalog;
-use sqlx::PgPool;
 
-#[sqlx::test]
-async fn the_signature_catalog_revalidates_by_etag(pool: PgPool) {
+#[tokio::test]
+async fn the_signature_catalog_revalidates_by_etag() {
+    let (pool, _db) = common::db::fresh().await;
     seed_catalog(&pool).await;
 
     let first = get(app(&pool), "/api/signature-types", None).await;

@@ -64,8 +64,9 @@ async fn step_forward(pool: &PgPool, actor: Actor, map_id: i64) {
     redo(pool, actor, MapIdBody { map_id }).await.expect("redo");
 }
 
-#[sqlx::test]
-async fn every_mutation_records_a_step_and_advances_the_cursor(pool: PgPool) {
+#[tokio::test]
+async fn every_mutation_records_a_step_and_advances_the_cursor() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
 
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
@@ -111,8 +112,9 @@ async fn every_mutation_records_a_step_and_advances_the_cursor(pool: PgPool) {
 /// ever and grew the journal on every press.
 /// The listing walks the applied path only as far back as the page reaches, which must
 /// not change what it says about the entries on it.
-#[sqlx::test]
-async fn a_history_longer_than_the_page_still_marks_what_is_applied(pool: PgPool) {
+#[tokio::test]
+async fn a_history_longer_than_the_page_still_marks_what_is_applied() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = common::map::place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     for i in 0..60 {
@@ -146,8 +148,9 @@ async fn a_history_longer_than_the_page_still_marks_what_is_applied(pool: PgPool
     assert_eq!(h.redo_target, Some(h.entries[4].id));
 }
 
-#[sqlx::test]
-async fn undo_and_redo_settle_instead_of_toggling_for_ever(pool: PgPool) {
+#[tokio::test]
+async fn undo_and_redo_settle_instead_of_toggling_for_ever() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let journal_len = history(&pool, w.owner, w.map_id).await.entries.len();
@@ -178,8 +181,9 @@ async fn undo_and_redo_settle_instead_of_toggling_for_ever(pool: PgPool) {
     ));
 }
 
-#[sqlx::test]
-async fn a_change_after_an_undo_branches_and_the_old_branch_stays_reachable(pool: PgPool) {
+#[tokio::test]
+async fn a_change_after_an_undo_branches_and_the_old_branch_stays_reachable() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     place_at(&pool, w.owner, w.map_id, SYS_B, 100.0).await;
@@ -223,8 +227,9 @@ async fn a_change_after_an_undo_branches_and_the_old_branch_stays_reachable(pool
     );
 }
 
-#[sqlx::test]
-async fn undo_restores_a_removed_system_with_its_edges_and_signatures(pool: PgPool) {
+#[tokio::test]
+async fn undo_restores_a_removed_system_with_its_edges_and_signatures() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let b = place_at(&pool, w.owner, w.map_id, SYS_B, 100.0).await;
@@ -302,8 +307,9 @@ async fn undo_restores_a_removed_system_with_its_edges_and_signatures(pool: PgPo
     );
 }
 
-#[sqlx::test]
-async fn undo_round_trips_a_connection_status_change(pool: PgPool) {
+#[tokio::test]
+async fn undo_round_trips_a_connection_status_change() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let b = place_at(&pool, w.owner, w.map_id, SYS_B, 100.0).await;
@@ -341,8 +347,9 @@ async fn undo_round_trips_a_connection_status_change(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn undo_walks_back_through_several_steps_one_at_a_time(pool: PgPool) {
+#[tokio::test]
+async fn undo_walks_back_through_several_steps_one_at_a_time() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     set_alias(
@@ -375,8 +382,9 @@ async fn undo_walks_back_through_several_steps_one_at_a_time(pool: PgPool) {
 
 /// The history belongs to the map, not to whoever happened to make the change: undo means
 /// "step this map back", so a member can reverse a teammate's last action.
-#[sqlx::test]
-async fn any_member_can_step_the_map_back(pool: PgPool) {
+#[tokio::test]
+async fn any_member_can_step_the_map_back() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let mate = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Member).await;
     place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
@@ -385,8 +393,9 @@ async fn any_member_can_step_the_map_back(pool: PgPool) {
     assert!(systems(&pool, w.owner, w.map_id).await.is_empty());
 }
 
-#[sqlx::test]
-async fn history_is_viewer_readable_and_moving_it_is_member_only(pool: PgPool) {
+#[tokio::test]
+async fn history_is_viewer_readable_and_moving_it_is_member_only() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let viewer = member_with_role(&pool, w.owner, w.map_id, 1003, 2003, Role::Viewer).await;
     place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
@@ -411,8 +420,9 @@ async fn history_is_viewer_readable_and_moving_it_is_member_only(pool: PgPool) {
     ));
 }
 
-#[sqlx::test]
-async fn a_bulk_removal_undoes_as_one_step(pool: PgPool) {
+#[tokio::test]
+async fn a_bulk_removal_undoes_as_one_step() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let b = place_at(&pool, w.owner, w.map_id, SYS_B, 100.0).await;
@@ -441,8 +451,9 @@ async fn a_bulk_removal_undoes_as_one_step(pool: PgPool) {
     assert_eq!(connections(&pool, w.owner, w.map_id).await.len(), 1);
 }
 
-#[sqlx::test]
-async fn undoing_a_signature_removal_brings_it_back(pool: PgPool) {
+#[tokio::test]
+async fn undoing_a_signature_removal_brings_it_back() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let sig = add_signature(
@@ -485,8 +496,9 @@ async fn undoing_a_signature_removal_brings_it_back(pool: PgPool) {
     assert_eq!(sigs[0].group, SignatureGroup::Data);
 }
 
-#[sqlx::test]
-async fn removing_a_connection_and_undoing_it_keeps_the_endpoints(pool: PgPool) {
+#[tokio::test]
+async fn removing_a_connection_and_undoing_it_keeps_the_endpoints() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let b = place_at(&pool, w.owner, w.map_id, SYS_B, 100.0).await;
@@ -515,10 +527,11 @@ async fn removing_a_connection_and_undoing_it_keeps_the_endpoints(pool: PgPool) 
 /// The stale sweep deletes edges *and* the placements they strand, so its undo has to put
 /// both back. This is the case a placement-only inverse would get wrong: the C endpoint
 /// stays (it is pinned), but the edge into it must come back too.
-#[sqlx::test]
-async fn cleaning_stale_connections_undoes_as_one_step(pool: PgPool) {
+#[tokio::test]
+async fn cleaning_stale_connections_undoes_as_one_step() {
     use wormholesystems::maps::connection::{CleanStaleConnections, clean_stale_connections};
     use wormholesystems::maps::solar_system::{SetPinned, set_pinned};
+    let (pool, _db) = common::db::fresh().await;
 
     let w = world(&pool).await;
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
@@ -591,9 +604,10 @@ async fn cleaning_stale_connections_undoes_as_one_step(pool: PgPool) {
 }
 
 /// A fresh critical mark is not stale: sweeping must not touch a hole someone just flagged.
-#[sqlx::test]
-async fn a_freshly_critical_connection_is_not_swept(pool: PgPool) {
+#[tokio::test]
+async fn a_freshly_critical_connection_is_not_swept() {
     use wormholesystems::maps::connection::{CleanStaleConnections, clean_stale_connections};
+    let (pool, _db) = common::db::fresh().await;
 
     let w = world(&pool).await;
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;

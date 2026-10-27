@@ -3,7 +3,6 @@
 use crate::common;
 
 use common::{SYS_A, SYS_B, SYS_C, member_with_role, world};
-use sqlx::PgPool;
 use wormholesystems::maps::watchlist::{
     AddWatchlistEntry, RemoveWatchlistEntry, SetWatchlistPinned, add_watchlist_entry,
     list_watchlist, remove_watchlist_entry, set_watchlist_pinned,
@@ -14,8 +13,9 @@ use wormholesystems::maps::{MapError, Role};
 /// panel can answer "how far from Jita" before anyone configures anything. The fixture
 /// universe only contains one of the five, which is also the point: hubs missing from the
 /// database are skipped rather than failing the creation.
-#[sqlx::test]
-async fn new_maps_start_with_the_trade_hubs(pool: PgPool) {
+#[tokio::test]
+async fn new_maps_start_with_the_trade_hubs() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let entries = list_watchlist(&pool, w.owner, w.map_id).await.unwrap();
     assert_eq!(entries.len(), 1);
@@ -23,8 +23,9 @@ async fn new_maps_start_with_the_trade_hubs(pool: PgPool) {
     assert!(entries[0].is_pinned);
 }
 
-#[sqlx::test]
-async fn crud_and_gating(pool: PgPool) {
+#[tokio::test]
+async fn crud_and_gating() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let viewer = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Viewer).await;
     // Jita is seeded onto every new map, so the CRUD here works on systems that are not.

@@ -67,8 +67,9 @@ async fn fetch_image(
     (status, content_type, bytes.to_vec())
 }
 
-#[sqlx::test]
-async fn an_upload_becomes_a_url_and_the_file_comes_back_as_itself(pool: PgPool) {
+#[tokio::test]
+async fn an_upload_becomes_a_url_and_the_file_comes_back_as_itself() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
     let settings_path = format!("/api/maps/{}/settings/user", w.map_id);
@@ -125,8 +126,9 @@ async fn an_upload_becomes_a_url_and_the_file_comes_back_as_itself(pool: PgPool)
     assert_eq!(gone, StatusCode::NOT_FOUND);
 }
 
-#[sqlx::test]
-async fn a_file_that_is_not_an_image_or_the_wrong_part_is_refused(pool: PgPool) {
+#[tokio::test]
+async fn a_file_that_is_not_an_image_or_the_wrong_part_is_refused() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
 
@@ -148,8 +150,9 @@ async fn a_file_that_is_not_an_image_or_the_wrong_part_is_refused(pool: PgPool) 
     );
 }
 
-#[sqlx::test]
-async fn a_stranger_can_neither_upload_nor_see_one(pool: PgPool) {
+#[tokio::test]
+async fn a_stranger_can_neither_upload_nor_see_one() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let stranger_user = common::new_user(&pool).await;
     common::add_character(&pool, stranger_user, 4242, 9001, None).await;

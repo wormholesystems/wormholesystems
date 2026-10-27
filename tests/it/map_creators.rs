@@ -60,14 +60,16 @@ async fn map_count(pool: &PgPool) -> i64 {
         .expect("query maps")
 }
 
-#[sqlx::test]
-async fn anyone_may_create_a_map_when_nothing_is_configured(pool: PgPool) {
+#[tokio::test]
+async fn anyone_may_create_a_map_when_nothing_is_configured() {
+    let (pool, _db) = common::db::fresh().await;
     let actor = pilot(&pool).await;
     assert!(create(&pool, actor, &only(&[]), "Home").await.is_ok());
 }
 
-#[sqlx::test]
-async fn a_listed_character_corporation_or_alliance_may_create_a_map(pool: PgPool) {
+#[tokio::test]
+async fn a_listed_character_corporation_or_alliance_may_create_a_map() {
+    let (pool, _db) = common::db::fresh().await;
     let actor = pilot(&pool).await;
     for id in [1001, CORP, ALLIANCE] {
         assert!(
@@ -78,8 +80,9 @@ async fn a_listed_character_corporation_or_alliance_may_create_a_map(pool: PgPoo
     assert_eq!(map_count(&pool).await, 3);
 }
 
-#[sqlx::test]
-async fn anyone_else_is_refused(pool: PgPool) {
+#[tokio::test]
+async fn anyone_else_is_refused() {
+    let (pool, _db) = common::db::fresh().await;
     let actor = pilot(&pool).await;
     assert!(matches!(
         create(&pool, actor, &only(&[99_999_999]), "Home").await,
@@ -90,8 +93,9 @@ async fn anyone_else_is_refused(pool: PgPool) {
 
 // An account can hold a director and an alt in an NPC corporation. Flying the alt should
 // not inherit the director's right to create maps.
-#[sqlx::test]
-async fn it_is_the_active_character_that_counts(pool: PgPool) {
+#[tokio::test]
+async fn it_is_the_active_character_that_counts() {
+    let (pool, _db) = common::db::fresh().await;
     let director = pilot(&pool).await;
     add_character(&pool, director.user_id, 1002, 1_000_125, None).await;
     let alt = Actor {
@@ -114,8 +118,9 @@ async fn it_is_the_active_character_that_counts(pool: PgPool) {
 
 // The list governs creation only: a user who may not create a map still works on the ones
 // they were given.
-#[sqlx::test]
-async fn it_does_not_touch_maps_that_already_exist(pool: PgPool) {
+#[tokio::test]
+async fn it_does_not_touch_maps_that_already_exist() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     assert!(
         get_map(&pool, w.owner, GetMap { map_id: w.map_id })
@@ -124,8 +129,9 @@ async fn it_does_not_touch_maps_that_already_exist(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn importing_a_file_as_a_new_map_is_limited_the_same_way(pool: PgPool) {
+#[tokio::test]
+async fn importing_a_file_as_a_new_map_is_limited_the_same_way() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let sections = || SectionSet::from_names(&["solarsystems".into()]).unwrap();
     let file = export_map(&pool, w.owner, w.map_id, sections())
@@ -164,8 +170,9 @@ fn app_with(pool: &PgPool, creators: &[i64]) -> axum::Router {
 }
 
 // The maps page hides its create buttons from whoever would only get a 403 for pressing them.
-#[sqlx::test]
-async fn the_signed_in_character_says_whether_it_may_create_a_map(pool: PgPool) {
+#[tokio::test]
+async fn the_signed_in_character_says_whether_it_may_create_a_map() {
+    let (pool, _db) = common::db::fresh().await;
     let actor = pilot(&pool).await;
     let cookie = session_cookie(&pool, actor).await;
 
@@ -179,8 +186,9 @@ async fn the_signed_in_character_says_whether_it_may_create_a_map(pool: PgPool) 
     assert_eq!(closed.body["can_create_map"], false);
 }
 
-#[sqlx::test]
-async fn creating_over_http_is_forbidden_off_the_list(pool: PgPool) {
+#[tokio::test]
+async fn creating_over_http_is_forbidden_off_the_list() {
+    let (pool, _db) = common::db::fresh().await;
     let actor = pilot(&pool).await;
     let cookie = session_cookie(&pool, actor).await;
 

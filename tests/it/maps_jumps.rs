@@ -61,8 +61,9 @@ async fn set_ship(pool: &PgPool, character_id: i64, ship_type_id: i64) {
     .expect("insert character_status");
 }
 
-#[sqlx::test]
-async fn manual_jump_crud(pool: PgPool) {
+#[tokio::test]
+async fn manual_jump_crud() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_ship(&pool, 587, "Rifter", 1_067_000.0).await;
     let a = place(&pool, w.owner, w.map_id, SYS_A).await;
@@ -201,8 +202,9 @@ async fn manual_jump_crud(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn transit_capture_and_claiming(pool: PgPool) {
+#[tokio::test]
+async fn transit_capture_and_claiming() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_ship(&pool, 587, "Rifter", 1_067_000.0).await;
     set_ship(&pool, w.owner.character_id, 587).await;
@@ -286,8 +288,9 @@ async fn transit_capture_and_claiming(pool: PgPool) {
 
 /// One transit is judged map by map: a map where the pilot is only a viewer records
 /// nothing, and neither does one that has the pair mapped as a stargate.
-#[sqlx::test]
-async fn transit_is_recorded_only_on_maps_that_take_it(pool: PgPool) {
+#[tokio::test]
+async fn transit_is_recorded_only_on_maps_that_take_it() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     allow_tracking(&pool, w.map_id, w.owner.user_id).await;
     let a = place(&pool, w.owner, w.map_id, SYS_A).await;
@@ -361,8 +364,9 @@ async fn transit_is_recorded_only_on_maps_that_take_it(pool: PgPool) {
     assert_eq!(rows, [(w.map_id, Some(hole))]);
 }
 
-#[sqlx::test]
-async fn claim_window_and_prune(pool: PgPool) {
+#[tokio::test]
+async fn claim_window_and_prune() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place(&pool, w.owner, w.map_id, SYS_A).await;
     let b = place(&pool, w.owner, w.map_id, SYS_B).await;
@@ -428,10 +432,11 @@ async fn jump_rows(pool: &PgPool, map_id: i64) -> serde_json::Value {
 
 /// Undoing a cleared map puts every jump back on its own id, and forgets a pilot whose
 /// character went in the meantime.
-#[sqlx::test]
-async fn undoing_a_clear_puts_every_jump_back(pool: PgPool) {
+#[tokio::test]
+async fn undoing_a_clear_puts_every_jump_back() {
     use wormholesystems::maps::history::{MapIdBody, redo, undo};
     use wormholesystems::maps::solar_system::{ClearMap, clear_map};
+    let (pool, _db) = common::db::fresh().await;
 
     let w = world(&pool).await;
     seed_ship(&pool, 587, "Rifter", 1_067_000.0).await;

@@ -4,6 +4,7 @@
 
 pub(crate) mod app;
 pub(crate) mod catalog;
+pub(crate) mod db;
 pub(crate) mod map;
 
 use sqlx::PgPool;

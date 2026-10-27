@@ -36,8 +36,9 @@ async fn make_webhook(pool: &PgPool, cookie: &str, map_id: i64, name: &str) -> i
     made.body["id"].as_i64().expect("id is an integer")
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn an_alert_survives_the_full_round_trip(pool: PgPool) {
+#[tokio::test]
+async fn an_alert_survives_the_full_round_trip() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
     let webhook_id = make_webhook(&pool, &cookie, w.map_id, "ops").await;
@@ -91,8 +92,9 @@ async fn an_alert_survives_the_full_round_trip(pool: PgPool) {
     assert_eq!(listed.body.as_array().map(std::vec::Vec::len), Some(0));
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn a_proximity_alert_keeps_its_starting_point(pool: PgPool) {
+#[tokio::test]
+async fn a_proximity_alert_keeps_its_starting_point() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
     let webhook_id = make_webhook(&pool, &cookie, w.map_id, "ops").await;
@@ -122,8 +124,9 @@ async fn a_proximity_alert_keeps_its_starting_point(pool: PgPool) {
     );
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn a_destination_from_another_map_is_refused(pool: PgPool) {
+#[tokio::test]
+async fn a_destination_from_another_map_is_refused() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
 
@@ -152,8 +155,9 @@ async fn a_destination_from_another_map_is_refused(pool: PgPool) {
     assert_eq!(refused.body["error"], "that destination is not on this map");
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn a_bad_alert_is_refused_before_it_is_stored(pool: PgPool) {
+#[tokio::test]
+async fn a_bad_alert_is_refused_before_it_is_stored() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
     let webhook_id = make_webhook(&pool, &cookie, w.map_id, "ops").await;
@@ -200,8 +204,9 @@ async fn channel_of(pool: &PgPool, alert_id: i64) -> (Option<String>, Option<Str
     (row.discord_guild_id, row.discord_channel_id)
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn a_bot_channel_cannot_be_set_over_http(pool: PgPool) {
+#[tokio::test]
+async fn a_bot_channel_cannot_be_set_over_http() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
     let webhook_id = make_webhook(&pool, &cookie, w.map_id, "ops").await;
@@ -246,10 +251,11 @@ async fn a_bot_channel_cannot_be_set_over_http(pool: PgPool) {
     assert_eq!(channel_of(&pool, id).await, (None, None));
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn a_bot_channel_alert_keeps_its_channel_and_ping_when_edited(pool: PgPool) {
+#[tokio::test]
+async fn a_bot_channel_alert_keeps_its_channel_and_ping_when_edited() {
     use wormholesystems::alerts::{AlertDelivery, AlertKind, AlertMention, filters};
     use wormholesystems::maps::alerts::{SaveAlert, create, register_role};
+    let (pool, _db) = common::db::fresh().await;
 
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;

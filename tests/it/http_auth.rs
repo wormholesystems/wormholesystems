@@ -5,10 +5,10 @@ use crate::common;
 use axum::http::StatusCode;
 use common::app::{app, get, session_cookie};
 use common::world;
-use sqlx::PgPool;
 
-#[sqlx::test]
-async fn logout_clears_the_cookie_on_the_path_it_was_set_on(pool: PgPool) {
+#[tokio::test]
+async fn logout_clears_the_cookie_on_the_path_it_was_set_on() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
 

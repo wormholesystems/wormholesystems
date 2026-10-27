@@ -217,8 +217,9 @@ async fn connect(
 }
 
 /// The claim is the whole reason a retry cannot double-post.
-#[sqlx::test]
-async fn an_occasion_can_only_be_claimed_once(pool: PgPool) {
+#[tokio::test]
+async fn an_occasion_can_only_be_claimed_once() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let alert = make_alert(&pool, w.map_id, "killmail").await;
 
@@ -229,8 +230,9 @@ async fn an_occasion_can_only_be_claimed_once(pool: PgPool) {
 }
 
 /// Giving up must put the occasion back, or one Discord hiccup silences that kill forever.
-#[sqlx::test]
-async fn releasing_an_unsent_claim_allows_another_attempt(pool: PgPool) {
+#[tokio::test]
+async fn releasing_an_unsent_claim_allows_another_attempt() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let alert = make_alert(&pool, w.map_id, "killmail").await;
 
@@ -240,8 +242,9 @@ async fn releasing_an_unsent_claim_allows_another_attempt(pool: PgPool) {
 }
 
 /// A delivered one stays claimed, whatever else happens.
-#[sqlx::test]
-async fn a_sent_claim_is_never_released(pool: PgPool) {
+#[tokio::test]
+async fn a_sent_claim_is_never_released() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let alert = make_alert(&pool, w.map_id, "killmail").await;
 
@@ -258,8 +261,9 @@ async fn a_sent_claim_is_never_released(pool: PgPool) {
     assert!(fired.is_some());
 }
 
-#[sqlx::test]
-async fn only_active_alerts_of_the_asked_kind_are_loaded(pool: PgPool) {
+#[tokio::test]
+async fn only_active_alerts_of_the_asked_kind_are_loaded() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let killmail = make_alert(&pool, w.map_id, "killmail").await;
     let proximity = make_alert(&pool, w.map_id, "proximity").await;
@@ -283,8 +287,9 @@ async fn only_active_alerts_of_the_asked_kind_are_loaded(pool: PgPool) {
 }
 
 /// Disabling records why, so the settings page can say more than "off".
-#[sqlx::test]
-async fn disabling_records_a_reason_and_an_event(pool: PgPool) {
+#[tokio::test]
+async fn disabling_records_a_reason_and_an_event() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let id = make_alert(&pool, w.map_id, "killmail").await;
     let alert = alerts::active(&pool, AlertKind::Killmail)
@@ -352,8 +357,9 @@ fn filters_decide_what_is_worth_a_message() {
 
 /// From a starting point the route runs through the chain, and only a system on that route
 /// is worth a message: B sits between A and C, F is nowhere near.
-#[sqlx::test]
-async fn a_starting_point_fires_for_a_placement_on_its_route(pool: PgPool) {
+#[tokio::test]
+async fn a_starting_point_fires_for_a_placement_on_its_route() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_gates(&pool).await;
     let inbox = Inbox::start().await;
@@ -377,8 +383,9 @@ async fn a_starting_point_fires_for_a_placement_on_its_route(pool: PgPool) {
     assert!(sent[0].contains("2 jumps away"), "{}", sent[0]);
 }
 
-#[sqlx::test]
-async fn a_starting_point_stays_quiet_beyond_max_jumps(pool: PgPool) {
+#[tokio::test]
+async fn a_starting_point_stays_quiet_beyond_max_jumps() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_gates(&pool).await;
     let inbox = Inbox::start().await;
@@ -392,8 +399,9 @@ async fn a_starting_point_stays_quiet_beyond_max_jumps(pool: PgPool) {
 
 /// A wormhole from A to E puts F one jump from A. Neither placement could say so, the
 /// connection can, and it says so once however many times it is reported.
-#[sqlx::test]
-async fn a_connection_that_completes_the_route_fires_once(pool: PgPool) {
+#[tokio::test]
+async fn a_connection_that_completes_the_route_fires_once() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_gates(&pool).await;
     let inbox = Inbox::start().await;
@@ -423,8 +431,9 @@ async fn a_connection_that_completes_the_route_fires_once(pool: PgPool) {
 
 /// Without a starting point the distance is the placed system's own, and a wormhole
 /// between two mapped systems changes nothing about that.
-#[sqlx::test]
-async fn without_a_starting_point_the_placed_system_counts(pool: PgPool) {
+#[tokio::test]
+async fn without_a_starting_point_the_placed_system_counts() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_gates(&pool).await;
     let inbox = Inbox::start().await;
@@ -454,8 +463,9 @@ async fn without_a_starting_point_the_placed_system_counts(pool: PgPool) {
 /// Once the chain is in range, placing something unrelated says nothing new: the distance
 /// is the placed system's own, as legacy measured it. Placed again after being removed, the
 /// in-range system is news once more.
-#[sqlx::test]
-async fn an_unrelated_placement_does_not_alert_again(pool: PgPool) {
+#[tokio::test]
+async fn an_unrelated_placement_does_not_alert_again() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_gates(&pool).await;
     let inbox = Inbox::start().await;
@@ -493,8 +503,9 @@ async fn an_unrelated_placement_does_not_alert_again(pool: PgPool) {
 
 /// The message links back to the map by its full address: Discord refuses an embed whose
 /// link is relative, and with it the whole message.
-#[sqlx::test]
-async fn the_message_links_back_to_the_map(pool: PgPool) {
+#[tokio::test]
+async fn the_message_links_back_to_the_map() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_gates(&pool).await;
     let inbox = Inbox::start().await;
@@ -513,8 +524,9 @@ async fn the_message_links_back_to_the_map(pool: PgPool) {
 /// A 400 is Discord refusing that message, and the same message gets the same answer. It
 /// goes out once, the reason is kept for the settings page, the occasion stays claimed so
 /// nothing retries it, and the alert stays on for the next one.
-#[sqlx::test]
-async fn a_refused_message_is_recorded_and_not_sent_again(pool: PgPool) {
+#[tokio::test]
+async fn a_refused_message_is_recorded_and_not_sent_again() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_gates(&pool).await;
     let inbox = Inbox::answering(StatusCode::BAD_REQUEST).await;
@@ -546,8 +558,9 @@ async fn a_refused_message_is_recorded_and_not_sent_again(pool: PgPool) {
 
 /// The runtime keeps the active alerts in memory, but a change made through the store is
 /// seen on the very next evaluation rather than once the copy expires.
-#[sqlx::test]
-async fn a_switched_off_alert_stops_firing_at_once(pool: PgPool) {
+#[tokio::test]
+async fn a_switched_off_alert_stops_firing_at_once() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_gates(&pool).await;
     let inbox = Inbox::start().await;
@@ -589,8 +602,9 @@ fn kill_in(id: i64, solar_system_id: i64) -> alerts::killmail::Kill {
 
 /// A batch of kills is weighed against each map's chain, and a kill already claimed is
 /// not claimed again however often it comes round.
-#[sqlx::test]
-async fn kills_near_the_chain_are_claimed_once(pool: PgPool) {
+#[tokio::test]
+async fn kills_near_the_chain_are_claimed_once() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_gates(&pool).await;
     let inbox = Inbox::start().await;
@@ -622,8 +636,9 @@ async fn kills_near_the_chain_are_claimed_once(pool: PgPool) {
 
 /// Placing through the map's own event stream reaches Discord by way of the delivery
 /// worker, without anyone waiting on it.
-#[sqlx::test]
-async fn the_subscriber_hands_messages_to_the_delivery_worker(pool: PgPool) {
+#[tokio::test]
+async fn the_subscriber_hands_messages_to_the_delivery_worker() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_gates(&pool).await;
     let inbox = Inbox::start().await;

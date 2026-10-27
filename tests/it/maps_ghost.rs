@@ -88,8 +88,9 @@ async fn position(pool: &PgPool, id: i64) -> (f64, f64) {
     .expect("query map_solar_systems")
 }
 
-#[sqlx::test]
-async fn a_ghost_is_a_placement_with_no_system_hanging_off_the_scan(pool: PgPool) {
+#[tokio::test]
+async fn a_ghost_is_a_placement_with_no_system_hanging_off_the_scan() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let home = place(&pool, w.owner, w.map_id, SYS_A).await;
     ghosting(&pool, w.owner, w.map_id).await;
@@ -131,8 +132,9 @@ async fn a_ghost_is_a_placement_with_no_system_hanging_off_the_scan(pool: PgPool
     assert_eq!(view.systems.len(), 2);
 }
 
-#[sqlx::test]
-async fn resolving_names_the_ghost_and_keeps_where_it_sits(pool: PgPool) {
+#[tokio::test]
+async fn resolving_names_the_ghost_and_keeps_where_it_sits() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     place(&pool, w.owner, w.map_id, SYS_A).await;
     ghosting(&pool, w.owner, w.map_id).await;
@@ -180,8 +182,9 @@ async fn resolving_names_the_ghost_and_keeps_where_it_sits(pool: PgPool) {
     ));
 }
 
-#[sqlx::test]
-async fn a_ghost_that_leads_back_into_the_chain_is_merged(pool: PgPool) {
+#[tokio::test]
+async fn a_ghost_that_leads_back_into_the_chain_is_merged() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let home = place(&pool, w.owner, w.map_id, SYS_A).await;
     let far = place(&pool, w.owner, w.map_id, SYS_C).await;
@@ -221,8 +224,9 @@ async fn a_ghost_that_leads_back_into_the_chain_is_merged(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn a_ghost_cannot_lead_to_the_system_it_hangs_off(pool: PgPool) {
+#[tokio::test]
+async fn a_ghost_cannot_lead_to_the_system_it_hangs_off() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     place(&pool, w.owner, w.map_id, SYS_A).await;
     ghosting(&pool, w.owner, w.map_id).await;
@@ -245,8 +249,9 @@ async fn a_ghost_cannot_lead_to_the_system_it_hangs_off(pool: PgPool) {
     ));
 }
 
-#[sqlx::test]
-async fn undoing_a_merge_puts_the_ghost_back_with_its_edge(pool: PgPool) {
+#[tokio::test]
+async fn undoing_a_merge_puts_the_ghost_back_with_its_edge() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let home = place(&pool, w.owner, w.map_id, SYS_A).await;
     place(&pool, w.owner, w.map_id, SYS_C).await;
@@ -298,8 +303,9 @@ async fn undoing_a_merge_puts_the_ghost_back_with_its_edge(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn undoing_a_resolve_makes_it_a_ghost_again(pool: PgPool) {
+#[tokio::test]
+async fn undoing_a_resolve_makes_it_a_ghost_again() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     place(&pool, w.owner, w.map_id, SYS_A).await;
     ghosting(&pool, w.owner, w.map_id).await;
@@ -332,8 +338,9 @@ async fn undoing_a_resolve_makes_it_a_ghost_again(pool: PgPool) {
 /// A pin set since the resolve by a write that is not a step of its own, an import say,
 /// sits on top of the undo stack without being in it. Stepping back over the resolve still
 /// works: a ghost cannot be pinned, so the pin goes the way home and rally already do.
-#[sqlx::test]
-async fn undoing_a_resolve_drops_a_pin_set_since(pool: PgPool) {
+#[tokio::test]
+async fn undoing_a_resolve_drops_a_pin_set_since() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     place(&pool, w.owner, w.map_id, SYS_A).await;
     ghosting(&pool, w.owner, w.map_id).await;
@@ -374,8 +381,9 @@ async fn undoing_a_resolve_drops_a_pin_set_since(pool: PgPool) {
     ));
 }
 
-#[sqlx::test]
-async fn a_pasted_scan_raises_the_holes_it_found(pool: PgPool) {
+#[tokio::test]
+async fn a_pasted_scan_raises_the_holes_it_found() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let home = place(&pool, w.owner, w.map_id, SYS_A).await;
     // Off by default: a scan changes nothing but the signature list.
@@ -471,8 +479,9 @@ async fn a_pasted_scan_raises_the_holes_it_found(pool: PgPool) {
     assert!(view.connections.is_empty());
 }
 
-#[sqlx::test]
-async fn calling_a_signature_a_wormhole_raises_one_too(pool: PgPool) {
+#[tokio::test]
+async fn calling_a_signature_a_wormhole_raises_one_too() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     place(&pool, w.owner, w.map_id, SYS_A).await;
     sqlx::query("update maps set ghost_unlinked_wormholes = true where id = $1")
@@ -520,8 +529,9 @@ async fn calling_a_signature_a_wormhole_raises_one_too(pool: PgPool) {
     assert!(view.systems.iter().any(|s| s.solar_system_id().is_none()));
 }
 
-#[sqlx::test]
-async fn removing_a_system_takes_the_holes_hanging_off_it(pool: PgPool) {
+#[tokio::test]
+async fn removing_a_system_takes_the_holes_hanging_off_it() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let home = place(&pool, w.owner, w.map_id, SYS_A).await;
     let far = place(&pool, w.owner, w.map_id, SYS_C).await;
@@ -570,8 +580,9 @@ async fn removing_a_system_takes_the_holes_hanging_off_it(pool: PgPool) {
 
 /// The same removal, made with a marquee across the chain: the holes hanging off what was
 /// swept up go with it, and are not left floating.
-#[sqlx::test]
-async fn a_marquee_delete_takes_the_holes_with_it(pool: PgPool) {
+#[tokio::test]
+async fn a_marquee_delete_takes_the_holes_with_it() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let home = place(&pool, w.owner, w.map_id, SYS_A).await;
     let far = place(&pool, w.owner, w.map_id, SYS_C).await;
@@ -597,8 +608,9 @@ async fn a_marquee_delete_takes_the_holes_with_it(pool: PgPool) {
     assert!(view.connections.is_empty());
 }
 
-#[sqlx::test]
-async fn a_ghost_goes_with_the_connection_that_made_it(pool: PgPool) {
+#[tokio::test]
+async fn a_ghost_goes_with_the_connection_that_made_it() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     place(&pool, w.owner, w.map_id, SYS_A).await;
     ghosting(&pool, w.owner, w.map_id).await;
@@ -647,8 +659,9 @@ async fn a_ghost_goes_with_the_connection_that_made_it(pool: PgPool) {
     assert!(view.connections.is_empty());
 }
 
-#[sqlx::test]
-async fn a_real_system_left_without_connections_stays(pool: PgPool) {
+#[tokio::test]
+async fn a_real_system_left_without_connections_stays() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let home = place(&pool, w.owner, w.map_id, SYS_A).await;
     let far = place(&pool, w.owner, w.map_id, SYS_B).await;
@@ -686,8 +699,9 @@ async fn a_real_system_left_without_connections_stays(pool: PgPool) {
     assert_eq!(view.systems[0].id(), far);
 }
 
-#[sqlx::test]
-async fn a_hole_nobody_has_been_through_cannot_be_pinned(pool: PgPool) {
+#[tokio::test]
+async fn a_hole_nobody_has_been_through_cannot_be_pinned() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     place(&pool, w.owner, w.map_id, SYS_A).await;
     ghosting(&pool, w.owner, w.map_id).await;
@@ -736,8 +750,9 @@ async fn a_hole_nobody_has_been_through_cannot_be_pinned(pool: PgPool) {
     .unwrap();
 }
 
-#[sqlx::test]
-async fn removing_a_system_takes_the_signature_that_led_to_it(pool: PgPool) {
+#[tokio::test]
+async fn removing_a_system_takes_the_signature_that_led_to_it() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     place(&pool, w.owner, w.map_id, SYS_A).await;
     ghosting(&pool, w.owner, w.map_id).await;
@@ -780,8 +795,9 @@ async fn removing_a_system_takes_the_signature_that_led_to_it(pool: PgPool) {
 /// The jump dialog collects an alias and the hole's size and lifetime. When the signature
 /// it names is already drawn as a ghost, resolving is the write that happens, so it has to
 /// carry them: they used to be dropped and nothing the dialog was told took effect.
-#[sqlx::test]
-async fn resolving_applies_what_the_jump_learned(pool: PgPool) {
+#[tokio::test]
+async fn resolving_applies_what_the_jump_learned() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     place(&pool, w.owner, w.map_id, SYS_A).await;
     ghosting(&pool, w.owner, w.map_id).await;
@@ -832,8 +848,9 @@ async fn resolving_applies_what_the_jump_learned(pool: PgPool) {
 /// A ghost is the far side of one hole. Delete the signature that described it and the
 /// node has nothing left to mean, so it goes with the connection rather than sitting
 /// there unreachable.
-#[sqlx::test]
-async fn deleting_the_signature_takes_its_ghost(pool: PgPool) {
+#[tokio::test]
+async fn deleting_the_signature_takes_its_ghost() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let home = place(&pool, w.owner, w.map_id, SYS_A).await;
     ghosting(&pool, w.owner, w.map_id).await;
@@ -867,8 +884,9 @@ async fn deleting_the_signature_takes_its_ghost(pool: PgPool) {
 }
 
 /// The same delete against a real system leaves it alone: someone put it there.
-#[sqlx::test]
-async fn deleting_the_signature_leaves_a_real_system(pool: PgPool) {
+#[tokio::test]
+async fn deleting_the_signature_leaves_a_real_system() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let home = place(&pool, w.owner, w.map_id, SYS_A).await;
     let far = place(&pool, w.owner, w.map_id, SYS_B).await;
@@ -920,8 +938,9 @@ async fn deleting_the_signature_leaves_a_real_system(pool: PgPool) {
 /// still says it is there, so the map draws it again as a node nobody has been through.
 /// The new node is linked to the signature that raised it, the same as a freshly scanned
 /// one, so it shows the signature id rather than sitting there blank.
-#[sqlx::test]
-async fn unassigning_the_far_side_draws_the_hole_again(pool: PgPool) {
+#[tokio::test]
+async fn unassigning_the_far_side_draws_the_hole_again() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let home = place(&pool, w.owner, w.map_id, SYS_A).await;
     ghosting(&pool, w.owner, w.map_id).await;
@@ -975,8 +994,9 @@ async fn unassigning_the_far_side_draws_the_hole_again(pool: PgPool) {
 }
 
 /// Drawing unmapped holes is a map setting, and flipping it takes effect there and then.
-#[sqlx::test]
-async fn the_setting_draws_and_undraws_the_holes_already_scanned(pool: PgPool) {
+#[tokio::test]
+async fn the_setting_draws_and_undraws_the_holes_already_scanned() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     place(&pool, w.owner, w.map_id, SYS_A).await;
     let sig = scan(&pool, w.owner, w.map_id, SYS_A, "ABC-123").await;
@@ -1030,8 +1050,9 @@ fn seen(events: &mut tokio::sync::broadcast::Receiver<MapEvent>) -> Vec<MapEvent
 /// The nodes a settings change draws or takes away are a change to the chain like any
 /// other: open clients hear about them and the history says who did it. They stay out of
 /// the undo path, so stepping back still walks the changes made before.
-#[sqlx::test]
-async fn the_setting_announces_and_records_the_nodes_it_changes(pool: PgPool) {
+#[tokio::test]
+async fn the_setting_announces_and_records_the_nodes_it_changes() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let home = place(&pool, w.owner, w.map_id, SYS_A).await;
     let sig = scan(&pool, w.owner, w.map_id, SYS_A, "ABC-123").await;
@@ -1114,8 +1135,9 @@ async fn the_setting_announces_and_records_the_nodes_it_changes(pool: PgPool) {
 
 /// Saying a signature was never a wormhole after all takes its node with it: the hole it
 /// was drawn for has stopped existing.
-#[sqlx::test]
-async fn retyping_a_wormhole_as_something_else_takes_its_node(pool: PgPool) {
+#[tokio::test]
+async fn retyping_a_wormhole_as_something_else_takes_its_node() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     place(&pool, w.owner, w.map_id, SYS_A).await;
     ghosting(&pool, w.owner, w.map_id).await;
@@ -1145,8 +1167,9 @@ async fn retyping_a_wormhole_as_something_else_takes_its_node(pool: PgPool) {
 /// Nothing is joined to an unmapped hole by hand. An edge out of it would claim the
 /// system on its far side leads somewhere, which is the one thing nobody knows yet, and it
 /// would give the node a second reason to exist that its signature never granted.
-#[sqlx::test]
-async fn nothing_can_be_connected_to_a_hole_nobody_has_been_through(pool: PgPool) {
+#[tokio::test]
+async fn nothing_can_be_connected_to_a_hole_nobody_has_been_through() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let other = place(&pool, w.owner, w.map_id, SYS_C).await;
     place(&pool, w.owner, w.map_id, SYS_A).await;
@@ -1181,8 +1204,9 @@ async fn nothing_can_be_connected_to_a_hole_nobody_has_been_through(pool: PgPool
 /// The node and the scan are one fact, so undoing the delete brings both back, linked as
 /// they were. The row naming its signature is what makes that possible: before, the node
 /// was found through its connection and the connection had already gone.
-#[sqlx::test]
-async fn undoing_a_signature_delete_brings_its_node_back(pool: PgPool) {
+#[tokio::test]
+async fn undoing_a_signature_delete_brings_its_node_back() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let home = place(&pool, w.owner, w.map_id, SYS_A).await;
     ghosting(&pool, w.owner, w.map_id).await;
@@ -1222,10 +1246,11 @@ async fn undoing_a_signature_delete_brings_its_node_back(pool: PgPool) {
 
 // The command refuses an edge to a ghost however it is reached, not only from the API: what
 // is beyond an unmapped hole is the one thing nobody knows yet.
-#[sqlx::test]
-async fn nothing_connects_to_a_ghost_but_the_scan_that_raised_it(pool: PgPool) {
+#[tokio::test]
+async fn nothing_connects_to_a_ghost_but_the_scan_that_raised_it() {
     use wormholesystems::maps::ConnectionType;
     use wormholesystems::maps::connection::AddConnection;
+    let (pool, _db) = common::db::fresh().await;
 
     let w = world(&pool).await;
     place(&pool, w.owner, w.map_id, SYS_A).await;
@@ -1256,8 +1281,9 @@ async fn nothing_connects_to_a_ghost_but_the_scan_that_raised_it(pool: PgPool) {
 /// the hole, which leaves its far side with no edges for a moment -- long enough for
 /// the orphan cleanup to clear it -- and the restore that follows was holding an edge back
 /// to it. The redo died on the foreign key.
-#[sqlx::test]
-async fn a_removal_can_be_walked_forward_again(pool: PgPool) {
+#[tokio::test]
+async fn a_removal_can_be_walked_forward_again() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place(&pool, w.owner, w.map_id, SYS_A).await;
     let b = place(&pool, w.owner, w.map_id, SYS_B).await;

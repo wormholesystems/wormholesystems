@@ -13,8 +13,9 @@ use wormholesystems::maps::connection::{
 use wormholesystems::maps::solar_system::{AddSystem, add_system};
 use wormholesystems::maps::{ConnectionType, MapError, MassStatus, Role, TimeStatus};
 
-#[sqlx::test]
-async fn add_connection_returns_fields_and_validates(pool: PgPool) {
+#[tokio::test]
+async fn add_connection_returns_fields_and_validates() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = add_system(
         &pool,
@@ -117,8 +118,9 @@ async fn add_connection_returns_fields_and_validates(pool: PgPool) {
     assert_eq!(edges, 2);
 }
 
-#[sqlx::test]
-async fn remove_connection_clears_signature_link(pool: PgPool) {
+#[tokio::test]
+async fn remove_connection_clears_signature_link() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = add_system(
         &pool,
@@ -211,8 +213,9 @@ async fn remove_connection_clears_signature_link(pool: PgPool) {
     ));
 }
 
-#[sqlx::test]
-async fn set_status_marks_a_connection_without_a_signature(pool: PgPool) {
+#[tokio::test]
+async fn set_status_marks_a_connection_without_a_signature() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = add_system(
         &pool,
@@ -375,10 +378,11 @@ async fn status_of(pool: &PgPool, connection_id: i64) -> Option<TimeStatus> {
 
 /// The clock marks a plain hole EOL at 20 hours and critical at 23, records each mark as a
 /// background audit entry, and the marks reach a linked signature through the sync.
-#[sqlx::test]
-async fn ageing_marks_a_hole_eol_then_critical(pool: PgPool) {
+#[tokio::test]
+async fn ageing_marks_a_hole_eol_then_critical() {
     use wormholesystems::maps::connection::age_connections;
     use wormholesystems::maps::history::list_history;
+    let (pool, _db) = common::db::fresh().await;
 
     let w = world(&pool).await;
     seed_wormhole_system(&pool, 31000001, 3).await;
@@ -436,9 +440,10 @@ async fn ageing_marks_a_hole_eol_then_critical(pool: PgPool) {
 
 /// C6 and drifter holes into known space run on their own clocks; a hole a pilot already
 /// marked, and a stargate, are left alone.
-#[sqlx::test]
-async fn ageing_uses_the_class_pair_and_never_downgrades(pool: PgPool) {
+#[tokio::test]
+async fn ageing_uses_the_class_pair_and_never_downgrades() {
     use wormholesystems::maps::connection::age_connections;
+    let (pool, _db) = common::db::fresh().await;
 
     let w = world(&pool).await;
     sqlx::query("update solar_systems set wormhole_class_id = 7 where id = $1")
@@ -495,11 +500,12 @@ async fn ageing_uses_the_class_pair_and_never_downgrades(pool: PgPool) {
 
 /// Expired is only ever read off the hole: the clock leaves an expired hole where it is,
 /// and the stale cleanup takes it an hour after the mark, like a critical one.
-#[sqlx::test]
-async fn an_expired_hole_is_not_aged_and_goes_stale_after_an_hour(pool: PgPool) {
+#[tokio::test]
+async fn an_expired_hole_is_not_aged_and_goes_stale_after_an_hour() {
     use wormholesystems::maps::connection::{
         CleanStaleConnections, age_connections, clean_stale_connections, list_stale_connections,
     };
+    let (pool, _db) = common::db::fresh().await;
 
     let w = world(&pool).await;
     seed_wormhole_system(&pool, 31000001, 3).await;
@@ -545,8 +551,9 @@ async fn an_expired_hole_is_not_aged_and_goes_stale_after_an_hour(pool: PgPool) 
 }
 
 /// Worst wins on link: an expired signature drags a critical connection along.
-#[sqlx::test]
-async fn an_expired_signature_wins_over_a_critical_connection(pool: PgPool) {
+#[tokio::test]
+async fn an_expired_signature_wins_over_a_critical_connection() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_wormhole_system(&pool, 31000001, 3).await;
     let a = place(&pool, w.owner, w.map_id, SYS_A).await;
@@ -586,11 +593,12 @@ async fn an_expired_signature_wins_over_a_critical_connection(pool: PgPool) {
 
 /// A wormhole three days old cannot exist: it goes, with the placement it strands, while
 /// pinned systems, stargates and younger holes stay. Its signature is unlinked, not deleted.
-#[sqlx::test]
-async fn expiry_removes_dead_wormholes_and_what_they_strand(pool: PgPool) {
+#[tokio::test]
+async fn expiry_removes_dead_wormholes_and_what_they_strand() {
     use wormholesystems::maps::connection::expire_connections;
     use wormholesystems::maps::history::list_history;
     use wormholesystems::maps::solar_system::{SetPinned, set_pinned};
+    let (pool, _db) = common::db::fresh().await;
 
     let w = world(&pool).await;
     seed_wormhole_system(&pool, 31000001, 3).await;
@@ -684,10 +692,11 @@ async fn clocks_of(
 
 /// Undoing a removal puts the hole and the scan back as old as they were and EOL since when
 /// they were, so the ageing and the three-day expiry carry on rather than start over.
-#[sqlx::test]
-async fn an_undone_removal_keeps_its_clocks(pool: PgPool) {
+#[tokio::test]
+async fn an_undone_removal_keeps_its_clocks() {
     use wormholesystems::maps::history::{MapIdBody, undo};
     use wormholesystems::maps::signatures::{RemoveSignature, remove_signature};
+    let (pool, _db) = common::db::fresh().await;
 
     let w = world(&pool).await;
     let a = place(&pool, w.owner, w.map_id, SYS_A).await;
@@ -777,10 +786,11 @@ async fn swept_rows(pool: &PgPool, map_id: i64) -> Vec<serde_json::Value> {
 
 /// A clean that takes several holes at once, each with its signature and jumps, and the
 /// placements they strand, comes back whole in one undo and goes again on redo.
-#[sqlx::test]
-async fn sweeping_several_connections_undoes_as_one(pool: PgPool) {
+#[tokio::test]
+async fn sweeping_several_connections_undoes_as_one() {
     use wormholesystems::maps::connection::{CleanStaleConnections, clean_stale_connections};
     use wormholesystems::maps::history::{MapIdBody, redo, undo};
+    let (pool, _db) = common::db::fresh().await;
 
     let w = world(&pool).await;
     seed_wormhole_system(&pool, 31000001, 3).await;

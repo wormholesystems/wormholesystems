@@ -59,8 +59,9 @@ async fn mint(pool: &PgPool, cookie: &str, name: &str) -> (i64, String) {
     )
 }
 
-#[sqlx::test]
-async fn the_secret_is_shown_once_and_only_its_hash_is_kept(pool: PgPool) {
+#[tokio::test]
+async fn the_secret_is_shown_once_and_only_its_hash_is_kept() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
 
@@ -84,8 +85,9 @@ async fn the_secret_is_shown_once_and_only_its_hash_is_kept(pool: PgPool) {
     assert!(listed.body[0]["last_used_at"].is_null());
 }
 
-#[sqlx::test]
-async fn a_blank_name_is_refused(pool: PgPool) {
+#[tokio::test]
+async fn a_blank_name_is_refused() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
     let refused = request_json(
@@ -99,8 +101,9 @@ async fn a_blank_name_is_refused(pool: PgPool) {
     assert_eq!(refused.status, StatusCode::BAD_REQUEST);
 }
 
-#[sqlx::test]
-async fn a_bearer_token_acts_as_its_user(pool: PgPool) {
+#[tokio::test]
+async fn a_bearer_token_acts_as_its_user() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
     let (id, plaintext) = mint(&pool, &cookie, "script").await;
@@ -123,8 +126,9 @@ async fn a_bearer_token_acts_as_its_user(pool: PgPool) {
     assert!(used.is_some());
 }
 
-#[sqlx::test]
-async fn last_used_moves_at_most_every_five_minutes(pool: PgPool) {
+#[tokio::test]
+async fn last_used_moves_at_most_every_five_minutes() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
     let (id, plaintext) = mint(&pool, &cookie, "script").await;
@@ -165,8 +169,9 @@ async fn last_used_moves_at_most_every_five_minutes(pool: PgPool) {
     assert!(used(pool.clone()).await > before);
 }
 
-#[sqlx::test]
-async fn an_expiry_too_far_out_is_refused_not_a_crash(pool: PgPool) {
+#[tokio::test]
+async fn an_expiry_too_far_out_is_refused_not_a_crash() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
     let refused = request_json(
@@ -180,8 +185,9 @@ async fn an_expiry_too_far_out_is_refused_not_a_crash(pool: PgPool) {
     assert_eq!(refused.status, StatusCode::BAD_REQUEST);
 }
 
-#[sqlx::test]
-async fn a_bad_token_is_refused_rather_than_treated_as_a_guest(pool: PgPool) {
+#[tokio::test]
+async fn a_bad_token_is_refused_rather_than_treated_as_a_guest() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
 
@@ -217,8 +223,9 @@ async fn a_bad_token_is_refused_rather_than_treated_as_a_guest(pool: PgPool) {
     assert_eq!(expired.status, StatusCode::UNAUTHORIZED);
 }
 
-#[sqlx::test]
-async fn revoking_locks_the_token_out_and_only_the_owner_may_revoke(pool: PgPool) {
+#[tokio::test]
+async fn revoking_locks_the_token_out_and_only_the_owner_may_revoke() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
     let (id, plaintext) = mint(&pool, &cookie, "script").await;
@@ -248,8 +255,9 @@ async fn revoking_locks_the_token_out_and_only_the_owner_may_revoke(pool: PgPool
     );
 }
 
-#[sqlx::test]
-async fn tokens_are_managed_from_a_session_only(pool: PgPool) {
+#[tokio::test]
+async fn tokens_are_managed_from_a_session_only() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
     let (_, plaintext) = mint(&pool, &cookie, "script").await;
@@ -267,8 +275,9 @@ async fn tokens_are_managed_from_a_session_only(pool: PgPool) {
     assert_eq!(minted.status, StatusCode::UNAUTHORIZED);
 }
 
-#[sqlx::test]
-async fn expiry_is_days_from_now(pool: PgPool) {
+#[tokio::test]
+async fn expiry_is_days_from_now() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
     let created = request_json(

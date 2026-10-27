@@ -44,8 +44,9 @@ async fn view(pool: &PgPool, actor: Actor, map_id: i64) -> wormholesystems::maps
         .expect("get_map")
 }
 
-#[sqlx::test]
-async fn puts_the_hub_its_holes_and_both_ends_signatures_on_the_map(pool: PgPool) {
+#[tokio::test]
+async fn puts_the_hub_its_holes_and_both_ends_signatures_on_the_map() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_catalog(&pool).await;
     seed_thera(&pool).await;
@@ -98,8 +99,9 @@ async fn puts_the_hub_its_holes_and_both_ends_signatures_on_the_map(pool: PgPool
     assert!(!sigs.iter().any(|s| s.solar_system_id == SYS_B));
 }
 
-#[sqlx::test]
-async fn a_second_run_reuses_what_is_there_and_adds_nothing(pool: PgPool) {
+#[tokio::test]
+async fn a_second_run_reuses_what_is_there_and_adds_nothing() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_catalog(&pool).await;
     seed_thera(&pool).await;
@@ -147,8 +149,9 @@ async fn a_second_run_reuses_what_is_there_and_adds_nothing(pool: PgPool) {
     assert!(!history.entries[0].is_step);
 }
 
-#[sqlx::test]
-async fn an_unknown_scan_on_either_end_becomes_the_hole(pool: PgPool) {
+#[tokio::test]
+async fn an_unknown_scan_on_either_end_becomes_the_hole() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_catalog(&pool).await;
     seed_thera(&pool).await;
@@ -195,8 +198,9 @@ async fn an_unknown_scan_on_either_end_becomes_the_hole(pool: PgPool) {
     assert_eq!(sigs.len(), 2, "the scan was reused, not duplicated");
 }
 
-#[sqlx::test]
-async fn the_whole_run_is_one_undo(pool: PgPool) {
+#[tokio::test]
+async fn the_whole_run_is_one_undo() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_catalog(&pool).await;
     seed_thera(&pool).await;
@@ -270,8 +274,9 @@ async fn the_whole_run_is_one_undo(pool: PgPool) {
     assert_eq!(sigs.len(), 4);
 }
 
-#[sqlx::test]
-async fn only_thera_and_turnur_are_hubs(pool: PgPool) {
+#[tokio::test]
+async fn only_thera_and_turnur_are_hubs() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_catalog(&pool).await;
     seed_thera(&pool).await;
@@ -287,8 +292,9 @@ async fn only_thera_and_turnur_are_hubs(pool: PgPool) {
     assert!(matches!(err, Err(MapError::Validation(_))));
 }
 
-#[sqlx::test]
-async fn a_viewer_may_not(pool: PgPool) {
+#[tokio::test]
+async fn a_viewer_may_not() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_catalog(&pool).await;
     seed_thera(&pool).await;
