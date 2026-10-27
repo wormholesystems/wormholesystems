@@ -261,10 +261,12 @@ test('a wide card names the aggressor, a narrow one keeps the count', async ({ p
 	await expect(row).toBeVisible();
 
 	// The count is always there. The name needs room, and the room is the card's, so a
-	// narrower window takes it away and a wider one gives it back.
+	// narrower card takes it away and a wider one gives it back. At 1100 the panels are two
+	// to a row and the card is about 550 wide; between 700 and 1000 it spans the window
+	// instead, and has the room.
 	await expect(row.getByTestId('killmail-attackers')).toHaveText('4');
 
-	await page.setViewportSize({ width: 900, height: 720 });
+	await page.setViewportSize({ width: 1100, height: 720 });
 	await expect(row.getByTestId('killmail-attackers')).toHaveText('4');
 	await expect(row.getByTestId('killmail-aggressor')).toBeHidden();
 
