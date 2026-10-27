@@ -14,8 +14,9 @@ use wormholesystems::maps::solar_system::{
 };
 use wormholesystems::maps::{MapError, Role, SystemStatus};
 
-#[sqlx::test]
-async fn add_system_returns_fields_and_persists(pool: PgPool) {
+#[tokio::test]
+async fn add_system_returns_fields_and_persists() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let viewer = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Viewer).await;
 
@@ -101,8 +102,9 @@ async fn add_system_returns_fields_and_persists(pool: PgPool) {
     ));
 }
 
-#[sqlx::test]
-async fn remove_system_keeps_details(pool: PgPool) {
+#[tokio::test]
+async fn remove_system_keeps_details() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let placed = add_system(
         &pool,
@@ -169,8 +171,9 @@ async fn remove_system_keeps_details(pool: PgPool) {
     ));
 }
 
-#[sqlx::test]
-async fn move_and_alias_update_the_row(pool: PgPool) {
+#[tokio::test]
+async fn move_and_alias_update_the_row() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let placed = add_system(
         &pool,
@@ -262,8 +265,9 @@ async fn move_and_alias_update_the_row(pool: PgPool) {
 /// get deleted, but it can still be dragged around. Neither is an error to try: a marquee
 /// across the chain is the same gesture as selecting one system, and refusing the whole
 /// delete because the box happened to contain the home system would punish the gesture.
-#[sqlx::test]
-async fn pinned_and_home_systems_are_passed_over_rather_than_refused(pool: PgPool) {
+#[tokio::test]
+async fn pinned_and_home_systems_are_passed_over_rather_than_refused() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let home = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let pinned = place_at(&pool, w.owner, w.map_id, SYS_B, 200.0).await;
@@ -314,8 +318,9 @@ async fn pinned_and_home_systems_are_passed_over_rather_than_refused(pool: PgPoo
     assert_eq!(placed_ids(&pool, w.owner, w.map_id).await.len(), 2);
 }
 
-#[sqlx::test]
-async fn unpinning_gives_the_system_back(pool: PgPool) {
+#[tokio::test]
+async fn unpinning_gives_the_system_back() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let pinned = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     pin(&pool, w.owner, w.map_id, pinned).await;
@@ -350,8 +355,9 @@ async fn unpinning_gives_the_system_back(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn a_pinned_system_will_not_move_but_the_home_system_will(pool: PgPool) {
+#[tokio::test]
+async fn a_pinned_system_will_not_move_but_the_home_system_will() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let home = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let pinned = place_at(&pool, w.owner, w.map_id, SYS_B, 200.0).await;
@@ -494,8 +500,9 @@ async fn placed_ids(pool: &PgPool, actor: wormholesystems::maps::Actor, map_id: 
 
 /// Home is one-per-map, and undo puts the previous holder back rather than leaving the map
 /// with none.
-#[sqlx::test]
-async fn a_map_has_one_home_and_undo_returns_the_last_one(pool: PgPool) {
+#[tokio::test]
+async fn a_map_has_one_home_and_undo_returns_the_last_one() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let first = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let second = place_at(&pool, w.owner, w.map_id, SYS_B, 200.0).await;
@@ -516,8 +523,9 @@ async fn a_map_has_one_home_and_undo_returns_the_last_one(pool: PgPool) {
 
 /// A map holds two rally points, oldest first. A third replaces the oldest, and undo
 /// brings that one back in its old place, so the next eviction still picks it.
-#[sqlx::test]
-async fn a_third_rally_point_replaces_the_oldest_and_undo_brings_it_back(pool: PgPool) {
+#[tokio::test]
+async fn a_third_rally_point_replaces_the_oldest_and_undo_brings_it_back() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let b = place_at(&pool, w.owner, w.map_id, SYS_B, 200.0).await;
@@ -547,8 +555,9 @@ async fn a_third_rally_point_replaces_the_oldest_and_undo_brings_it_back(pool: P
 
 /// Clearing a rally point clears only that one, and clearing a system that is not one
 /// changes nothing.
-#[sqlx::test]
-async fn a_rally_point_clears_on_its_own(pool: PgPool) {
+#[tokio::test]
+async fn a_rally_point_clears_on_its_own() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let b = place_at(&pool, w.owner, w.map_id, SYS_B, 200.0).await;
@@ -582,8 +591,9 @@ async fn a_rally_point_clears_on_its_own(pool: PgPool) {
 }
 
 /// Removing a rally system and undoing it puts it back as old as it was.
-#[sqlx::test]
-async fn a_restored_rally_point_keeps_its_place(pool: PgPool) {
+#[tokio::test]
+async fn a_restored_rally_point_keeps_its_place() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let b = place_at(&pool, w.owner, w.map_id, SYS_B, 200.0).await;
@@ -683,8 +693,9 @@ async fn intel_of(pool: &PgPool, map_id: i64) -> Option<(String, Option<String>,
 /// Status, occupier and notes share one row, and each write touches its own column only:
 /// setting the notes must not reset a status somebody else set, and undo puts back just
 /// the one it changed.
-#[sqlx::test]
-async fn each_intel_write_sets_its_own_column_and_undoes_alone(pool: PgPool) {
+#[tokio::test]
+async fn each_intel_write_sets_its_own_column_and_undoes_alone() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let id = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let (map_id, map_solar_system_id) = (w.map_id, id);
@@ -766,8 +777,9 @@ async fn each_intel_write_sets_its_own_column_and_undoes_alone(pool: PgPool) {
 /// Two people editing the same notes: the second save names the notes it started from,
 /// which are no longer what is stored, so it is refused instead of overwriting the first.
 /// Undo is not a save from an editor and still walks back through both.
-#[sqlx::test]
-async fn a_note_saved_over_a_newer_one_is_refused(pool: PgPool) {
+#[tokio::test]
+async fn a_note_saved_over_a_newer_one_is_refused() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let member = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Member).await;
     let id = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
@@ -838,8 +850,9 @@ fn an_expected_null_note_is_still_checked() {
 /// Clearing deletes the placements it snapshotted and nothing else. One placed by somebody
 /// else between the clear's read and its delete is not in the snapshot, so taking it too
 /// would be a removal that undo cannot put back.
-#[sqlx::test]
-async fn clearing_leaves_a_placement_it_did_not_snapshot(pool: PgPool) {
+#[tokio::test]
+async fn clearing_leaves_a_placement_it_did_not_snapshot() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     place_at(&pool, w.owner, w.map_id, SYS_B, 100.0).await;
@@ -888,8 +901,9 @@ async fn clearing_leaves_a_placement_it_did_not_snapshot(pool: PgPool) {
 
 /// A multi-drag moves every system it names in one write, the last position winning for a
 /// system named twice, and undo and redo move them all back and forth together.
-#[sqlx::test]
-async fn moving_several_systems_undoes_and_redoes_together(pool: PgPool) {
+#[tokio::test]
+async fn moving_several_systems_undoes_and_redoes_together() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let b = place_at(&pool, w.owner, w.map_id, SYS_B, 100.0).await;

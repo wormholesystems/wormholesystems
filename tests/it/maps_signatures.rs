@@ -20,8 +20,9 @@ use wormholesystems::maps::{
     Actor, MapError, MassStatus, Role, SignatureGroup, TimeStatus, WormholeSize,
 };
 
-#[sqlx::test]
-async fn add_validates_and_persists(pool: PgPool) {
+#[tokio::test]
+async fn add_validates_and_persists() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     place(&pool, w.owner, w.map_id, SYS_A).await;
     let viewer = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Viewer).await;
@@ -115,8 +116,9 @@ async fn add_validates_and_persists(pool: PgPool) {
     ));
 }
 
-#[sqlx::test]
-async fn update_and_remove(pool: PgPool) {
+#[tokio::test]
+async fn update_and_remove() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     place(&pool, w.owner, w.map_id, SYS_A).await;
     let sig = add_signature(
@@ -183,8 +185,9 @@ async fn update_and_remove(pool: PgPool) {
 
 /// The core sync contract: linking merges to the worst state per field (crossing in *both*
 /// directions), then later edits propagate verbatim — including downgrades.
-#[sqlx::test]
-async fn link_merges_worst_then_edits_propagate(pool: PgPool) {
+#[tokio::test]
+async fn link_merges_worst_then_edits_propagate() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place(&pool, w.owner, w.map_id, SYS_A).await;
     let b = place(&pool, w.owner, w.map_id, SYS_B).await;
@@ -306,8 +309,9 @@ async fn link_merges_worst_then_edits_propagate(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn link_validations_and_unlink(pool: PgPool) {
+#[tokio::test]
+async fn link_validations_and_unlink() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place(&pool, w.owner, w.map_id, SYS_A).await;
     let b = place(&pool, w.owner, w.map_id, SYS_B).await;
@@ -400,8 +404,9 @@ async fn link_validations_and_unlink(pool: PgPool) {
 /// An identified wormhole type dictates the group's size: linking applies it, manual edits
 /// on either side are overridden, and only losing the identification (retyped to K162,
 /// unlinked) lets a manual size stick again, keeping the size the group had.
-#[sqlx::test]
-async fn identified_type_locks_size(pool: PgPool) {
+#[tokio::test]
+async fn identified_type_locks_size() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_catalog(&pool).await;
     let a = place(&pool, w.owner, w.map_id, SYS_A).await;
@@ -579,8 +584,9 @@ async fn identified_type_locks_size(pool: PgPool) {
 /// next#7: two holes in one system leading to the same place are two connections, and each
 /// keeps its own state. Pointing a second signature at a connection another already claims
 /// hands the connection over rather than putting both in one sync group.
-#[sqlx::test]
-async fn a_connection_takes_one_signature_per_system(pool: PgPool) {
+#[tokio::test]
+async fn a_connection_takes_one_signature_per_system() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place(&pool, w.owner, w.map_id, SYS_A).await;
     let b = place(&pool, w.owner, w.map_id, SYS_B).await;
@@ -685,8 +691,9 @@ async fn a_connection_takes_one_signature_per_system(pool: PgPool) {
 /// Bulk deleting the signature of a system's only connection takes the connection and the
 /// stranded far end, but never the system the signatures were in, even when that leaves it
 /// with no connections.
-#[sqlx::test]
-async fn bulk_remove_keeps_the_origin_system(pool: PgPool) {
+#[tokio::test]
+async fn bulk_remove_keeps_the_origin_system() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let origin = place(&pool, w.owner, w.map_id, SYS_A).await;
     let target = place(&pool, w.owner, w.map_id, SYS_B).await;
@@ -803,8 +810,9 @@ async fn touched(pool: &PgPool, signature_pk: i64) -> bool {
 
 /// Linking and unlinking are edits to the signature like any other, the same as the unlink
 /// a link does to make room, whether or not the sync had any state to change.
-#[sqlx::test]
-async fn linking_and_unlinking_touch_the_signature(pool: PgPool) {
+#[tokio::test]
+async fn linking_and_unlinking_touch_the_signature() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place(&pool, w.owner, w.map_id, SYS_A).await;
     let b = place(&pool, w.owner, w.map_id, SYS_B).await;
@@ -865,9 +873,10 @@ async fn linking_and_unlinking_touch_the_signature(pool: PgPool) {
 
 /// The last scan on one side of a hole takes the hole with it. Undoing that has to bring
 /// the hole back before the scan, and the scan on the other side has to get its link back.
-#[sqlx::test]
-async fn undoing_the_removal_of_a_holes_last_scan_brings_the_hole_back(pool: PgPool) {
+#[tokio::test]
+async fn undoing_the_removal_of_a_holes_last_scan_brings_the_hole_back() {
     use wormholesystems::maps::history::{MapIdBody, redo, undo};
+    let (pool, _db) = common::db::fresh().await;
 
     let w = world(&pool).await;
     let a = place(&pool, w.owner, w.map_id, SYS_A).await;

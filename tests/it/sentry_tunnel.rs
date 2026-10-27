@@ -56,14 +56,16 @@ fn app_with(pool: &PgPool, dsn: Option<&str>) -> Router {
     wormholesystems::app::router(state)
 }
 
-#[sqlx::test]
-async fn without_a_dsn_there_is_no_tunnel(pool: PgPool) {
+#[tokio::test]
+async fn without_a_dsn_there_is_no_tunnel() {
+    let (pool, _db) = common::db::fresh().await;
     let status = post_envelope(app_with(&pool, None), envelope("http://k@a/1")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
-#[sqlx::test]
-async fn a_report_for_the_dsn_is_forwarded(pool: PgPool) {
+#[tokio::test]
+async fn a_report_for_the_dsn_is_forwarded() {
+    let (pool, _db) = common::db::fresh().await;
     let (dsn, seen) = collector().await;
     let status = post_envelope(app_with(&pool, Some(&dsn)), envelope(&dsn)).await;
     assert_eq!(status, StatusCode::OK);
@@ -73,8 +75,9 @@ async fn a_report_for_the_dsn_is_forwarded(pool: PgPool) {
     assert_eq!(seen[0].1, envelope(&dsn).as_bytes());
 }
 
-#[sqlx::test]
-async fn anything_else_is_refused(pool: PgPool) {
+#[tokio::test]
+async fn anything_else_is_refused() {
+    let (pool, _db) = common::db::fresh().await;
     let (dsn, seen) = collector().await;
     let other_project = dsn.replace("/7", "/8");
     for body in [

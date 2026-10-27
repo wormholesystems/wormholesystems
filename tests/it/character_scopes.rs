@@ -1,6 +1,7 @@
 //! Which ESI permissions each of a user's characters is missing, for the warning beside the
 //! portrait in the navigation bar.
 
+use crate::common;
 use std::time::{Duration, SystemTime};
 
 use sqlx::PgPool;
@@ -47,8 +48,9 @@ async fn missing(pool: &PgPool, actor: Actor, character_id: i64) -> Vec<String> 
         .missing_scopes
 }
 
-#[sqlx::test]
-async fn each_character_says_which_permissions_it_has_not_granted(pool: PgPool) {
+#[tokio::test]
+async fn each_character_says_which_permissions_it_has_not_granted() {
+    let (pool, _db) = common::db::fresh().await;
     let user = persist_identity(&pool, &claims(100, "h1"), corp(), None, None)
         .await
         .unwrap();

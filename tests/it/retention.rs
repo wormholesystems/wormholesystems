@@ -40,8 +40,9 @@ async fn keys(pool: &PgPool) -> Vec<String> {
         .expect("query map_alert_deliveries")
 }
 
-#[sqlx::test]
-async fn old_deliveries_go_once_their_occasion_cannot_return(pool: PgPool) {
+#[tokio::test]
+async fn old_deliveries_go_once_their_occasion_cannot_return() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let alert_id = alert(&pool, w.map_id).await;
     let placed = add_system(
@@ -79,8 +80,9 @@ async fn old_deliveries_go_once_their_occasion_cannot_return(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn old_alert_history_and_expired_sessions_go(pool: PgPool) {
+#[tokio::test]
+async fn old_alert_history_and_expired_sessions_go() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     for days_old in [100, 10] {
         sqlx::query(

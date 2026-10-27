@@ -8,7 +8,6 @@ use axum::http::{Request, StatusCode, header};
 use common::app::{app, get, request_json, send, session_cookie};
 use common::{member_with_role, world};
 use serde_json::json;
-use sqlx::PgPool;
 use wormholesystems::maps::Role;
 
 /// A request whose body fails the moment anything reads it. A route that answers it with
@@ -27,8 +26,9 @@ fn unreadable(path: &str, cookie: Option<&str>) -> Request<Body> {
     builder.body(body).expect("build request")
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn a_stranger_is_turned_away_before_the_file_is_read(pool: PgPool) {
+#[tokio::test]
+async fn a_stranger_is_turned_away_before_the_file_is_read() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let import = format!("/api/maps/{}/transfer/import", w.map_id);
 
@@ -53,8 +53,9 @@ async fn a_stranger_is_turned_away_before_the_file_is_read(pool: PgPool) {
     assert_eq!(owner.status, StatusCode::BAD_REQUEST);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn an_exported_file_imports_back(pool: PgPool) {
+#[tokio::test]
+async fn an_exported_file_imports_back() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
 

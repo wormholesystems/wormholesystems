@@ -55,8 +55,9 @@ async fn next(socket: &mut Socket) -> Message {
         .expect("read ws frame")
 }
 
-#[sqlx::test]
-async fn the_socket_hears_what_a_command_publishes(pool: PgPool) {
+#[tokio::test]
+async fn the_socket_hears_what_a_command_publishes() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
     let mut socket = open(&pool, w.map_id, &cookie).await;
@@ -76,8 +77,9 @@ async fn the_socket_hears_what_a_command_publishes(pool: PgPool) {
     }
 }
 
-#[sqlx::test]
-async fn losing_access_closes_the_socket(pool: PgPool) {
+#[tokio::test]
+async fn losing_access_closes_the_socket() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let member = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Member).await;
     let cookie = session_cookie(&pool, member).await;
@@ -107,8 +109,9 @@ async fn losing_access_closes_the_socket(pool: PgPool) {
     }
 }
 
-#[sqlx::test]
-async fn a_refused_socket_leaves_nothing_in_the_hub(pool: PgPool) {
+#[tokio::test]
+async fn a_refused_socket_leaves_nothing_in_the_hub() {
+    let (pool, _db) = common::db::fresh().await;
     // Ids no other test's map will have, since every test shares the process's hub.
     sqlx::query("alter table maps alter column id restart with 7700000001")
         .execute(&pool)

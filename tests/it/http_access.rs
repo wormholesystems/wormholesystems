@@ -7,11 +7,11 @@ use axum::http::StatusCode;
 use common::app::{app, get, request_json, session_cookie};
 use common::{add_character, new_user, world};
 use serde_json::json;
-use sqlx::PgPool;
 use wormholesystems::maps::Actor;
 
-#[sqlx::test(migrations = "./migrations")]
-async fn no_session_is_401_and_a_session_is_not(pool: PgPool) {
+#[tokio::test]
+async fn no_session_is_401_and_a_session_is_not() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
 
     let anonymous = get(app(&pool), "/api/maps", None).await;
@@ -23,8 +23,9 @@ async fn no_session_is_401_and_a_session_is_not(pool: PgPool) {
     assert_eq!(signed_in.body.as_array().map(std::vec::Vec::len), Some(1));
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn a_body_map_id_must_agree_with_the_url(pool: PgPool) {
+#[tokio::test]
+async fn a_body_map_id_must_agree_with_the_url() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
 
@@ -49,8 +50,9 @@ async fn a_body_map_id_must_agree_with_the_url(pool: PgPool) {
     assert_eq!(matched.status, StatusCode::OK);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn an_outsider_gets_404_on_a_private_map_and_a_share_token_opens_it(pool: PgPool) {
+#[tokio::test]
+async fn an_outsider_gets_404_on_a_private_map_and_a_share_token_opens_it() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
 
     let outsider_user = new_user(&pool).await;
@@ -91,8 +93,9 @@ async fn an_outsider_gets_404_on_a_private_map_and_a_share_token_opens_it(pool: 
     assert_eq!(stale.status, StatusCode::NOT_FOUND);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn alerts_are_manager_gated(pool: PgPool) {
+#[tokio::test]
+async fn alerts_are_manager_gated() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let member = common::member_with_role(
         &pool,

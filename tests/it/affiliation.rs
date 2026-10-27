@@ -9,7 +9,6 @@ use axum::Router;
 use axum::extract::{Json, Path, State};
 use axum::routing::{get, post};
 use common::{add_character, new_user, world};
-use sqlx::PgPool;
 use wormholesystems::affiliation::refresh;
 use wormholesystems::esi::EsiClient;
 use wormholesystems::maps::access::{SetAccess, effective_role, set_access};
@@ -78,8 +77,9 @@ async fn alliance(Path(id): Path<i64>) -> Json<serde_json::Value> {
     }))
 }
 
-#[sqlx::test]
-async fn leaving_a_granted_corporation_loses_its_access(pool: PgPool) {
+#[tokio::test]
+async fn leaving_a_granted_corporation_loses_its_access() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     set_access(
         &pool,
@@ -129,8 +129,9 @@ async fn leaving_a_granted_corporation_loses_its_access(pool: PgPool) {
     assert_eq!(refresh(&pool, &esi).await.unwrap(), 0);
 }
 
-#[sqlx::test]
-async fn account_characters_go_in_batches_of_a_thousand(pool: PgPool) {
+#[tokio::test]
+async fn account_characters_go_in_batches_of_a_thousand() {
+    let (pool, _db) = common::db::fresh().await;
     let user = new_user(&pool).await;
     sqlx::query("insert into corporations (id, name, ticker) values ($1, 'Old Corp', 'OLD')")
         .bind(OLD_CORP)

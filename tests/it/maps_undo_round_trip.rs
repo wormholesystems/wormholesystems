@@ -620,12 +620,14 @@ const GHOST_CASES: &[Case] = &[
     }),
 ];
 
-#[sqlx::test]
-async fn every_command_undoes_and_redoes_to_the_same_tables(pool: PgPool) {
+#[tokio::test]
+async fn every_command_undoes_and_redoes_to_the_same_tables() {
+    let (pool, _db) = common::db::fresh().await;
     round_trip(&pool, Ghosts::Off, CASES).await;
 }
 
-#[sqlx::test]
-async fn every_ghost_command_undoes_and_redoes_to_the_same_tables(pool: PgPool) {
+#[tokio::test]
+async fn every_ghost_command_undoes_and_redoes_to_the_same_tables() {
+    let (pool, _db) = common::db::fresh().await;
     round_trip(&pool, Ghosts::On, GHOST_CASES).await;
 }

@@ -6,15 +6,15 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use common::app::{get, state};
-use sqlx::PgPool;
 use wormholesystems::announcement::{Announcement, AnnouncementVars};
 
 // Compression is for the whole API; the OpenAPI document is just a reply big enough to get it.
-#[sqlx::test]
-async fn replies_are_compressed_when_the_client_asks(pool: PgPool) {
+#[tokio::test]
+async fn replies_are_compressed_when_the_client_asks() {
     use axum::body::Body;
     use axum::http::{Request, header};
     use tower::ServiceExt;
+    let (pool, _db) = common::db::fresh().await;
 
     let request = |encoding: Option<&str>| {
         let mut req = Request::get("/api/openapi.json");
@@ -41,16 +41,18 @@ async fn replies_are_compressed_when_the_client_asks(pool: PgPool) {
     }
 }
 
-#[sqlx::test]
-async fn no_announcement_is_null(pool: PgPool) {
+#[tokio::test]
+async fn no_announcement_is_null() {
+    let (pool, _db) = common::db::fresh().await;
     let res = get(common::app::app(&pool), "/api/instance", None).await;
     assert_eq!(res.status, StatusCode::OK);
     assert!(res.body["announcement"].is_null());
 }
 
 // Anonymous visitors get it too: the landing page shows it.
-#[sqlx::test]
-async fn the_announcement_is_served_to_everyone(pool: PgPool) {
+#[tokio::test]
+async fn the_announcement_is_served_to_everyone() {
+    let (pool, _db) = common::db::fresh().await;
     let mut state = state(&pool);
     state.announcement = Announcement::from_vars(AnnouncementVars {
         level: Some("warning"),
@@ -75,9 +77,10 @@ async fn the_announcement_is_served_to_everyone(pool: PgPool) {
 }
 
 // What Docker's healthcheck asks: up while the database answers, and 503 once it does not.
-#[sqlx::test]
-async fn healthz_follows_the_database(pool: PgPool) {
+#[tokio::test]
+async fn healthz_follows_the_database() {
     use axum::extract::State;
+    let (pool, _db) = common::db::fresh().await;
 
     let (status, _) = wormholesystems::app::healthz(State(state(&pool))).await;
     assert_eq!(status, StatusCode::OK);
@@ -88,11 +91,12 @@ async fn healthz_follows_the_database(pool: PgPool) {
 }
 
 // The proxies only forward /api/ and friends, so an uptime check from outside asks this one.
-#[sqlx::test]
-async fn healthz_answers_under_api_too(pool: PgPool) {
+#[tokio::test]
+async fn healthz_answers_under_api_too() {
     use axum::body::Body;
     use axum::http::Request;
     use tower::ServiceExt;
+    let (pool, _db) = common::db::fresh().await;
 
     let res = common::app::app(&pool)
         .oneshot(
@@ -108,9 +112,10 @@ async fn healthz_answers_under_api_too(pool: PgPool) {
 }
 
 // The invite is only offered when there is a bot to invite.
-#[sqlx::test]
-async fn the_bot_invite_needs_a_bot_token(pool: PgPool) {
+#[tokio::test]
+async fn the_bot_invite_needs_a_bot_token() {
     use wormholesystems::config::DiscordConfig;
+    let (pool, _db) = common::db::fresh().await;
 
     let discord = |bot_token: Option<&str>| {
         Some(Arc::new(DiscordConfig {

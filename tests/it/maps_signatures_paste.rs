@@ -26,8 +26,9 @@ async fn sig_by_id(pool: &PgPool, actor: Actor, map_id: i64, sid: &str) -> Optio
         .find(|s| s.signature_id == sid)
 }
 
-#[sqlx::test]
-async fn paste_upserts_without_deleting(pool: PgPool) {
+#[tokio::test]
+async fn paste_upserts_without_deleting() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_catalog(&pool).await;
     place(&pool, w.owner, w.map_id, SYS_A).await;
@@ -139,8 +140,9 @@ async fn paste_upserts_without_deleting(pool: PgPool) {
     assert_eq!(dat.signature_type_id, Some(600));
 }
 
-#[sqlx::test]
-async fn paste_recategorize_clears_link_and_validates_ids(pool: PgPool) {
+#[tokio::test]
+async fn paste_recategorize_clears_link_and_validates_ids() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_catalog(&pool).await;
     let a = place(&pool, w.owner, w.map_id, SYS_A).await;
@@ -235,8 +237,9 @@ async fn paste_recategorize_clears_link_and_validates_ids(pool: PgPool) {
 }
 
 /// A paste that identifies a linked hole's type sets the connection's size from it.
-#[sqlx::test]
-async fn paste_identifying_a_linked_hole_sets_its_size(pool: PgPool) {
+#[tokio::test]
+async fn paste_identifying_a_linked_hole_sets_its_size() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_catalog(&pool).await;
     let a = place(&pool, w.owner, w.map_id, SYS_A).await;
@@ -316,8 +319,9 @@ async fn paste_identifying_a_linked_hole_sets_its_size(pool: PgPool) {
     assert_eq!(connection.size, Some(WormholeSize::Medium));
 }
 
-#[sqlx::test]
-async fn update_group_change_clears_type_link_and_state(pool: PgPool) {
+#[tokio::test]
+async fn update_group_change_clears_type_link_and_state() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_catalog(&pool).await;
     let a = place(&pool, w.owner, w.map_id, SYS_A).await;
@@ -394,8 +398,9 @@ async fn update_group_change_clears_type_link_and_state(pool: PgPool) {
     assert!(matches!(err, Err(MapError::Validation(_))));
 }
 
-#[sqlx::test]
-async fn remove_cascades_connection_unless_side_survivor(pool: PgPool) {
+#[tokio::test]
+async fn remove_cascades_connection_unless_side_survivor() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place(&pool, w.owner, w.map_id, SYS_A).await;
     let b = place(&pool, w.owner, w.map_id, SYS_B).await;
@@ -476,8 +481,9 @@ async fn remove_cascades_connection_unless_side_survivor(pool: PgPool) {
     assert!(!conn_exists);
 }
 
-#[sqlx::test]
-async fn bulk_remove_cascades_and_cleans_orphan_endpoints(pool: PgPool) {
+#[tokio::test]
+async fn bulk_remove_cascades_and_cleans_orphan_endpoints() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place(&pool, w.owner, w.map_id, SYS_A).await;
     let b = place(&pool, w.owner, w.map_id, SYS_B).await;
@@ -556,8 +562,9 @@ async fn bulk_remove_cascades_and_cleans_orphan_endpoints(pool: PgPool) {
     assert!(!b_exists, "orphaned endpoint must be removed");
 }
 
-#[sqlx::test]
-async fn expiry_purges_stale_unlinked_signatures(pool: PgPool) {
+#[tokio::test]
+async fn expiry_purges_stale_unlinked_signatures() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place(&pool, w.owner, w.map_id, SYS_A).await;
     let b = place(&pool, w.owner, w.map_id, SYS_B).await;
@@ -653,8 +660,9 @@ async fn expiry_purges_stale_unlinked_signatures(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn paste_files_faction_warfare_sites_under_their_own_group(pool: PgPool) {
+#[tokio::test]
+async fn paste_files_faction_warfare_sites_under_their_own_group() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_catalog(&pool).await;
     place(&pool, w.owner, w.map_id, SYS_A).await;
@@ -686,8 +694,9 @@ async fn paste_files_faction_warfare_sites_under_their_own_group(pool: PgPool) {
     assert_eq!(sig.name.as_deref(), Some("Minmatar Large NVY-1"));
 }
 
-#[sqlx::test]
-async fn a_line_repeated_in_one_paste_merges_into_one_row(pool: PgPool) {
+#[tokio::test]
+async fn a_line_repeated_in_one_paste_merges_into_one_row() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     seed_catalog(&pool).await;
     place(&pool, w.owner, w.map_id, SYS_A).await;
@@ -784,8 +793,9 @@ async fn undo(pool: &PgPool, actor: Actor, map_id: i64) {
     .expect("undo");
 }
 
-#[sqlx::test]
-async fn a_paste_records_when_it_happened_and_undo_puts_the_old_time_back(pool: PgPool) {
+#[tokio::test]
+async fn a_paste_records_when_it_happened_and_undo_puts_the_old_time_back() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let placement = place(&pool, w.owner, w.map_id, SYS_A).await;
     assert_eq!(pasted_at(&pool, w.owner, w.map_id, placement).await, None);
@@ -831,8 +841,9 @@ async fn a_paste_records_when_it_happened_and_undo_puts_the_old_time_back(pool: 
     assert_eq!(pasted_at(&pool, w.owner, w.map_id, placement).await, None);
 }
 
-#[sqlx::test]
-async fn the_paste_time_comes_back_with_a_removed_system(pool: PgPool) {
+#[tokio::test]
+async fn the_paste_time_comes_back_with_a_removed_system() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let placement = place(&pool, w.owner, w.map_id, SYS_A).await;
     paste_one(&pool, w.owner, w.map_id, "AAA-111").await;

@@ -17,8 +17,9 @@ async fn link(pool: &PgPool, user_id: i64, discord_id: &str) {
     .expect("insert discord_accounts");
 }
 
-#[sqlx::test]
-async fn an_account_is_found_from_either_side(pool: PgPool) {
+#[tokio::test]
+async fn an_account_is_found_from_either_side() {
+    let (pool, _db) = common::db::fresh().await;
     let w = common::world(&pool).await;
     link(&pool, w.owner.user_id, "9001").await;
 
@@ -33,8 +34,9 @@ async fn an_account_is_found_from_either_side(pool: PgPool) {
 
 /// A direct message with nobody to send it to cannot work, so unlinking turns those alerts
 /// off with a reason rather than leaving them to fail forever.
-#[sqlx::test]
-async fn unlinking_stops_the_alerts_that_needed_it(pool: PgPool) {
+#[tokio::test]
+async fn unlinking_stops_the_alerts_that_needed_it() {
+    let (pool, _db) = common::db::fresh().await;
     let w = common::world(&pool).await;
     link(&pool, w.owner.user_id, "9001").await;
 
@@ -125,8 +127,9 @@ const MANAGE_ROLES: u64 = 1 << 28;
 
 /// A direct message reaches nobody but its creator, so seeing the map is enough. The
 /// row it leaves is the one the settings page would have written.
-#[sqlx::test(migrations = "./migrations")]
-async fn a_viewer_creates_a_direct_message_alert_from_discord(pool: PgPool) {
+#[tokio::test]
+async fn a_viewer_creates_a_direct_message_alert_from_discord() {
+    let (pool, _db) = common::db::fresh().await;
     let w = common::world(&pool).await;
     let viewer = common::member_with_role(
         &pool,
@@ -183,8 +186,9 @@ async fn a_viewer_creates_a_direct_message_alert_from_discord(pool: PgPool) {
 /// A channel post reaches a server: the map's manager decides, and Discord's own
 /// permissions in that channel are respected. The role picked there is registered on the
 /// map under its Discord name, so the settings page shows "Scouts", not a number.
-#[sqlx::test(migrations = "./migrations")]
-async fn a_channel_alert_takes_a_manager_with_the_channel_permissions(pool: PgPool) {
+#[tokio::test]
+async fn a_channel_alert_takes_a_manager_with_the_channel_permissions() {
+    let (pool, _db) = common::db::fresh().await;
     let w = common::world(&pool).await;
     link(&pool, w.owner.user_id, "9001").await;
     let member = common::member_with_role(
@@ -274,8 +278,9 @@ async fn a_channel_alert_takes_a_manager_with_the_channel_permissions(pool: PgPo
 /// The same rules the settings page applies: a stranger gets nothing, an unknown system
 /// is refused, and a role without the mention to go with it is refused before anything
 /// is written.
-#[sqlx::test(migrations = "./migrations")]
-async fn a_discord_alert_is_refused_for_the_same_reasons_as_on_the_page(pool: PgPool) {
+#[tokio::test]
+async fn a_discord_alert_is_refused_for_the_same_reasons_as_on_the_page() {
+    let (pool, _db) = common::db::fresh().await;
     let w = common::world(&pool).await;
     link(&pool, w.owner.user_id, "9001").await;
     let stranger = common::new_user(&pool).await;
@@ -332,8 +337,9 @@ async fn a_discord_alert_is_refused_for_the_same_reasons_as_on_the_page(pool: Pg
 
 /// Turning an alert off and deleting it from Discord goes through the same store as the
 /// settings page: the audit trail says where it came from, and the reply what happened.
-#[sqlx::test(migrations = "./migrations")]
-async fn an_alert_is_switched_off_and_removed_from_discord(pool: PgPool) {
+#[tokio::test]
+async fn an_alert_is_switched_off_and_removed_from_discord() {
+    let (pool, _db) = common::db::fresh().await;
     let w = common::world(&pool).await;
     link(&pool, w.owner.user_id, "9001").await;
     let created = command(

@@ -7,11 +7,11 @@ use axum::http::StatusCode;
 use common::app::{app, get, request_json, session_cookie};
 use common::world;
 use serde_json::json;
-use sqlx::PgPool;
 use wormholesystems::maps::Actor;
 
-#[sqlx::test]
-async fn preferences_start_as_the_defaults_and_keep_a_change(pool: PgPool) {
+#[tokio::test]
+async fn preferences_start_as_the_defaults_and_keep_a_change() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let cookie = session_cookie(&pool, w.owner).await;
 
@@ -47,8 +47,9 @@ async fn preferences_start_as_the_defaults_and_keep_a_change(pool: PgPool) {
 
 /// They belong to the account, not the session: another sign-in, on another device, finds
 /// the same choice.
-#[sqlx::test]
-async fn preferences_follow_the_account_to_another_session(pool: PgPool) {
+#[tokio::test]
+async fn preferences_follow_the_account_to_another_session() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let laptop = session_cookie(&pool, w.owner).await;
     request_json(
@@ -79,8 +80,9 @@ async fn preferences_follow_the_account_to_another_session(pool: PgPool) {
     assert_eq!(theirs.body, json!({ "effect_icons": true }));
 }
 
-#[sqlx::test]
-async fn preferences_need_someone_signed_in(pool: PgPool) {
+#[tokio::test]
+async fn preferences_need_someone_signed_in() {
+    let (pool, _db) = common::db::fresh().await;
     world(&pool).await;
     let read = get(app(&pool), "/api/me/preferences", None).await;
     assert_eq!(read.status, StatusCode::UNAUTHORIZED);

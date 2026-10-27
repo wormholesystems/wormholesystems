@@ -3,7 +3,6 @@
 use crate::common;
 
 use common::{SYS_A, SYS_B, add_character, member_with_role, new_user, world};
-use sqlx::PgPool;
 use wormholesystems::allowlist::AffiliationAllowlist;
 use wormholesystems::maps::access::effective_role;
 use wormholesystems::maps::connection::{AddConnection, add_connection};
@@ -13,8 +12,9 @@ use wormholesystems::maps::map::{
 use wormholesystems::maps::solar_system::{AddSystem, add_system};
 use wormholesystems::maps::{Actor, ConnectionType, MapError, MapLayout, Role, SubjectType};
 
-#[sqlx::test]
-async fn create_returns_fields_and_grants_owner(pool: PgPool) {
+#[tokio::test]
+async fn create_returns_fields_and_grants_owner() {
+    let (pool, _db) = common::db::fresh().await;
     common::seed_universe(&pool).await;
     let user = new_user(&pool).await;
     add_character(&pool, user, 1001, 2001, None).await;
@@ -54,8 +54,9 @@ async fn create_returns_fields_and_grants_owner(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn create_rejects_blank_name_and_foreign_character(pool: PgPool) {
+#[tokio::test]
+async fn create_rejects_blank_name_and_foreign_character() {
+    let (pool, _db) = common::db::fresh().await;
     common::seed_universe(&pool).await;
     let user = new_user(&pool).await;
     add_character(&pool, user, 1001, 2001, None).await;
@@ -102,8 +103,9 @@ async fn create_rejects_blank_name_and_foreign_character(pool: PgPool) {
     assert_eq!(maps, 0);
 }
 
-#[sqlx::test]
-async fn update_is_manager_and_up_and_patches_fields(pool: PgPool) {
+#[tokio::test]
+async fn update_is_manager_and_up_and_patches_fields() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let member = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Member).await;
     let manager = member_with_role(&pool, w.owner, w.map_id, 1003, 2003, Role::Manager).await;
@@ -206,8 +208,9 @@ async fn update_is_manager_and_up_and_patches_fields(pool: PgPool) {
     ));
 }
 
-#[sqlx::test]
-async fn delete_is_owner_only_and_cascades(pool: PgPool) {
+#[tokio::test]
+async fn delete_is_owner_only_and_cascades() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let member = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Member).await;
     let a = add_system(
@@ -273,10 +276,11 @@ async fn delete_is_owner_only_and_cascades(pool: PgPool) {
     }
 }
 
-#[sqlx::test]
-async fn list_returns_accessible_maps_with_highest_role(pool: PgPool) {
+#[tokio::test]
+async fn list_returns_accessible_maps_with_highest_role() {
     use wormholesystems::maps::SubjectType;
     use wormholesystems::maps::access::{SetAccess, set_access};
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
 
     // A second user, member via their corporation, viewer via their character — member wins.
@@ -320,8 +324,9 @@ async fn list_returns_accessible_maps_with_highest_role(pool: PgPool) {
     assert!(list_maps(&pool, outsider).await.unwrap().is_empty());
 }
 
-#[sqlx::test]
-async fn get_map_returns_exact_graph(pool: PgPool) {
+#[tokio::test]
+async fn get_map_returns_exact_graph() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = add_system(
         &pool,

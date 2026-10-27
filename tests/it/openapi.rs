@@ -6,7 +6,6 @@ use crate::common;
 
 use axum::http::StatusCode;
 use common::app::{app, get};
-use sqlx::PgPool;
 use std::path::Path;
 
 fn source_files() -> Vec<(String, String)> {
@@ -95,8 +94,9 @@ fn every_handler_is_in_the_document() {
     }
 }
 
-#[sqlx::test]
-async fn the_document_and_its_viewer_are_served_without_signing_in(pool: PgPool) {
+#[tokio::test]
+async fn the_document_and_its_viewer_are_served_without_signing_in() {
+    let (pool, _db) = common::db::fresh().await;
     let spec = get(app(&pool), "/api/openapi.json", None).await;
     assert_eq!(spec.status, StatusCode::OK);
     assert_eq!(spec.body["info"]["title"], "WormholeSystems API");

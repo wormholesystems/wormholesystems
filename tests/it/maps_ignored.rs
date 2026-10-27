@@ -27,8 +27,9 @@ async fn ignore(pool: &PgPool, actor: Actor, map_id: i64, solar_system_id: i64) 
     .expect("add_ignored_system");
 }
 
-#[sqlx::test]
-async fn crud_and_gating(pool: PgPool) {
+#[tokio::test]
+async fn crud_and_gating() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let member = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Member).await;
     let manager = member_with_role(&pool, w.owner, w.map_id, 1003, 2003, Role::Manager).await;
@@ -118,8 +119,9 @@ async fn crud_and_gating(pool: PgPool) {
     assert_eq!(ignored_ids(&pool, w.map_id).await.unwrap(), vec![SYS_C]);
 }
 
-#[sqlx::test]
-async fn clearing_is_one_step_and_undo_brings_the_list_back(pool: PgPool) {
+#[tokio::test]
+async fn clearing_is_one_step_and_undo_brings_the_list_back() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     ignore(&pool, w.owner, w.map_id, SYS_B).await;
     ignore(&pool, w.owner, w.map_id, SYS_C).await;
@@ -147,8 +149,9 @@ async fn clearing_is_one_step_and_undo_brings_the_list_back(pool: PgPool) {
     assert_eq!(ignored_ids(&pool, w.map_id).await.unwrap(), vec![SYS_B]);
 }
 
-#[sqlx::test]
-async fn a_tracked_jump_never_places_an_ignored_system(pool: PgPool) {
+#[tokio::test]
+async fn a_tracked_jump_never_places_an_ignored_system() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = add_system(
         &pool,

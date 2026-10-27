@@ -52,8 +52,9 @@ async fn placed(pool: &PgPool, map_id: i64) -> i64 {
         .expect("query map_solar_systems")
 }
 
-#[sqlx::test]
-async fn concurrent_changes_form_one_chain_and_concurrent_undos_take_distinct_steps(pool: PgPool) {
+#[tokio::test]
+async fn concurrent_changes_form_one_chain_and_concurrent_undos_take_distinct_steps() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let systems = seed_more_systems(&pool).await;
 

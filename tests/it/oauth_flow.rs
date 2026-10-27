@@ -40,8 +40,9 @@ fn callbacks(pool: &PgPool) -> Router {
         .with_state(state)
 }
 
-#[sqlx::test]
-async fn a_state_is_consumed_once_and_carries_what_the_start_left(pool: PgPool) {
+#[tokio::test]
+async fn a_state_is_consumed_once_and_carries_what_the_start_left() {
+    let (pool, _db) = common::db::fresh().await;
     let user = common::new_user(&pool).await;
     let state = start(&pool, FlowKind::EveLogin, Some(user), Some("/maps/1"))
         .await
@@ -63,8 +64,9 @@ async fn a_state_is_consumed_once_and_carries_what_the_start_left(pool: PgPool) 
     );
 }
 
-#[sqlx::test]
-async fn a_state_is_only_good_for_the_kind_that_started_it(pool: PgPool) {
+#[tokio::test]
+async fn a_state_is_only_good_for_the_kind_that_started_it() {
+    let (pool, _db) = common::db::fresh().await;
     let user = common::new_user(&pool).await;
     let eve = start(&pool, FlowKind::EveLogin, None, None).await.unwrap();
     let discord = start(&pool, FlowKind::DiscordLink, Some(user), None)
@@ -99,8 +101,9 @@ async fn a_state_is_only_good_for_the_kind_that_started_it(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn each_callback_refuses_the_other_ones_state(pool: PgPool) {
+#[tokio::test]
+async fn each_callback_refuses_the_other_ones_state() {
+    let (pool, _db) = common::db::fresh().await;
     let user = common::new_user(&pool).await;
     let eve = start(&pool, FlowKind::EveLogin, None, None).await.unwrap();
     let discord = start(&pool, FlowKind::DiscordLink, Some(user), None)
@@ -152,8 +155,9 @@ fn cookie_pair(set_cookies: &[String], name: &str) -> String {
         )
 }
 
-#[sqlx::test]
-async fn a_callback_without_the_starting_browsers_cookie_is_refused(pool: PgPool) {
+#[tokio::test]
+async fn a_callback_without_the_starting_browsers_cookie_is_refused() {
+    let (pool, _db) = common::db::fresh().await;
     let state = start(&pool, FlowKind::EveLogin, None, None).await.unwrap();
 
     let refused = common::app::get(
@@ -167,8 +171,9 @@ async fn a_callback_without_the_starting_browsers_cookie_is_refused(pool: PgPool
     assert_eq!(flows(&pool).await, 1);
 }
 
-#[sqlx::test]
-async fn a_callback_whose_cookie_names_another_state_is_refused(pool: PgPool) {
+#[tokio::test]
+async fn a_callback_whose_cookie_names_another_state_is_refused() {
+    let (pool, _db) = common::db::fresh().await;
     let user = common::new_user(&pool).await;
     let mine = start(&pool, FlowKind::EveLogin, None, None).await.unwrap();
     let theirs = start(&pool, FlowKind::EveLogin, None, None).await.unwrap();
@@ -198,8 +203,9 @@ async fn a_callback_whose_cookie_names_another_state_is_refused(pool: PgPool) {
     assert_eq!(flows(&pool).await, 4);
 }
 
-#[sqlx::test]
-async fn a_link_finished_by_another_account_is_refused(pool: PgPool) {
+#[tokio::test]
+async fn a_link_finished_by_another_account_is_refused() {
+    let (pool, _db) = common::db::fresh().await;
     let w = common::world(&pool).await;
     let other = common::new_user(&pool).await;
     common::add_character(&pool, other, 1002, 2002, None).await;
@@ -238,8 +244,9 @@ async fn a_link_finished_by_another_account_is_refused(pool: PgPool) {
     assert_eq!(flows(&pool).await, 0);
 }
 
-#[sqlx::test]
-async fn the_browser_that_started_a_login_gets_past_the_state_check(pool: PgPool) {
+#[tokio::test]
+async fn the_browser_that_started_a_login_gets_past_the_state_check() {
+    let (pool, _db) = common::db::fresh().await;
     let w = common::world(&pool).await;
     let session = common::app::session_cookie(&pool, w.owner).await;
 
@@ -278,8 +285,9 @@ async fn the_browser_that_started_a_login_gets_past_the_state_check(pool: PgPool
     }
 }
 
-#[sqlx::test]
-async fn starting_a_flow_clears_the_abandoned_ones(pool: PgPool) {
+#[tokio::test]
+async fn starting_a_flow_clears_the_abandoned_ones() {
+    let (pool, _db) = common::db::fresh().await;
     sqlx::query(
         "insert into oauth_login_flows (state, kind, expires_at)
          values ('abandoned', 'eve_login', now() - interval '1 minute')",

@@ -1,6 +1,7 @@
 //! Naming ids from ESI, and remembering the ones ESI no longer knows so they are not asked
 //! for on every pass.
 
+use crate::common;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -68,8 +69,9 @@ async fn noted(pool: &PgPool, kind: &str, id: i64) -> bool {
     .expect("query unresolvable_entities")
 }
 
-#[sqlx::test]
-async fn a_404_is_remembered_and_the_id_is_not_asked_for_again(pool: PgPool) {
+#[tokio::test]
+async fn a_404_is_remembered_and_the_id_is_not_asked_for_again() {
+    let (pool, _db) = common::db::fresh().await;
     let (esi, hits) = stub_esi().await;
 
     ensure(
@@ -105,8 +107,9 @@ async fn a_404_is_remembered_and_the_id_is_not_asked_for_again(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn a_stale_note_is_retried_and_dropped_once_the_id_resolves(pool: PgPool) {
+#[tokio::test]
+async fn a_stale_note_is_retried_and_dropped_once_the_id_resolves() {
+    let (pool, _db) = common::db::fresh().await;
     let (esi, hits) = stub_esi().await;
     sqlx::query(
         "insert into unresolvable_entities (kind, id, noted_at)
@@ -129,8 +132,9 @@ async fn a_stale_note_is_retried_and_dropped_once_the_id_resolves(pool: PgPool) 
     );
 }
 
-#[sqlx::test]
-async fn other_failures_are_not_mistaken_for_a_missing_entity(pool: PgPool) {
+#[tokio::test]
+async fn other_failures_are_not_mistaken_for_a_missing_entity() {
+    let (pool, _db) = common::db::fresh().await;
     // Nothing listens here, so every request fails before ESI could say anything.
     let esi = EsiClient::with_config(reqwest::Client::new(), "http://127.0.0.1:9", "2025-08-26");
 

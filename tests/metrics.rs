@@ -5,11 +5,11 @@ mod common;
 
 use axum::body::Body;
 use axum::http::Request;
-use sqlx::PgPool;
 use tower::ServiceExt;
 
-#[sqlx::test]
-async fn requests_are_counted_by_route_template(pool: PgPool) {
+#[tokio::test]
+async fn requests_are_counted_by_route_template() {
+    let (pool, _db) = common::db::fresh().await;
     let handle = wormholesystems::telemetry::metrics::install();
     for path in ["/api/healthz", "/api/maps/987654", "/nowhere/987654"] {
         common::app::app(&pool)

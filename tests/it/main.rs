@@ -3,6 +3,14 @@
 //! nearly 400 MB, written on every build. A file that needs a process to itself (a global
 //! subscriber or recorder) stays out as its own binary; see `[[test]]` in `Cargo.toml`.
 
+#![expect(
+    clippy::too_many_lines,
+    clippy::many_single_char_names,
+    clippy::similar_names,
+    reason = "scenario tests read top to bottom, `w` and `a`, `b` for the world and its systems; \
+              `#[sqlx::test]` used to hide them from clippy"
+)]
+
 #[path = "../common/mod.rs"]
 mod common;
 

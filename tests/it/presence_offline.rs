@@ -82,8 +82,9 @@ async fn online(pool: &PgPool, character_id: i64) -> bool {
         .expect("query character_status")
 }
 
-#[sqlx::test]
-async fn an_idle_users_pilots_leave_the_map(pool: PgPool) {
+#[tokio::test]
+async fn an_idle_users_pilots_leave_the_map() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let idle = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Member).await;
     flying(&pool, w.map_id, w.owner).await;
@@ -110,8 +111,9 @@ async fn an_idle_users_pilots_leave_the_map(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn a_user_never_seen_active_is_not_online(pool: PgPool) {
+#[tokio::test]
+async fn a_user_never_seen_active_is_not_online() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     flying(&pool, w.map_id, w.owner).await;
 
@@ -119,8 +121,9 @@ async fn a_user_never_seen_active_is_not_online(pool: PgPool) {
     assert!(!online(&pool, w.owner.character_id).await);
 }
 
-#[sqlx::test]
-async fn a_refused_token_takes_the_pilot_off_the_map(pool: PgPool) {
+#[tokio::test]
+async fn a_refused_token_takes_the_pilot_off_the_map() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     flying(&pool, w.map_id, w.owner).await;
     last_active(&pool, w.owner.user_id, 0).await;
@@ -152,8 +155,9 @@ async fn a_refused_token_takes_the_pilot_off_the_map(pool: PgPool) {
 
 /// A tick in which several pilots changed tells each of their maps once: ten fleet members
 /// jumping together is one refetch for every viewer, not ten.
-#[sqlx::test]
-async fn each_map_hears_once_per_tick(pool: PgPool) {
+#[tokio::test]
+async fn each_map_hears_once_per_tick() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let wing = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Member).await;
     flying(&pool, w.map_id, w.owner).await;

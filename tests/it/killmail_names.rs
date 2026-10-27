@@ -1,6 +1,7 @@
 //! Naming the pilots on killmails as they arrive: only what is new since the last pass,
 //! in bulk, and without one dead id costing the rest their names.
 
+use crate::common;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -110,8 +111,9 @@ async fn mark(pool: &PgPool) -> i64 {
         .expect("query zkb_state")
 }
 
-#[sqlx::test]
-async fn new_kills_are_named_once_and_old_ones_left_alone(pool: PgPool) {
+#[tokio::test]
+async fn new_kills_are_named_once_and_old_ones_left_alone() {
+    let (pool, _db) = common::db::fresh().await;
     setup(&pool).await;
     let (esi, calls) = stub_esi().await;
     // A pilot ESI once said was gone, long enough ago to be asked about again.
@@ -158,8 +160,9 @@ async fn new_kills_are_named_once_and_old_ones_left_alone(pool: PgPool) {
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
-#[sqlx::test]
-async fn one_dead_pilot_costs_only_its_own_name(pool: PgPool) {
+#[tokio::test]
+async fn one_dead_pilot_costs_only_its_own_name() {
+    let (pool, _db) = common::db::fresh().await;
     setup(&pool).await;
     let (esi, _) = stub_esi().await;
     for id in 1..=8 {
@@ -178,8 +181,9 @@ async fn one_dead_pilot_costs_only_its_own_name(pool: PgPool) {
     assert!(dead);
 }
 
-#[sqlx::test]
-async fn an_unreachable_esi_holds_the_mark_for_a_few_passes(pool: PgPool) {
+#[tokio::test]
+async fn an_unreachable_esi_holds_the_mark_for_a_few_passes() {
+    let (pool, _db) = common::db::fresh().await;
     setup(&pool).await;
     kill(&pool, 1, 11, 12, Source::Live).await;
     // Nothing listens here, so every call fails without ESI saying anything about the ids.
