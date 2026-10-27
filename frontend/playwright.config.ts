@@ -61,6 +61,10 @@ export default defineConfig({
 			reuseExistingServer: true,
 			env: {
 				DATABASE_URL: process.env.DATABASE_URL,
+				// Compiled against the query cache, as CI does: sqlx would otherwise check the
+				// queries against the e2e database, which has not yet seen a branch's new
+				// migrations when the build runs.
+				SQLX_OFFLINE: 'true',
 				ESI_BASE_URL: 'http://127.0.0.1:3999',
 				// Tight enough that a test can take Tranquility down and see the effect.
 				SERVER_STATUS_POLL_SECS: '2',

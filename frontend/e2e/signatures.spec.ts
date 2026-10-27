@@ -218,7 +218,9 @@ test('wormhole type and connection can be unset back to Unknown', async ({ brows
 	let sigs = await (await api.get(`/api/maps/${mapId}/signatures`)).json();
 	expect(sigs[0].signature_type_id).toBeNull();
 
-	// Unset the connection: unlinked, but the connection itself stays on the map.
+	// Unset the connection: unlinked, but the connection itself stays on the map. The type
+	// list has to have gone first: it fades out with an "Unknown" of its own.
+	await expect(page.getByRole('option')).toHaveCount(0);
 	await row.getByTestId('sig-connection').click();
 	await page.getByRole('option', { name: 'Unknown' }).click();
 	await expect(row.getByTestId('sig-connection')).toContainText('Connection');
