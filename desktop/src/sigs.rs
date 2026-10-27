@@ -23,6 +23,7 @@ use crate::api::{
     SignatureType, TimeStatus,
 };
 use crate::config::{ListView, Overlay, SortColumn};
+use crate::naming;
 use crate::theme::{self, HEADING};
 use crate::ui::{self, ButtonState, Kind, Notice, rpx};
 
@@ -343,7 +344,11 @@ impl Sigs {
             .iter()
             .filter(|t| t.signature_category_id == category)
             .filter(|t| class.is_none_or(|c| t.spawn_areas.contains(&c)))
-            .filter(|t| linked.is_none() || t.target_class == linked)
+            .filter(|t| {
+                linked.is_none()
+                    || t.target_class
+                        .is_some_and(|d| naming::dest_includes(d, linked))
+            })
             .collect();
         types.sort_by_key(|t| theme::dest_sort_weight(t.target_class));
         if sig.group != "wormhole" {
@@ -383,7 +388,9 @@ impl Sigs {
                     || f.name
                         .as_ref()
                         .and_then(|n| snapshot.system_named(n))
-                        .is_some_and(|s| s.wormhole_class_id == class)
+                        .is_some_and(|s| {
+                            class.is_some_and(|d| naming::dest_includes(d, s.wormhole_class_id))
+                        })
             })
             .collect();
         options.sort_by(|a, b| match (&a.alias, &b.alias) {

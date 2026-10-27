@@ -86,7 +86,8 @@ pub(crate) fn is_return_bookmark(
             .starts_with(&destination.to_lowercase())
 }
 
-/// Classes 1 to 6 and 12 to 18 are wormhole space; 7, 8 and 9 high, low and null; 25 Pochven.
+/// Classes 1 to 6 and 12 to 18 are wormhole space; 7, 8 and 9 high, low and null; 25 Pochven;
+/// 101 and 102 the K162 groups.
 pub(crate) fn class_short(id: i64) -> Option<&'static str> {
     Some(match id {
         1 => "C1",
@@ -111,12 +112,28 @@ pub(crate) fn class_short(id: i64) -> Option<&'static str> {
         22 => "C22",
         23 => "C23",
         25 => "P",
+        C1_TO_3 => "C1-3",
+        C4_TO_5 => "C4-5",
         _ => return None,
     })
 }
 
 pub(crate) fn is_wormhole_class(id: Option<i64>) -> bool {
-    matches!(id, Some(1..=6 | 12..=18))
+    matches!(id, Some(1..=6 | 12..=18 | C1_TO_3 | C4_TO_5))
+}
+
+/// Destination class of a K162 that leads to a C1, C2 or C3. Not a real class: the game
+/// only tells you that much.
+pub(crate) const C1_TO_3: i64 = 101;
+/// Destination class of a K162 that leads to a C4 or C5.
+pub(crate) const C4_TO_5: i64 = 102;
+
+/// Whether a destination class (possibly a group like `C1-3`) covers a system's class.
+pub(crate) fn dest_includes(dest: i64, class: Option<i64>) -> bool {
+    match (dest, class) {
+        (C1_TO_3, Some(1..=3)) | (C4_TO_5, Some(4..=5)) => true,
+        _ => class == Some(dest),
+    }
 }
 
 /// Security the way the game shows it: 0.0 stays, anything in (0, 0.05) is 0.1, the rest

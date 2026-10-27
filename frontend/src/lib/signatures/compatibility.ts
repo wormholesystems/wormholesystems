@@ -4,6 +4,7 @@
 
 import type { Signature } from '$lib/api/types/Signature';
 import type { SignatureTypeInfo } from '$lib/api/types/SignatureTypeInfo';
+import { destIncludes } from '$lib/map/classes';
 
 /** Only wormholes and unclassified signatures can be connections; the rest are sites. */
 export function canBeConnection(signature: Signature): boolean {
@@ -12,7 +13,8 @@ export function canBeConnection(signature: Signature): boolean {
 
 /**
  * Whether a signature's type could lead into a system of `targetClass`. A type with a concrete
- * destination class only fits that class; an unresolved or open one (a bare K162) always fits.
+ * destination class only fits that class, or the classes of a group like `C1-3`; an unresolved
+ * or open one (a bare K162) always fits.
  */
 export function canLeadToClass(
 	type: SignatureTypeInfo | null | undefined,
@@ -21,7 +23,7 @@ export function canLeadToClass(
 	const destination = type?.target_class;
 	if (destination === null || destination === undefined) return true;
 	if (targetClass === null || targetClass === undefined) return true;
-	return destination === targetClass;
+	return destIncludes(destination, targetClass);
 }
 
 export interface SignatureGroups {

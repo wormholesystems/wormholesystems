@@ -8,6 +8,7 @@
 	import type { SignatureCatalog } from '$lib/api/types/SignatureCatalog';
 	import * as Select from '$lib/components/ui/select';
 	import ClassBadge from '$lib/components/ClassBadge.svelte';
+	import { destIncludes } from '$lib/map/classes';
 	import { typeById } from '$lib/map/signatures';
 	import type { SignatureContext } from '$lib/map/signature-context';
 
@@ -42,7 +43,7 @@
 			.filter(
 				(e) =>
 					targetClass === null ||
-					(e.target?.kind === 'system' && e.target.wormhole_class_id === targetClass),
+					(e.target?.kind === 'system' && destIncludes(targetClass, e.target.wormhole_class_id)),
 			)
 			.sort((a, b) => {
 				const aa = a.target?.alias ?? null;
