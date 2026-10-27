@@ -224,11 +224,11 @@ pub async fn remove_signatures_bulk(
 
 /// The catalog is seeded SDE data, so it is built and serialized once per process, like
 /// the routing graph.
-static SIGNATURE_CATALOG_JSON: tokio::sync::OnceCell<axum::body::Bytes> =
+static SIGNATURE_CATALOG_JSON: tokio::sync::OnceCell<super::reference::CachedJson> =
     tokio::sync::OnceCell::const_new();
 
 /// `GET /api/signature-types`: the seeded signature catalog (categories + types with
-/// spawn areas). Reference data, so no actor/role check; cacheable for a day.
+/// spawn areas). Reference data, so no actor/role check; revalidated by ETag.
 #[utoipa::path(
     get,
     path = "/api/signature-types",
@@ -238,10 +238,12 @@ static SIGNATURE_CATALOG_JSON: tokio::sync::OnceCell<axum::body::Bytes> =
 )]
 pub async fn signature_catalog(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
     // No types means the catalog is not seeded yet; that answer is served but not kept.
     super::reference::cached_json(
         &SIGNATURE_CATALOG_JSON,
+        &headers,
         || build_signature_catalog(&state.db),
         |catalog: &SignatureCatalog| catalog.types.is_empty(),
     )

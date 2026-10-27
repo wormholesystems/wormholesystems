@@ -5748,7 +5748,7 @@
         "tags": [
           "reference"
         ],
-        "summary": "`GET /api/routing-graph`. Static reference data: cacheable for a day.",
+        "summary": "`GET /api/routing-graph`. Static reference data, revalidated by ETag.",
         "operationId": "routing_graph",
         "responses": {
           "200": {
@@ -5878,7 +5878,7 @@
         "tags": [
           "signatures"
         ],
-        "summary": "`GET /api/signature-types`: the seeded signature catalog (categories + types with\nspawn areas). Reference data, so no actor/role check; cacheable for a day.",
+        "summary": "`GET /api/signature-types`: the seeded signature catalog (categories + types with\nspawn areas). Reference data, so no actor/role check; revalidated by ETag.",
         "operationId": "signature_catalog",
         "responses": {
           "200": {

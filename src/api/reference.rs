@@ -253,10 +253,9 @@ pub struct StationRef {
 /// The graph is immutable SDE data, so it is built and serialized once per process
 /// rather than recomputed for every cold client load. `Bytes` clones are refcounted,
 /// so a request never copies the multi-megabyte payload.
-static ROUTING_GRAPH_JSON: tokio::sync::OnceCell<axum::body::Bytes> =
-    tokio::sync::OnceCell::const_new();
+static ROUTING_GRAPH_JSON: tokio::sync::OnceCell<CachedJson> = tokio::sync::OnceCell::const_new();
 
-/// `GET /api/routing-graph`. Static reference data: cacheable for a day.
+/// `GET /api/routing-graph`. Static reference data, revalidated by ETag.
 #[utoipa::path(
     get,
     path = "/api/routing-graph",
@@ -266,24 +265,48 @@ static ROUTING_GRAPH_JSON: tokio::sync::OnceCell<axum::body::Bytes> =
 )]
 pub async fn routing_graph(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
     // An empty adjacency means the SDE is not seeded yet. Serving it is fine; pinning it
     // for the process lifetime would keep the planner empty until a restart, so only a
     // real graph is cached.
     cached_json(
         &ROUTING_GRAPH_JSON,
+        &headers,
         || build_routing_graph(&state.db),
         |graph| graph.adjacency.is_empty(),
     )
     .await
 }
 
+/// A serialized reference response and the ETag of its bytes.
+#[derive(Debug, Clone)]
+pub(super) struct CachedJson {
+    body: axum::body::Bytes,
+    etag: String,
+}
+
+impl CachedJson {
+    fn new(body: Vec<u8>) -> Self {
+        use sha2::Digest as _;
+        let digest = sha2::Sha256::digest(&body);
+        Self {
+            etag: format!("\"{}\"", hex::encode(&digest[..16])),
+            body: body.into(),
+        }
+    }
+}
+
 /// Serve seeded reference data that is built and serialized once per process. Cold
 /// requests that race share one build (`get_or_try_init`), so a burst of first loads runs
 /// the queries once. A result that `is_unseeded` is served but not kept, so seeding the
 /// database later does not need a restart.
+///
+/// Browsers revalidate on every load rather than keeping it for a while: a re-seed changes
+/// it, and a stale copy hid new catalog rows for up to a day. Unchanged, that is a 304.
 pub(super) async fn cached_json<T, F, Fut>(
-    cell: &'static tokio::sync::OnceCell<axum::body::Bytes>,
+    cell: &'static tokio::sync::OnceCell<CachedJson>,
+    headers: &axum::http::HeaderMap,
     build: F,
     is_unseeded: impl FnOnce(&T) -> bool,
 ) -> Result<axum::response::Response, ApiError>
@@ -293,32 +316,45 @@ where
     Fut: Future<Output = Result<T, ApiError>>,
 {
     enum Uncached {
-        Unseeded(axum::body::Bytes),
+        Unseeded(CachedJson),
         Failed(ApiError),
     }
-    let body = match cell
+    let cached = match cell
         .get_or_try_init(|| async {
             let value = build().await.map_err(Uncached::Failed)?;
-            let body = axum::body::Bytes::from(
-                serde_json::to_vec(&value).expect("reference data serializes"),
-            );
+            let cached =
+                CachedJson::new(serde_json::to_vec(&value).expect("reference data serializes"));
             if is_unseeded(&value) {
-                return Err(Uncached::Unseeded(body));
+                return Err(Uncached::Unseeded(cached));
             }
-            Ok(body)
+            Ok(cached)
         })
         .await
     {
-        Ok(body) => body.clone(),
-        Err(Uncached::Unseeded(body)) => body,
+        Ok(cached) => cached.clone(),
+        Err(Uncached::Unseeded(cached)) => cached,
         Err(Uncached::Failed(err)) => return Err(err),
     };
+    let cache_headers = [
+        (
+            axum::http::header::CACHE_CONTROL,
+            "public, no-cache".to_owned(),
+        ),
+        (axum::http::header::ETAG, cached.etag.clone()),
+    ];
+    let matches = headers
+        .get_all(axum::http::header::IF_NONE_MATCH)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .any(|tag| tag.trim().trim_start_matches("W/") == cached.etag);
+    if matches {
+        return Ok((axum::http::StatusCode::NOT_MODIFIED, cache_headers).into_response());
+    }
     Ok((
-        [
-            (axum::http::header::CACHE_CONTROL, "public, max-age=86400"),
-            (axum::http::header::CONTENT_TYPE, "application/json"),
-        ],
-        body,
+        cache_headers,
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        cached.body,
     )
         .into_response())
 }
