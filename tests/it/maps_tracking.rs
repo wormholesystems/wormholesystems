@@ -62,8 +62,9 @@ async fn connections(pool: &PgPool, actor: Actor, map_id: i64) -> usize {
         .len()
 }
 
-#[sqlx::test]
-async fn a_jump_places_the_system_connects_it_and_links_the_signature(pool: PgPool) {
+#[tokio::test]
+async fn a_jump_places_the_system_connects_it_and_links_the_signature() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let sig = scan(&pool, w.owner, w.map_id, SYS_A, "ABC-123").await;
@@ -111,8 +112,9 @@ async fn alias_of(pool: &PgPool, actor: Actor, map_id: i64, sys: i64) -> Option<
         .and_then(|s| s.alias().map(str::to_string))
 }
 
-#[sqlx::test]
-async fn undoing_a_jump_into_a_placed_system_puts_its_old_name_back(pool: PgPool) {
+#[tokio::test]
+async fn undoing_a_jump_into_a_placed_system_puts_its_old_name_back() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     place_at(&pool, w.owner, w.map_id, SYS_B, 200.0).await;
@@ -149,8 +151,9 @@ async fn undoing_a_jump_into_a_placed_system_puts_its_old_name_back(pool: PgPool
     );
 }
 
-#[sqlx::test]
-async fn the_whole_jump_is_one_undo(pool: PgPool) {
+#[tokio::test]
+async fn the_whole_jump_is_one_undo() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let sig = scan(&pool, w.owner, w.map_id, SYS_A, "ABC-123").await;
@@ -194,8 +197,9 @@ async fn the_whole_jump_is_one_undo(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn jumping_into_a_system_already_on_the_map_connects_rather_than_duplicates(pool: PgPool) {
+#[tokio::test]
+async fn jumping_into_a_system_already_on_the_map_connects_rather_than_duplicates() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     place_at(&pool, w.owner, w.map_id, SYS_B, 300.0).await;
@@ -208,8 +212,9 @@ async fn jumping_into_a_system_already_on_the_map_connects_rather_than_duplicate
     assert_eq!(connections(&pool, w.owner, w.map_id).await, 1);
 }
 
-#[sqlx::test]
-async fn jumping_a_connection_that_is_already_mapped_only_links_the_signature(pool: PgPool) {
+#[tokio::test]
+async fn jumping_a_connection_that_is_already_mapped_only_links_the_signature() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let sig = scan(&pool, w.owner, w.map_id, SYS_A, "ABC-123").await;
@@ -261,8 +266,9 @@ async fn jumping_a_connection_that_is_already_mapped_only_links_the_signature(po
     );
 }
 
-#[sqlx::test]
-async fn flying_a_stargate_builds_nothing(pool: PgPool) {
+#[tokio::test]
+async fn flying_a_stargate_builds_nothing() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     // A stargate needs a type, which needs a group and a category; only the FKs matter.
@@ -291,8 +297,9 @@ async fn flying_a_stargate_builds_nothing(pool: PgPool) {
     assert_eq!(connections(&pool, w.owner, w.map_id).await, 0);
 }
 
-#[sqlx::test]
-async fn a_viewer_cannot_build_the_chain(pool: PgPool) {
+#[tokio::test]
+async fn a_viewer_cannot_build_the_chain() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
     let viewer = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Viewer).await;
@@ -304,8 +311,9 @@ async fn a_viewer_cannot_build_the_chain(pool: PgPool) {
 /// The mass side of the same jump. `record_transit` runs whether or not anyone is looking
 /// at the map, so a jump through an unmapped hole leaves a pending row; the connection the
 /// prompt eventually creates has to pick it up, or the mass is silently lost.
-#[sqlx::test]
-async fn the_connection_claims_the_transit_recorded_before_it_existed(pool: PgPool) {
+#[tokio::test]
+async fn the_connection_claims_the_transit_recorded_before_it_existed() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = place_at(&pool, w.owner, w.map_id, SYS_A, 0.0).await;
 

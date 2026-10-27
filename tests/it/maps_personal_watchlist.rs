@@ -4,7 +4,6 @@
 use crate::common;
 
 use common::{SYS_B, SYS_C, member_with_role, new_user, world};
-use sqlx::PgPool;
 use wormholesystems::maps::personal_watchlist::{
     AddPersonalWatchlistEntry, RemovePersonalWatchlistEntry, SetPersonalWatchlistPinned, add, list,
     remove, set_pinned,
@@ -20,8 +19,9 @@ fn systems(entries: &[wormholesystems::maps::watchlist::WatchlistEntry]) -> Vec<
     entries.iter().map(|e| e.solar_system_id).collect()
 }
 
-#[sqlx::test]
-async fn each_user_sees_only_their_own(pool: PgPool) {
+#[tokio::test]
+async fn each_user_sees_only_their_own() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let member = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Member).await;
 
@@ -56,8 +56,9 @@ async fn each_user_sees_only_their_own(pool: PgPool) {
     assert_eq!(history, 0);
 }
 
-#[sqlx::test]
-async fn nobody_else_can_touch_your_entries(pool: PgPool) {
+#[tokio::test]
+async fn nobody_else_can_touch_your_entries() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let member = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Member).await;
     let mine = add(&pool, w.owner, w.map_id, watch(SYS_B)).await.unwrap();
@@ -84,8 +85,9 @@ async fn nobody_else_can_touch_your_entries(pool: PgPool) {
     assert_eq!(list(&pool, w.owner, w.map_id).await.unwrap().len(), 1);
 }
 
-#[sqlx::test]
-async fn a_viewer_keeps_one_and_an_outsider_cannot(pool: PgPool) {
+#[tokio::test]
+async fn a_viewer_keeps_one_and_an_outsider_cannot() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let viewer = member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Viewer).await;
 

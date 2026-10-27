@@ -26,8 +26,9 @@ async fn holder(pool: &PgPool, system: i64) -> Option<(Option<i64>, DateTime<Utc
     .expect("query system_sovereignty")
 }
 
-#[sqlx::test]
-async fn the_map_is_stored_and_unchanged_rows_are_left_alone(pool: PgPool) {
+#[tokio::test]
+async fn the_map_is_stored_and_unchanged_rows_are_left_alone() {
+    let (pool, _db) = common::db::fresh().await;
     seed_universe(&pool).await;
     sqlx::query("insert into alliances (id, name, ticker) values ($1, 'Holders', 'HOLD')")
         .bind(ALLIANCE)

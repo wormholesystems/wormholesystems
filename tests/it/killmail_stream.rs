@@ -81,8 +81,9 @@ async fn wait_for(mut done: impl AsyncFnMut() -> bool) -> bool {
     false
 }
 
-#[sqlx::test]
-async fn kills_are_stored_back_to_back_and_alerted_on(pool: PgPool) {
+#[tokio::test]
+async fn kills_are_stored_back_to_back_and_alerted_on() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     add_system(
         &pool,
@@ -244,8 +245,9 @@ async fn stored(pool: &PgPool) -> Vec<i64> {
 /// Down for longer than the feed keeps its files: everything after the cursor 404s. The
 /// head says there is more, so the ingest finds where the feed now starts and goes on
 /// from there, instead of waiting on the first missing kill forever.
-#[sqlx::test]
-async fn a_cursor_older_than_the_feed_skips_to_what_it_still_holds(pool: PgPool) {
+#[tokio::test]
+async fn a_cursor_older_than_the_feed_skips_to_what_it_still_holds() {
+    let (pool, _db) = common::db::fresh().await;
     let feed = Feed {
         head: 520,
         held: |seq| (500..=520).contains(&seq),
@@ -257,8 +259,9 @@ async fn a_cursor_older_than_the_feed_skips_to_what_it_still_holds(pool: PgPool)
 }
 
 /// A kill pulled from the middle of the feed costs that kill and nothing after it.
-#[sqlx::test]
-async fn a_kill_missing_under_the_head_is_stepped_over(pool: PgPool) {
+#[tokio::test]
+async fn a_kill_missing_under_the_head_is_stepped_over() {
+    let (pool, _db) = common::db::fresh().await;
     let feed = Feed {
         head: 104,
         held: |seq| seq == 101 || (103..=104).contains(&seq),
@@ -271,8 +274,9 @@ async fn a_kill_missing_under_the_head_is_stepped_over(pool: PgPool) {
 
 /// Past the head a 404 is the kill not having happened yet, and one the head has only just
 /// counted gets its grace: neither is skipped.
-#[sqlx::test]
-async fn a_kill_not_yet_there_is_waited_for(pool: PgPool) {
+#[tokio::test]
+async fn a_kill_not_yet_there_is_waited_for() {
+    let (pool, _db) = common::db::fresh().await;
     let feed = Feed {
         head: 101,
         held: |_| false,
@@ -323,8 +327,9 @@ async fn throttling_frame(
 
 /// A 429 waits as long as `Retry-After` asks, not the much shorter retry for other
 /// failures, and the feed is followed as before once it answers again.
-#[sqlx::test]
-async fn a_429_waits_out_retry_after(pool: PgPool) {
+#[tokio::test]
+async fn a_429_waits_out_retry_after() {
+    let (pool, _db) = common::db::fresh().await;
     world(&pool).await;
     sqlx::query!(
         "insert into zkb_state (id, sequence_id) values (true, $1)",

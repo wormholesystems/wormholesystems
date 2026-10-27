@@ -70,8 +70,9 @@ async fn me(pool: &PgPool, map_id: i64, actor: Actor) -> MapCharacter {
         .expect("character is listed")
 }
 
-#[sqlx::test]
-async fn a_station_is_named_from_the_sde(pool: PgPool) {
+#[tokio::test]
+async fn a_station_is_named_from_the_sde() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     for statement in [
         "insert into categories (id, name) values (3, 'Station')",
@@ -100,8 +101,9 @@ async fn a_station_is_named_from_the_sde(pool: PgPool) {
     );
 }
 
-#[sqlx::test]
-async fn an_unknown_structure_is_still_docked_and_named_once_fetched(pool: PgPool) {
+#[tokio::test]
+async fn an_unknown_structure_is_still_docked_and_named_once_fetched() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     docked(&pool, w.map_id, w.owner, None, Some(STRUCTURE)).await;
 
@@ -131,8 +133,9 @@ async fn an_unknown_structure_is_still_docked_and_named_once_fetched(pool: PgPoo
     );
 }
 
-#[sqlx::test]
-async fn the_sync_asks_about_new_structures_first_and_leaves_refused_ones_a_day(pool: PgPool) {
+#[tokio::test]
+async fn the_sync_asks_about_new_structures_first_and_leaves_refused_ones_a_day() {
+    let (pool, _db) = common::db::fresh().await;
     common::seed_universe(&pool).await;
     let (named, refused, fresh, new) = (1, 2, 3, 4);
     let structure = Structure {

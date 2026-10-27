@@ -1,6 +1,7 @@
 //! A refresh token EVE refuses (`invalid_grant`) is dead for good: it is marked once, never
 //! sent to the SSO again, shown to its pilot, and a fresh login clears it.
 
+use crate::common;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
@@ -91,8 +92,9 @@ async fn needs_login(pool: &PgPool, actor: Actor) -> bool {
         .needs_login
 }
 
-#[sqlx::test]
-async fn a_refused_refresh_is_marked_once_and_not_retried(pool: PgPool) {
+#[tokio::test]
+async fn a_refused_refresh_is_marked_once_and_not_retried() {
+    let (pool, _db) = common::db::fresh().await;
     let actor = signed_in(&pool).await;
     let store = PgTokenStore::new(pool.clone());
     store
@@ -113,8 +115,9 @@ async fn a_refused_refresh_is_marked_once_and_not_retried(pool: PgPool) {
     assert!(!store.reject(CHARACTER).await.unwrap(), "already marked");
 }
 
-#[sqlx::test]
-async fn a_fresh_login_clears_the_mark(pool: PgPool) {
+#[tokio::test]
+async fn a_fresh_login_clears_the_mark() {
+    let (pool, _db) = common::db::fresh().await;
     let actor = signed_in(&pool).await;
     let store = PgTokenStore::new(pool.clone());
     store

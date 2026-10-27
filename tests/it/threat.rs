@@ -37,8 +37,9 @@ async fn insert_kills(pool: &PgPool, count: i64, days: i64, org: Org, start_id: 
     }
 }
 
-#[sqlx::test]
-async fn threat_levels_follow_the_kill_thresholds(pool: PgPool) {
+#[tokio::test]
+async fn threat_levels_follow_the_kill_thresholds() {
+    let (pool, _db) = common::db::fresh().await;
     seed_wormhole_system(&pool).await;
     let org = Org {
         id: 99000001,
@@ -70,8 +71,9 @@ async fn threat_levels_follow_the_kill_thresholds(pool: PgPool) {
     assert_eq!(kills, 60);
 }
 
-#[sqlx::test]
-async fn orgs_below_five_active_days_are_ignored(pool: PgPool) {
+#[tokio::test]
+async fn orgs_below_five_active_days_are_ignored() {
+    let (pool, _db) = common::db::fresh().await;
     seed_wormhole_system(&pool).await;
     let org = Org {
         id: 99000001,
@@ -101,8 +103,9 @@ async fn orgs_below_five_active_days_are_ignored(pool: PgPool) {
     assert_eq!(count, 0);
 }
 
-#[sqlx::test]
-async fn twenty_kills_across_a_week_is_high(pool: PgPool) {
+#[tokio::test]
+async fn twenty_kills_across_a_week_is_high() {
+    let (pool, _db) = common::db::fresh().await;
     seed_wormhole_system(&pool).await;
     insert_kills(
         &pool,

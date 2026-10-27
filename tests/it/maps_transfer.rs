@@ -158,8 +158,9 @@ async fn add_intel(pool: &PgPool, w: &common::World) {
     .expect("add_ignored_system");
 }
 
-#[sqlx::test]
-async fn a_round_trip_reproduces_the_map(pool: PgPool) {
+#[tokio::test]
+async fn a_round_trip_reproduces_the_map() {
+    let (pool, _db) = common::db::fresh().await;
     let w = populated_world(&pool).await;
 
     let file = export_map(&pool, w.owner, w.map_id, all_sections())
@@ -234,8 +235,9 @@ async fn a_round_trip_reproduces_the_map(pool: PgPool) {
     assert_eq!(ignored_ids(&pool, map.id).await.unwrap(), vec![SYS_C]);
 }
 
-#[sqlx::test]
-async fn importing_twice_updates_rather_than_duplicates(pool: PgPool) {
+#[tokio::test]
+async fn importing_twice_updates_rather_than_duplicates() {
+    let (pool, _db) = common::db::fresh().await;
     let w = populated_world(&pool).await;
     let file = export_map(&pool, w.owner, w.map_id, all_sections())
         .await
@@ -264,8 +266,9 @@ async fn importing_twice_updates_rather_than_duplicates(pool: PgPool) {
     assert_eq!(connections, Some(1));
 }
 
-#[sqlx::test]
-async fn a_legacy_file_imports_with_its_vocabulary_translated(pool: PgPool) {
+#[tokio::test]
+async fn a_legacy_file_imports_with_its_vocabulary_translated() {
+    let (pool, _db) = common::db::fresh().await;
     let w = populated_world(&pool).await;
 
     // As the legacy exporter writes it: `fresh`/`xlarge`/`healthy`, offset timestamps,
@@ -438,14 +441,16 @@ async fn import_connection_size(pool: &PgPool, content: &str) -> Option<Wormhole
     .expect("query map_connections")
 }
 
-#[sqlx::test]
-async fn a_legacy_connection_without_a_size_imports_unsized(pool: PgPool) {
+#[tokio::test]
+async fn a_legacy_connection_without_a_size_imports_unsized() {
+    let (pool, _db) = common::db::fresh().await;
     let content = legacy_connection_file("null", "null");
     assert_eq!(import_connection_size(&pool, &content).await, None);
 }
 
-#[sqlx::test]
-async fn a_legacy_connection_type_sets_the_size_when_no_signature_does(pool: PgPool) {
+#[tokio::test]
+async fn a_legacy_connection_type_sets_the_size_when_no_signature_does() {
+    let (pool, _db) = common::db::fresh().await;
     seed_catalog(&pool).await;
     // C247 admits a medium, whatever size the file claims.
     let content = legacy_connection_file(r#""C247""#, r#""xlarge""#);
@@ -455,8 +460,9 @@ async fn a_legacy_connection_type_sets_the_size_when_no_signature_does(pool: PgP
     );
 }
 
-#[sqlx::test]
-async fn a_linked_signature_type_wins_over_the_connection_type(pool: PgPool) {
+#[tokio::test]
+async fn a_linked_signature_type_wins_over_the_connection_type() {
+    let (pool, _db) = common::db::fresh().await;
     seed_catalog(&pool).await;
     for statement in [
         "insert into types (id, group_id, name) values (30833, 988, 'Wormhole E004')",
@@ -506,8 +512,9 @@ async fn a_linked_signature_type_wins_over_the_connection_type(pool: PgPool) {
     assert_eq!(size, Some(WormholeSize::Small));
 }
 
-#[sqlx::test]
-async fn the_owner_grant_is_never_touched(pool: PgPool) {
+#[tokio::test]
+async fn the_owner_grant_is_never_touched() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
 
     let content = r#"{
@@ -545,8 +552,9 @@ async fn the_owner_grant_is_never_touched(pool: PgPool) {
     assert_eq!(owner_role, Role::Owner);
 }
 
-#[sqlx::test]
-async fn a_file_with_owner_grants_is_rejected(pool: PgPool) {
+#[tokio::test]
+async fn a_file_with_owner_grants_is_rejected() {
+    let (pool, _db) = common::db::fresh().await;
     let _ = world(&pool).await;
     let content = r#"{
         "format": "wormholesystems-map-export",
@@ -570,8 +578,9 @@ async fn a_file_with_owner_grants_is_rejected(pool: PgPool) {
     ));
 }
 
-#[sqlx::test]
-async fn parse_refuses_wrong_files_with_a_reason(pool: PgPool) {
+#[tokio::test]
+async fn parse_refuses_wrong_files_with_a_reason() {
+    let (pool, _db) = common::db::fresh().await;
     let _ = pool; // parse is pure; the fixture just matches the harness.
     let sections = SectionSet {
         settings: true,
@@ -619,8 +628,9 @@ async fn parse_refuses_wrong_files_with_a_reason(pool: PgPool) {
     ));
 }
 
-#[sqlx::test]
-async fn importing_routes_into_a_new_map_replaces_the_seeded_watchlist(pool: PgPool) {
+#[tokio::test]
+async fn importing_routes_into_a_new_map_replaces_the_seeded_watchlist() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let content = format!(
         r#"{{
@@ -676,8 +686,9 @@ async fn importing_routes_into_a_new_map_replaces_the_seeded_watchlist(pool: PgP
     assert_eq!(ignored_ids(&pool, map.id).await.unwrap(), vec![SYS_C]);
 }
 
-#[sqlx::test]
-async fn a_system_ignored_twice_in_one_file_is_ignored_once(pool: PgPool) {
+#[tokio::test]
+async fn a_system_ignored_twice_in_one_file_is_ignored_once() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let content = format!(
         r#"{{
@@ -708,8 +719,9 @@ async fn a_system_ignored_twice_in_one_file_is_ignored_once(pool: PgPool) {
     assert_eq!(ignored_ids(&pool, w.map_id).await.unwrap(), vec![SYS_C]);
 }
 
-#[sqlx::test]
-async fn export_needs_manager_and_members_are_refused(pool: PgPool) {
+#[tokio::test]
+async fn export_needs_manager_and_members_are_refused() {
+    let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let member = common::member_with_role(&pool, w.owner, w.map_id, 1002, 2002, Role::Member).await;
     assert!(matches!(
@@ -718,8 +730,9 @@ async fn export_needs_manager_and_members_are_refused(pool: PgPool) {
     ));
 }
 
-#[sqlx::test]
-async fn a_faction_warfare_signature_keeps_the_legacy_code_on_the_wire(pool: PgPool) {
+#[tokio::test]
+async fn a_faction_warfare_signature_keeps_the_legacy_code_on_the_wire() {
+    let (pool, _db) = common::db::fresh().await;
     let w = populated_world(&pool).await;
     add_signature(
         &pool,
@@ -776,8 +789,9 @@ async fn a_faction_warfare_signature_keeps_the_legacy_code_on_the_wire(pool: PgP
 }
 
 /// Every rally point goes out, oldest first, under the list key alone.
-#[sqlx::test]
-async fn export_carries_every_rally_point(pool: PgPool) {
+#[tokio::test]
+async fn export_carries_every_rally_point() {
+    let (pool, _db) = common::db::fresh().await;
     let w = populated_world(&pool).await;
     let placed = placements_by_system(&pool, w.map_id).await;
     for sys in [SYS_B, SYS_A] {
@@ -821,8 +835,9 @@ async fn export_carries_every_rally_point(pool: PgPool) {
 
 /// The list as written, the single id older files carry, unknown or unplaced ids dropped,
 /// and only the newest two kept.
-#[sqlx::test]
-async fn import_reads_rally_points_in_either_spelling(pool: PgPool) {
+#[tokio::test]
+async fn import_reads_rally_points_in_either_spelling() {
+    let (pool, _db) = common::db::fresh().await;
     let w = populated_world(&pool).await;
     add_system(
         &pool,
@@ -924,9 +939,10 @@ async fn rally_systems(pool: &PgPool, map_id: i64) -> Vec<i64> {
 
 /// Legacy writes the in-game "closure imminent" state as `expired`; it has to survive the
 /// trip out and back in.
-#[sqlx::test]
-async fn an_expired_hole_round_trips_as_expired(pool: PgPool) {
+#[tokio::test]
+async fn an_expired_hole_round_trips_as_expired() {
     use wormholesystems::maps::connection::{SetConnectionStatus, set_connection_status};
+    let (pool, _db) = common::db::fresh().await;
 
     let w = populated_world(&pool).await;
     let connection_id =
