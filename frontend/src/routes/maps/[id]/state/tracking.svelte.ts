@@ -10,7 +10,6 @@ import { solarSystemId, type MappedSystem } from '$lib/map/system';
 import type { CharacterRef } from '$lib/api/types/CharacterRef';
 import type { GridConfig } from '$lib/api/types/GridConfig';
 import type { MapConnection } from '$lib/api/types/MapConnection';
-import type { MapNaming } from '$lib/api/types/MapNaming';
 import type { MapSystemView } from '$lib/api/types/MapSystemView';
 import type { MapUserSettings } from '$lib/api/types/MapUserSettings';
 import type { ResolveGhostSystem } from '$lib/api/types/ResolveGhostSystem';
@@ -18,10 +17,8 @@ import type { Signature } from '$lib/api/types/Signature';
 import type { SignatureCatalog } from '$lib/api/types/SignatureCatalog';
 import type { SystemSearchResult } from '$lib/api/types/SystemSearchResult';
 import type { TrackJump } from '$lib/api/types/TrackJump';
-import { aliasTargetKind, suggestAlias } from '$lib/naming/alias';
 import { freePosition } from '$lib/map/geometry';
 import { sizeForJumpMass } from '$lib/map/mass';
-import { classMeta, isWormholeClass } from '$lib/map/classes';
 import { typeById } from '$lib/map/signatures';
 import { groupSignatures, type SignatureGroups } from '$lib/signatures/compatibility';
 
@@ -80,7 +77,8 @@ export interface TrackerHost {
 		MapUserSettings,
 		'tracking_allowed' | 'prompt_for_signature' | 'suggest_alias' | 'tracked_character_ids'
 	> | null;
-	naming(): MapNaming | null;
+	/** The alias the map's naming strategy gives a system reached from `origin`. */
+	suggestAlias(origin: number, targetSystem: number): Promise<string | null>;
 	/** The map's ignore list: a jump into one of these is flown, not mapped. */
 	ignored(): Set<number>;
 	stargates(): Map<number, number[]> | null;
@@ -190,13 +188,19 @@ export class JumpTracker {
 				origin,
 				targetSolarSystemId: toSystemId,
 				signaturePk: null,
-				alias: this.suggestAliasFor(origin, target, existing),
+				alias: await this.suggestAliasFor(origin, toSystemId, existing),
 				at: this.placeNear(origin),
 			});
 			return;
 		}
 
 		// One question at a time: a second pilot's jump waits its turn.
+		if (this.prompt !== null) {
+			this.queued.push({ from: fromSystemId, to: toSystemId, pilot });
+			return;
+		}
+		const suggestedAlias = await this.suggestAliasFor(origin, toSystemId, existing);
+		// Another jump may have opened one while the server was asked.
 		if (this.prompt !== null) {
 			this.queued.push({ from: fromSystemId, to: toSystemId, pilot });
 			return;
@@ -212,7 +216,7 @@ export class JumpTracker {
 			existing,
 			groups,
 			catalog,
-			suggestedAlias: this.suggestAliasFor(origin, target, existing),
+			suggestedAlias,
 			ghostAliases: ghostAliases(ghosts, originSignatures, map.systems()),
 			at: this.placeNear(origin),
 		};
@@ -238,32 +242,16 @@ export class JumpTracker {
 		};
 	}
 
-	private suggestAliasFor(
+	private async suggestAliasFor(
 		origin: MappedSystem,
-		target: { classId: number | null; security: number },
+		targetSystem: number,
 		existing: MappedSystem | null,
-	): string | null {
+	): Promise<string | null> {
 		// A system already on the map keeps the name the chain knows it by.
 		if (existing?.alias) return existing.alias;
 		if (!this.map.settings()?.suggest_alias) return null;
-
-		const naming = this.map.naming();
-		const targetIsWormhole = isWormholeClass(target.classId);
-		return suggestAlias({
-			parentAlias: origin.alias,
-			targetIsWormhole,
-			originIsWormhole: isWormholeClass(origin.wormhole_class_id),
-			aliases: this.map
-				.systems()
-				.map((s) => s.alias)
-				.filter((alias): alias is string => Boolean(alias)),
-			scheme: naming?.alias_scheme,
-			targetKind: aliasTargetKind(
-				targetIsWormhole,
-				classMeta(target.classId, target.security).short,
-			),
-			ignoredAlias: naming?.ignored_alias,
-		});
+		// A name is a nicety: the jump still goes on the map without one.
+		return this.map.suggestAlias(origin.id, targetSystem).catch(() => null);
 	}
 
 	/** The first free slot beside the system jumped from. */

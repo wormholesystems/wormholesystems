@@ -52,20 +52,45 @@ pub(crate) struct MapEntry {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct MapNaming {
-    /// `numeric` or `alphabetical`.
-    #[serde(default)]
-    pub alias_scheme: Option<String>,
-    pub ignored_alias: String,
-    pub bookmark_wormhole: String,
-    pub bookmark_kspace: String,
-    pub bookmark_return: String,
+struct AliasSuggestion {
+    alias: Option<String>,
+}
+
+/// The question behind a signature's bookmark: where the hole is, where it leads, and what
+/// is known of it. The server's naming strategy answers it.
+#[derive(Debug, Clone, Default, Serialize)]
+pub(crate) struct NameBookmark {
+    /// The placement the bookmark is made in.
+    pub near: i64,
+    /// The node the hole leads to, ghost or system, when it is on the map.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destination: Option<i64>,
+    pub suggest_alias: bool,
+    pub claim_alias: bool,
+    pub signature_id: Option<String>,
+    pub signature_type_id: Option<i64>,
+    pub size: Option<WormholeSize>,
+    pub mass_status: Option<MassStatus>,
+    pub time_status: Option<TimeStatus>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct BookmarkName {
+    pub text: String,
+    /// The alias suggested for a destination that had none.
+    pub suggested_alias: Option<String>,
+}
+
+/// The bookmark leading to one end of a connection.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct EndBookmark {
+    pub node: i64,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct MapInfo {
     pub name: String,
-    pub naming: MapNaming,
 }
 
 /// A placed system. Ghosts (holes nobody has flown yet) are kept apart as [`Ghost`]s:
@@ -79,9 +104,6 @@ pub(crate) struct PlacedSystem {
     pub region: String,
     pub wormhole_class_id: Option<i64>,
     pub security_status: f64,
-    pub occupying_group: Option<String>,
-    #[serde(default)]
-    pub is_home: bool,
     #[serde(default)]
     pub position_x: f64,
     #[serde(default)]
@@ -113,7 +135,6 @@ pub(crate) struct Connection {
     pub from_system: i64,
     pub to_system: i64,
     pub kind: ConnectionKind,
-    pub size: Option<WormholeSize>,
     pub mass_status: Option<MassStatus>,
     pub time_status: Option<TimeStatus>,
     /// Rolling it is off: the hole is kept for the way home.
@@ -551,6 +572,38 @@ impl Client {
             &serde_json::to_value(cmd)?,
         )?;
         Ok(())
+    }
+
+    /// The alias the map's naming strategy gives a system reached from placement `origin`.
+    pub(crate) fn suggest_alias(
+        &self,
+        map_id: i64,
+        origin: i64,
+        target_system: i64,
+    ) -> Result<Option<String>> {
+        let path = format!(
+            "/api/maps/{map_id}/naming/alias?origin={origin}&target_system={target_system}"
+        );
+        Ok(self.get::<AliasSuggestion>(&path)?.alias)
+    }
+
+    /// The bookmark name the map's naming strategy gives a hole.
+    pub(crate) fn name_bookmark(&self, map_id: i64, cmd: &NameBookmark) -> Result<BookmarkName> {
+        self.post(
+            &format!("/api/maps/{map_id}/naming/bookmark"),
+            &serde_json::to_value(cmd)?,
+        )
+    }
+
+    /// The bookmark for each end of a connection, as the map's naming strategy writes it.
+    pub(crate) fn connection_bookmarks(
+        &self,
+        map_id: i64,
+        connection_id: i64,
+    ) -> Result<Vec<EndBookmark>> {
+        self.get(&format!(
+            "/api/maps/{map_id}/connections/{connection_id}/bookmarks"
+        ))
     }
 
     /// Set a placement's alias; blank clears it.

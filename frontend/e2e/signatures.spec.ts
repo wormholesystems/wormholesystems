@@ -317,9 +317,11 @@ test('row actions: EOL color, preserve mass, copy bookmark', async ({ browser, a
 	// in-game: Jita is k-space, so it takes the k-space format. Nothing has named the exit
 	// yet, so the copy takes the chain's next alias and writes it on the map.
 	await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+	// The map's naming strategy names it on the server, so the clipboard fills a moment later.
 	await row.getByLabel('Copy bookmark').click();
-	const clip = await page.evaluate(() => navigator.clipboard.readText());
-	expect(clip).toBe('1 HS WHX Jita The Forge');
+	await expect
+		.poll(() => page.evaluate(() => navigator.clipboard.readText()))
+		.toBe('1 HS WHX Jita The Forge');
 	await ctx.close();
 });
 

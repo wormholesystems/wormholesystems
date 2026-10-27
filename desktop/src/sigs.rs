@@ -22,8 +22,8 @@ use crate::api::{
     Connection, MapSnapshot, MassStatus, PlacedSystem, Signature, SignatureCatalog, SignatureEdit,
     SignatureType, TimeStatus,
 };
+use crate::classes;
 use crate::config::{ListView, Overlay, SortColumn};
-use crate::naming;
 use crate::theme::{self, HEADING};
 use crate::ui::{self, ButtonState, Kind, Notice, rpx};
 
@@ -347,7 +347,7 @@ impl Sigs {
             .filter(|t| {
                 linked.is_none()
                     || t.target_class
-                        .is_some_and(|d| naming::dest_includes(d, linked))
+                        .is_some_and(|d| classes::dest_includes(d, linked))
             })
             .collect();
         types.sort_by_key(|t| theme::dest_sort_weight(t.target_class));
@@ -389,7 +389,7 @@ impl Sigs {
                         .as_ref()
                         .and_then(|n| snapshot.system_named(n))
                         .is_some_and(|s| {
-                            class.is_some_and(|d| naming::dest_includes(d, s.wormhole_class_id))
+                            class.is_some_and(|d| classes::dest_includes(d, s.wormhole_class_id))
                         })
             })
             .collect();

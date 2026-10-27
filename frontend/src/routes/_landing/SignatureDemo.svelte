@@ -59,7 +59,6 @@
 
 	const rows = $derived([...sigs].sort((a, b) => a.signature_id.localeCompare(b.signature_id)));
 	const ctx: SignatureContext = $derived({
-		naming: null,
 		systems: DEMO_SYSTEMS,
 		connections: DEMO_CONNECTIONS,
 		systemById: new Map(DEMO_SYSTEMS.map((s) => [s.id, s])),

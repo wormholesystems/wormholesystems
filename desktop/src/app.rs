@@ -19,17 +19,17 @@ use gpui_kit::{
 };
 
 use crate::alias;
+use crate::api::NameBookmark;
 use crate::api::{Client, MapEntry, MapSnapshot, SignatureCatalog, SignatureEdit};
 use crate::chatlog::{self, ChatEvent, Watcher};
 use crate::config::Config;
 use crate::focus::{self, Focus};
 use crate::fresh::Freshness;
 use crate::hotkeys::{self, Action, Press, Registry};
-use crate::jump::{self, AliasScheme, Grid};
-use crate::naming::{BookmarkContext, BookmarkFormats, BookmarkSystem, format_bookmark};
+use crate::jump::Grid;
 use crate::overlay;
 use crate::plan::{
-    JumpContext, LastJump, LoneGhost, Plan, aliases, bookmark_for, landed_on, plan_jump, submit,
+    JumpContext, LastJump, LoneGhost, Plan, bookmark_for, landed_on, plan_jump, submit,
 };
 use crate::scan;
 use crate::sigs::{Ask, Command, Here, Review, Sigs, Tone};
@@ -112,8 +112,6 @@ pub(crate) struct DesktopApp {
     fresh: Freshness,
     maps: Vec<MapEntry>,
     connecting: bool,
-    /// Wormhole codes by signature type, for the `{wh}` token.
-    codes: Arc<HashMap<i64, String>>,
     catalog: Arc<SignatureCatalog>,
     grid: Grid,
     /// Which systems each system has a stargate to, so gate travel is never mapped.
@@ -213,7 +211,6 @@ impl DesktopApp {
             fresh: Freshness::default(),
             maps: Vec::new(),
             connecting: false,
-            codes: Arc::default(),
             catalog: Arc::default(),
             grid: Grid::default(),
             stargates: Arc::default(),
@@ -386,13 +383,6 @@ impl DesktopApp {
                         this.account = Some(me.name);
                         this.grid = grid;
                         this.stargates = Arc::new(stargates);
-                        this.codes = Arc::new(
-                            catalog
-                                .types
-                                .iter()
-                                .filter_map(|t| Some((t.id, t.signature.clone()?)))
-                                .collect(),
-                        );
                         this.catalog = Arc::new(catalog);
                         let catalog = Arc::clone(&this.catalog);
                         this.sigs.update(cx, |sigs, cx| {
@@ -741,7 +731,6 @@ impl DesktopApp {
     fn jump_context(&self) -> JumpContext {
         JumpContext {
             catalog: Arc::clone(&self.catalog),
-            codes: Arc::clone(&self.codes),
             grid: self.grid,
             stargates: Arc::clone(&self.stargates),
             suggest_alias: self.suggest_alias,
@@ -808,16 +797,8 @@ impl DesktopApp {
         self.clear_ask(cx);
         self.thinking = true;
         let catalog = Arc::clone(&self.catalog);
-        let codes = Arc::clone(&self.codes);
         let work = cx.background_spawn(async move {
-            submit(
-                &client,
-                &catalog,
-                &codes,
-                &ask,
-                picked.as_ref(),
-                LoneGhost::Ignore,
-            )
+            submit(&client, &catalog, &ask, picked.as_ref(), LoneGhost::Ignore)
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
@@ -888,23 +869,32 @@ impl DesktopApp {
         let Some(ask) = self.sigs.read(cx).ask.clone() else {
             return;
         };
-        let Some(found) = landed_on(
-            snapshot,
-            ask.map_id,
-            &ask.origin.name,
-            &ask.target.name,
-            &self.codes,
-        ) else {
+        let Some(jump) = landed_on(snapshot, ask.map_id, &ask.origin.name, &ask.target.name) else {
             return;
         };
-        if snapshot.signature_on(found.0.connection_id).is_none() {
+        if snapshot.signature_on(jump.connection_id).is_none() {
             return;
         }
         self.clear_ask(cx);
-        let (jump, bookmark) = found;
         let what = format!("{} was mapped on the website", jump.here);
-        self.landed(jump, bookmark, Some(what), cx);
-        self.next_jump(cx);
+        // The way back is named by the server, so it lands once that answer is in.
+        let Some(client) = self.client() else {
+            self.landed(jump, String::new(), Some(what), cx);
+            self.next_jump(cx);
+            return;
+        };
+        let snapshot = snapshot.clone();
+        let asked = jump.clone();
+        let work = cx.background_spawn(async move { bookmark_for(&client, &snapshot, &asked) });
+        cx.spawn(async move |this, cx| {
+            let bookmark = work.await.ok().flatten().unwrap_or_default();
+            this.update(cx, |this, cx| {
+                this.landed(jump, bookmark, Some(what), cx);
+                this.next_jump(cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     // Focus.
@@ -1071,14 +1061,13 @@ impl DesktopApp {
             cx.notify();
             return;
         };
-        let codes = Arc::clone(&self.codes);
         let change = action.change();
         let work = cx.background_spawn(async move {
             if let Some(change) = &change {
                 client.set_status(last.map_id, last.connection_id, change)?;
             }
             let snapshot = client.snapshot(last.map_id)?;
-            anyhow::Ok(bookmark_for(&snapshot, &last, &codes))
+            bookmark_for(&client, &snapshot, &last)
         });
         cx.spawn(async move |this, cx| {
             let result = work.await;
@@ -1437,105 +1426,79 @@ impl DesktopApp {
     }
 
     /// Copy the bookmark for where a signature's hole goes, the way the website's copy
-    /// button does: the far system once someone has been, else the class its type promises.
-    /// A hole with no name yet gets the next one in the chain, written onto its far end so
-    /// the next copy takes the one after.
+    /// button does, named by the map's naming strategy. A hole with no name yet gets the
+    /// next one in the chain, which the server writes onto its far end.
     fn copy_signature_bookmark(&mut self, key: i64, cx: &mut Context<'_, Self>) {
         let sigs = self.sigs.read(cx);
-        let (Some(snapshot), Some(here)) = (sigs.snapshot.clone(), sigs.system().cloned()) else {
+        let (Some(snapshot), Some(here)) = (sigs.snapshot.as_ref(), sigs.system()) else {
             return;
         };
         let Some(sig) = snapshot.signatures.iter().find(|s| s.id == key).cloned() else {
             return;
         };
-        let ty = sig
-            .signature_type_id
-            .and_then(|id| sigs.catalog.types.iter().find(|t| t.id == id))
-            .cloned();
+        let near = here.id;
         // The connection's other end: a placed system, or a ghost nobody has been through.
         let end = sig
             .connection_id
             .and_then(|c| snapshot.connection(c))
             .map(|c| {
-                if c.from_system == here.id {
+                if c.from_system == near {
                     c.to_system
                 } else {
                     c.from_system
                 }
             });
-        let far = end.and_then(|id| snapshot.systems.iter().find(|s| s.id == id));
-        let end_alias = end.and_then(|id| {
-            far.map(|s| s.alias.clone())
-                .or_else(|| {
-                    snapshot
-                        .ghosts
-                        .iter()
-                        .find(|g| g.id == id)
-                        .map(|g| g.alias.clone())
-                })
-                .flatten()
-                .filter(|a| !a.trim().is_empty())
+        let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
+            return;
+        };
+        let cmd = NameBookmark {
+            near,
+            destination: end,
+            suggest_alias: true,
+            // Written onto the far end by the server in the same step, so the next copy
+            // sees it taken.
+            claim_alias: true,
+            signature_id: Some(sig.signature_id.clone()),
+            signature_type_id: sig.signature_type_id,
+            size: sig.size,
+            mass_status: sig.mass_status,
+            time_status: sig.time_status,
+        };
+        let named = cx.background_spawn({
+            let client = client.clone();
+            async move { client.name_bookmark(map_id, &cmd) }
         });
-        let class = far
-            .and_then(|s| s.wormhole_class_id)
-            .or(ty.as_ref().and_then(|t| t.target_class));
-        let mut guessed = None;
-        let alias = end_alias.or_else(|| {
-            let alias = jump::suggest_alias(
-                &here,
-                class,
-                far.map_or(-1.0, |s| s.security_status),
-                &aliases(&snapshot),
-                AliasScheme::parse(snapshot.map.naming.alias_scheme.as_deref()),
-                &snapshot.map.naming.ignored_alias,
-            );
-            guessed = alias.clone().zip(end);
-            alias
-        });
-        let text = format_bookmark(
-            &BookmarkSystem {
-                alias,
-                name: far.map(|s| s.name.clone()).unwrap_or_default(),
-                region: far.map(|s| s.region.clone()),
-                wormhole_class_id: class,
-                security: far.map(|s| s.security_status),
-                occupier: far.and_then(|s| s.occupying_group.clone()),
-                is_home: far.is_some_and(|s| s.is_home),
-            },
-            &BookmarkContext {
-                current_alias: None,
-                signature_id: Some(sig.signature_id.clone()),
-                size: sig.size,
-                mass_status: sig.mass_status,
-                time_status: sig.time_status,
-                wormhole_code: ty.and_then(|t| t.signature),
-            },
-            &BookmarkFormats::from(&snapshot.map.naming),
-            here.alias.as_deref(),
-        );
-        if !self.copy(&text) {
-            return self.tell(Tone::Problem, "Could not copy the bookmark".into(), cx);
-        }
-        self.tell(Tone::Done, format!("Copied “{text}”"), cx);
-        if let (Some((alias, placement)), Some(client), Some(map_id)) =
-            (guessed, self.client(), self.config.map_id)
-        {
-            let work = cx.background_spawn(async move {
-                client.set_alias(map_id, placement, &alias)?;
-                client.snapshot(map_id)
-            });
-            cx.spawn(async move |this, cx| {
-                let result = work.await;
-                this.update(cx, |this, cx| match result {
-                    Ok(after) => this.show_changed(after, cx),
+        cx.spawn(async move |this, cx| {
+            let result = named.await;
+            let claimed = this
+                .update(cx, |this, cx| match result {
+                    Ok(named) => {
+                        if this.copy(&named.text) {
+                            this.tell(Tone::Done, format!("Copied “{}”", named.text), cx);
+                        } else {
+                            this.tell(Tone::Problem, "Could not copy the bookmark".into(), cx);
+                        }
+                        named.suggested_alias.is_some()
+                    }
                     Err(err) => {
                         this.tell(Tone::Problem, format!("Could not name the hole: {err}"), cx);
+                        false
                     }
                 })
-                .ok();
-            })
-            .detach();
-        }
+                .unwrap_or(false);
+            // The server wrote the new name onto the hole; show it without waiting for the
+            // next refresh. Only a nicety, so a failure here says nothing.
+            if claimed {
+                let after = cx
+                    .background_spawn(async move { client.snapshot(map_id) })
+                    .await;
+                if let Ok(after) = after {
+                    this.update(cx, |this, cx| this.show_changed(after, cx))
+                        .ok();
+                }
+            }
+        })
+        .detach();
     }
 
     // Aliases.
@@ -1553,38 +1516,55 @@ impl DesktopApp {
             };
             return self.tell(Tone::Problem, why, cx);
         };
-        // Nothing yet: offer what the chain's scheme would call it, from where it was
-        // jumped to from.
-        let current = system
-            .alias
-            .clone()
-            .filter(|a| !a.trim().is_empty())
-            .or_else(|| {
-                let snapshot = sigs.snapshot.as_ref()?;
-                let last = self.last.as_ref().filter(|l| l.here == system.name)?;
-                let origin = snapshot.system_named(&last.back_to)?;
-                jump::suggest_alias(
-                    origin,
-                    system.wormhole_class_id,
-                    system.security_status,
-                    &aliases(snapshot),
-                    AliasScheme::parse(snapshot.map.naming.alias_scheme.as_deref()),
-                    &snapshot.map.naming.ignored_alias,
-                )
+        let current = system.alias.clone().filter(|a| !a.trim().is_empty());
+        // Nothing yet: offer what the map's naming strategy would call it, from where it was
+        // jumped to from. The dialog opens once the server has answered.
+        let origin = self
+            .last
+            .as_ref()
+            .filter(|l| l.here == system.name)
+            .map(|l| l.back_to_node);
+        let (None, Some(origin), Some(client), Some(map_id)) =
+            (&current, origin, self.client(), self.config.map_id)
+        else {
+            return self.show_alias(system.id, system.name, current.unwrap_or_default(), cx);
+        };
+        let target = system.solar_system_id;
+        let work = cx.background_spawn(async move { client.suggest_alias(map_id, origin, target) });
+        cx.spawn(async move |this, cx| {
+            // A name is a nicety: the dialog opens empty without one.
+            let suggested = work.await.ok().flatten().unwrap_or_default();
+            this.update(cx, |this, cx| {
+                this.show_alias(system.id, system.name, suggested, cx);
             })
-            .unwrap_or_default();
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Open the alias dialog for a placement, filled with `current`.
+    fn show_alias(
+        &mut self,
+        placement: i64,
+        name: String,
+        current: String,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.alias_window.is_some() {
+            return;
+        }
         let this = cx.entity().downgrade();
-        let (placement, name) = (system.id, system.name.clone());
+        let system_name = name.clone();
         let done: alias::Done = Box::new(move |value, cx| {
             this.update(cx, |this, cx| {
                 this.alias_window = None;
                 if let Some(value) = value {
-                    this.save_alias(placement, name.clone(), value, cx);
+                    this.save_alias(placement, system_name.clone(), value, cx);
                 }
             })
             .ok();
         });
-        match alias::open(system.name, current, done, cx) {
+        match alias::open(name, current, done, cx) {
             Ok(handle) => self.alias_window = Some(handle),
             Err(err) => self.note(
                 Level::Problem,

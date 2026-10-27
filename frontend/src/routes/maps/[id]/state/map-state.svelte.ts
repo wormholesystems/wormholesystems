@@ -6,7 +6,7 @@
 
 import { untrack } from 'svelte';
 
-import { errorMessage } from '$lib/api/client';
+import { api, errorMessage } from '$lib/api/client';
 import { key, q } from '$lib/api/queries';
 import type { GridConfig } from '$lib/api/types/GridConfig';
 import type { MapSystemView } from '$lib/api/types/MapSystemView';
@@ -452,7 +452,8 @@ export class MapState {
 			sigs: () => this.signatures.all,
 			grid: () => this.grid,
 			settings: () => this.userSettings,
-			naming: () => this.naming,
+			suggestAlias: (origin, targetSystem) =>
+				api.suggestAlias(this.mapId, { origin, target_system: targetSystem }).then((s) => s.alias),
 			ignored: () => this.ignoredIds,
 			stargates: () => this.route.stargates,
 			whenRoutingLoaded: () => this.route.whenLoaded(),

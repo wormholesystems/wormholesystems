@@ -5,11 +5,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::api::{
-    Client, MapSnapshot, PlacedSystem, ResolveGhost, Signature, SignatureCatalog, SignatureType,
-    SystemHit, TrackJump,
+    Client, EndBookmark, MapSnapshot, PlacedSystem, ResolveGhost, Signature, SignatureCatalog,
+    SignatureType, SystemHit, TrackJump,
 };
-use crate::jump::{self, AliasScheme, Grid};
-use crate::naming::{BookmarkFormats, connection_bookmark};
+use crate::jump::{self, Grid};
 use crate::sigs::{Ask, Target};
 
 /// The calls planning a jump makes, so it can run against a fake map.
@@ -19,6 +18,17 @@ pub(crate) trait MapApi {
     fn ignored(&self, map_id: i64) -> anyhow::Result<Vec<i64>>;
     fn track_jump(&self, cmd: &TrackJump) -> anyhow::Result<()>;
     fn resolve_ghost(&self, cmd: &ResolveGhost) -> anyhow::Result<()>;
+    fn suggest_alias(
+        &self,
+        map_id: i64,
+        origin: i64,
+        target_system: i64,
+    ) -> anyhow::Result<Option<String>>;
+    fn connection_bookmarks(
+        &self,
+        map_id: i64,
+        connection_id: i64,
+    ) -> anyhow::Result<Vec<EndBookmark>>;
 }
 
 impl MapApi for Client {
@@ -41,6 +51,23 @@ impl MapApi for Client {
     fn resolve_ghost(&self, cmd: &ResolveGhost) -> anyhow::Result<()> {
         Client::resolve_ghost(self, cmd)
     }
+
+    fn suggest_alias(
+        &self,
+        map_id: i64,
+        origin: i64,
+        target_system: i64,
+    ) -> anyhow::Result<Option<String>> {
+        Client::suggest_alias(self, map_id, origin, target_system)
+    }
+
+    fn connection_bookmarks(
+        &self,
+        map_id: i64,
+        connection_id: i64,
+    ) -> anyhow::Result<Vec<EndBookmark>> {
+        Client::connection_bookmarks(self, map_id, connection_id)
+    }
 }
 
 /// The hole flown last, which the shortcuts act on.
@@ -50,6 +77,8 @@ pub(crate) struct LastJump {
     pub(crate) connection_id: i64,
     /// The system the bookmark names: where the hole goes from here.
     pub(crate) back_to: String,
+    /// Its placement, which the bookmark is asked for by.
+    pub(crate) back_to_node: i64,
     pub(crate) here: String,
 }
 
@@ -57,7 +86,6 @@ pub(crate) struct LastJump {
 #[derive(Clone)]
 pub(crate) struct JumpContext {
     pub(crate) catalog: Arc<SignatureCatalog>,
-    pub(crate) codes: Arc<HashMap<i64, String>>,
     pub(crate) grid: Grid,
     pub(crate) stargates: Arc<HashMap<i64, Vec<i64>>>,
     pub(crate) suggest_alias: bool,
@@ -73,16 +101,6 @@ pub(crate) enum Plan {
     /// Mapped without asking, since no signature on the origin could have been it.
     Mapped(LastJump, String),
     Ask(Box<Ask>),
-}
-
-/// Every alias on the map, ghosts' too.
-pub(crate) fn aliases(snapshot: &MapSnapshot) -> Vec<String> {
-    snapshot
-        .systems
-        .iter()
-        .filter_map(|s| s.alias.clone())
-        .chain(snapshot.ghosts.iter().filter_map(|g| g.alias.clone()))
-        .collect()
 }
 
 /// The system a jump to `to` landed in: the one on the map, else the one the server knows
@@ -160,8 +178,9 @@ pub(crate) fn plan_jump(
         .map(|c| c.id);
     if let Some(id) = connection
         && snapshot.signature_on(id).is_some()
-        && let Some((jump, bookmark)) = landed_on(&snapshot, map_id, from, to, &context.codes)
+        && let Some(jump) = landed_on(&snapshot, map_id, from, to)
     {
+        let bookmark = way_back(client, &snapshot, &jump);
         return Ok(Plan::Known(jump, bookmark));
     }
 
@@ -180,14 +199,10 @@ pub(crate) fn plan_jump(
     // A system already on the map keeps the name the chain knows it by.
     let alias = match existing.as_ref().and_then(|e| e.alias.clone()) {
         Some(alias) if !alias.trim().is_empty() => Some(alias),
-        _ if context.suggest_alias => jump::suggest_alias(
-            &origin,
-            target.class,
-            target.security,
-            &aliases(&snapshot),
-            AliasScheme::parse(snapshot.map.naming.alias_scheme.as_deref()),
-            &snapshot.map.naming.ignored_alias,
-        ),
+        // A name is a nicety: the jump still goes on the map without one.
+        _ if context.suggest_alias => client
+            .suggest_alias(map_id, origin.id, target.solar_system_id)
+            .unwrap_or(None),
         _ => None,
     };
     let at = jump::free_position(
@@ -212,22 +227,16 @@ pub(crate) fn plan_jump(
     }
     // Nothing on the origin could have been it, so there is nothing to ask.
     if connection.is_some() {
-        return Ok(
-            match landed_on(&snapshot, map_id, from, to, &context.codes) {
-                Some((jump, bookmark)) => Plan::Known(jump, bookmark),
-                None => Plan::Skip(format!("{from} to {to} is already on the map")),
-            },
-        );
+        return Ok(match landed_on(&snapshot, map_id, from, to) {
+            Some(jump) => {
+                let bookmark = way_back(client, &snapshot, &jump);
+                Plan::Known(jump, bookmark)
+            }
+            None => Plan::Skip(format!("{from} to {to} is already on the map")),
+        });
     }
     Ok(
-        match submit(
-            client,
-            &context.catalog,
-            &context.codes,
-            &ask,
-            None,
-            LoneGhost::Take,
-        )? {
+        match submit(client, &context.catalog, &ask, None, LoneGhost::Take)? {
             Some((jump, bookmark)) => Plan::Mapped(jump, bookmark),
             None => Plan::Skip(format!("Mapped {to}, but it is not on the map now")),
         },
@@ -248,7 +257,6 @@ pub(crate) enum LoneGhost {
 pub(crate) fn submit(
     client: &impl MapApi,
     catalog: &SignatureCatalog,
-    codes: &HashMap<i64, String>,
     ask: &Ask,
     picked: Option<&Signature>,
     lone_ghost: LoneGhost,
@@ -299,54 +307,56 @@ pub(crate) fn submit(
         })?;
     }
     let snapshot = client.snapshot(ask.map_id)?;
-    Ok(landed_on(
-        &snapshot,
-        ask.map_id,
-        &ask.origin.name,
-        &ask.target.name,
-        codes,
-    ))
+    let Some(jump) = landed_on(&snapshot, ask.map_id, &ask.origin.name, &ask.target.name) else {
+        return Ok(None);
+    };
+    let bookmark = way_back(client, &snapshot, &jump);
+    Ok(Some((jump, bookmark)))
 }
 
-/// The hole between two systems on the map, and the bookmark for the way back to `from`.
+/// The hole between two systems on the map, flown from `from`.
 pub(crate) fn landed_on(
     snapshot: &MapSnapshot,
     map_id: i64,
     from: &str,
     to: &str,
-    codes: &HashMap<i64, String>,
-) -> Option<(LastJump, String)> {
+) -> Option<LastJump> {
     let origin = snapshot.system_named(from)?;
     let here = snapshot.system_named(to)?;
     let connection = snapshot.connection_between(origin.id, here.id)?;
-    let jump = LastJump {
+    Some(LastJump {
         map_id,
         connection_id: connection.id,
         back_to: origin.name.clone(),
+        back_to_node: origin.id,
         here: here.name.clone(),
-    };
-    let bookmark = bookmark_for(snapshot, &jump, codes).unwrap_or_default();
-    Some((jump, bookmark))
+    })
+}
+
+/// The bookmark for the way back, blank when it cannot be had: the jump is on the map
+/// either way, and a missing name must not make it look as if it were not.
+fn way_back(client: &impl MapApi, snapshot: &MapSnapshot, jump: &LastJump) -> String {
+    bookmark_for(client, snapshot, jump)
+        .ok()
+        .flatten()
+        .unwrap_or_default()
 }
 
 /// The bookmark for the way back across `jump`'s connection, as the map names it now.
+/// `None` once the connection is gone from `snapshot`.
 pub(crate) fn bookmark_for(
+    client: &impl MapApi,
     snapshot: &MapSnapshot,
     jump: &LastJump,
-    codes: &HashMap<i64, String>,
-) -> Option<String> {
-    let connection = snapshot.connection(jump.connection_id)?;
-    let end = snapshot.system_named(&jump.back_to)?;
-    let near = snapshot.system_named(&jump.here)?;
-    let formats = BookmarkFormats::from(&snapshot.map.naming);
-    Some(connection_bookmark(
-        connection,
-        end,
-        near,
-        &snapshot.signatures,
-        |id| id.and_then(|id| codes.get(&id).cloned()),
-        &formats,
-    ))
+) -> anyhow::Result<Option<String>> {
+    if snapshot.connection(jump.connection_id).is_none() {
+        return Ok(None);
+    }
+    Ok(client
+        .connection_bookmarks(jump.map_id, jump.connection_id)?
+        .into_iter()
+        .find(|end| end.node == jump.back_to_node)
+        .map(|end| end.text))
 }
 
 #[cfg(test)]
@@ -354,7 +364,7 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use crate::api::{Connection, ConnectionKind, Ghost, MapInfo, MapNaming, PlacedSystem};
+    use crate::api::{Connection, ConnectionKind, Ghost, MapInfo, PlacedSystem};
 
     const MAP: i64 = 1;
     const AMARR: i64 = 30002187;
@@ -369,8 +379,6 @@ mod tests {
             region: region.into(),
             wormhole_class_id: Some(class),
             security_status: if class == 7 { 0.9 } else { -1.0 },
-            occupying_group: None,
-            is_home: false,
             position_x: 0.0,
             position_y: 0.0,
             statics: Vec::new(),
@@ -387,7 +395,6 @@ mod tests {
             from_system,
             to_system,
             kind: ConnectionKind::Wormhole,
-            size: None,
             mass_status: None,
             time_status: None,
             preserve_mass: false,
@@ -410,13 +417,6 @@ mod tests {
         MapSnapshot {
             map: MapInfo {
                 name: "Chain".into(),
-                naming: MapNaming {
-                    alias_scheme: None,
-                    ignored_alias: String::new(),
-                    bookmark_wormhole: "{alias} {sig}".into(),
-                    bookmark_kspace: "{name} {region} {sig}".into(),
-                    bookmark_return: "*{alias}".into(),
-                },
             },
             systems: vec![system(10, AMARR, "Amarr", 7, "Domain")],
             ghosts: Vec::new(),
@@ -428,7 +428,6 @@ mod tests {
     fn context() -> JumpContext {
         JumpContext {
             catalog: Arc::default(),
-            codes: Arc::default(),
             grid: Grid::default(),
             stargates: Arc::default(),
             suggest_alias: false,
@@ -489,6 +488,33 @@ mod tests {
             self.resolved.borrow_mut().push(cmd.clone());
             Ok(())
         }
+
+        fn suggest_alias(&self, _: i64, origin: i64, _: i64) -> anyhow::Result<Option<String>> {
+            Ok(Some(format!("after {origin}")))
+        }
+
+        /// Names each end after the system it leads to, which is all the planning needs:
+        /// what the name says is the server's to decide.
+        fn connection_bookmarks(
+            &self,
+            _: i64,
+            connection_id: i64,
+        ) -> anyhow::Result<Vec<EndBookmark>> {
+            let snapshot = self.snapshot.borrow();
+            let Some(c) = snapshot.connection(connection_id) else {
+                anyhow::bail!("not found");
+            };
+            Ok([c.from_system, c.to_system]
+                .into_iter()
+                .filter_map(|node| {
+                    let end = snapshot.systems.iter().find(|s| s.id == node)?;
+                    Some(EndBookmark {
+                        node,
+                        text: format!("to {}", end.name),
+                    })
+                })
+                .collect())
+        }
     }
 
     fn plan(map: &FakeMap, from: &str, to: &str) -> Plan {
@@ -536,8 +562,8 @@ mod tests {
             (jump.back_to.as_str(), jump.here.as_str()),
             ("Amarr", "J100001")
         );
-        // The way back names Amarr, region and all.
-        assert_eq!(bookmark, "Amarr Domain");
+        // The bookmark for the way back, to Amarr.
+        assert_eq!(bookmark, "to Amarr");
     }
 
     #[test]
@@ -559,23 +585,32 @@ mod tests {
             .collect();
         assert_eq!(options, ["ABC-123"]);
         assert_eq!(ask.origin.id, 10);
+        // Nobody asked for a name.
+        assert_eq!(ask.alias, None);
         assert_eq!(ask.target.solar_system_id, J100001);
         assert!(map.tracked.borrow().is_empty());
 
         // The pick goes on the jump.
         let picked = ask.options[0].clone();
         let catalog = SignatureCatalog::default();
-        let landed = submit(
-            &map,
-            &catalog,
-            &HashMap::new(),
-            &ask,
-            Some(&picked),
-            LoneGhost::Ignore,
-        )
-        .unwrap();
+        let landed = submit(&map, &catalog, &ask, Some(&picked), LoneGhost::Ignore).unwrap();
         assert_eq!(map.tracked.borrow()[0].signature_pk, Some(1));
         assert_eq!(landed.map(|(jump, _)| jump.connection_id), Some(50));
+    }
+
+    #[test]
+    fn the_name_for_a_new_system_comes_from_the_map() {
+        let mut snapshot = snapshot();
+        snapshot.signatures = vec![signature(1, "ABC-123", AMARR, "wormhole")];
+        let map = FakeMap::new(snapshot);
+        let context = JumpContext {
+            suggest_alias: true,
+            ..context()
+        };
+        let Ok(Plan::Ask(ask)) = plan_jump(&map, &context, MAP, "Pilot", "Amarr", "J100001") else {
+            panic!("not asked");
+        };
+        assert_eq!(ask.alias.as_deref(), Some("after 10"));
     }
 
     #[test]
@@ -591,8 +626,7 @@ mod tests {
             panic!("not known");
         };
         assert_eq!(jump.connection_id, 50);
-        // The signature scanned on this side of the hole.
-        assert_eq!(bookmark, "Amarr Domain XYZ");
+        assert_eq!(bookmark, "to Amarr");
         assert!(map.tracked.borrow().is_empty());
     }
 
@@ -627,14 +661,15 @@ mod tests {
             map_id: MAP,
             connection_id: 50,
             back_to: "Amarr".into(),
+            back_to_node: 10,
             here: "J100001".into(),
         };
-        let codes = HashMap::new();
+        let map = FakeMap::new(snapshot.clone());
         assert_eq!(
-            bookmark_for(&snapshot, &jump, &codes).as_deref(),
-            Some("Amarr Domain")
+            bookmark_for(&map, &snapshot, &jump).unwrap().as_deref(),
+            Some("to Amarr")
         );
         snapshot.connections.clear();
-        assert_eq!(bookmark_for(&snapshot, &jump, &codes), None);
+        assert_eq!(bookmark_for(&map, &snapshot, &jump).unwrap(), None);
     }
 }

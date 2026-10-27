@@ -21,7 +21,6 @@
 	import { LIFETIME_OPTIONS, MASS_OPTIONS, SIZE_OPTIONS } from '$lib/map/connection-status';
 	import { sizeForJumpMass } from '$lib/map/mass';
 	import { typeById } from '$lib/map/signatures';
-	import { connectionBookmarks, formatsFromNaming } from '$lib/naming/bookmark';
 	import type { MapState } from '../../state/map-state.svelte';
 
 	let { map, connection }: { map: MapState; connection: MapConnection } = $props();
@@ -42,16 +41,34 @@
 		return null;
 	});
 
-	/** The bookmark for each end, as it would be written in game. */
-	const bookmarks = $derived(
-		connectionBookmarks(
-			connection,
-			map.systems.all,
-			map.signatures.all,
-			(typeId) => (catalog ? (typeById(catalog, typeId)?.signature ?? null) : null),
-			formatsFromNaming(map.naming),
-		),
-	);
+	/** Everything the two names are made of, so the query asks again when any of it changes. */
+	const bookmarkBasis = $derived.by(() => {
+		const ends = [connection.from_system, connection.to_system].map((id) => {
+			const end = map.systems.byId.get(id);
+			return end
+				? [
+						end.kind,
+						end.alias,
+						end.kind === 'system' && end.is_home,
+						end.kind === 'system' && end.occupying_group,
+					]
+				: null;
+		});
+		const sigs = map.signatures.all
+			.filter((s) => s.connection_id === cid)
+			.map((s) => [s.signature_id, s.signature_type_id]);
+		return JSON.stringify([
+			ends,
+			sigs,
+			connection.size,
+			connection.mass_status,
+			connection.time_status,
+			map.naming,
+		]);
+	});
+	const bookmarksQuery = createQuery(() => q.connectionBookmarks(map.mapId, cid, bookmarkBasis));
+	/** The bookmark for each end, as the map's naming strategy writes it. */
+	const bookmarks = $derived((bookmarksQuery.data ?? []).map((b) => b.text));
 
 	function copyBookmark(text: string) {
 		void copyText(text, { success: 'Bookmark copied' });

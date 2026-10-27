@@ -4,13 +4,13 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 
 	import { toast } from 'svelte-sonner';
-	import { copyText } from '$lib/clipboard';
+	import { api } from '$lib/api/client';
+	import { copyPending } from '$lib/clipboard';
 
 	import type { Signature } from '$lib/api/types/Signature';
 	import type { MassStatus } from '$lib/api/types/MassStatus';
 	import type { TimeStatus } from '$lib/api/types/TimeStatus';
 	import type { WormholeSize } from '$lib/api/types/WormholeSize';
-	import { formatBookmark, formatsFromNaming } from '$lib/naming/bookmark';
 	import ClassBadge from '$lib/components/ClassBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -128,30 +128,22 @@
 	/** The bookmark for the hole just flown, named after where it came out. */
 	function copyBookmark(chosenAlias: string | null) {
 		if (!map.userSettings?.copy_bookmark) return;
-		const naming = map.data?.map.naming;
-		const type = typeOf(chosen);
-		const text = formatBookmark(
-			{
-				alias: chosenAlias,
-				name: prompt.targetName,
-				region: prompt.targetRegion,
-				wormholeClassId: prompt.targetClassId,
-				security: prompt.targetSecurity,
-				occupier: prompt.existing?.occupying_group ?? null,
-				isHome: prompt.existing?.is_home ?? false,
-			},
-			{
-				signatureId: chosen?.signature_id ?? null,
-				size: lockedSize ?? (size === 'auto' ? null : size),
-				massStatus: mass,
-				timeStatus: time,
-				wormholeCode: type?.signature ?? null,
-			},
-			formatsFromNaming(naming),
-			prompt.origin.alias,
-		);
-		void copyText(text, { silent: true });
-		toast.success('Bookmark copied', { description: text });
+		const named = api.nameBookmark(map.mapId, {
+			near: prompt.origin.id,
+			destination_system: prompt.targetSolarSystemId,
+			alias: chosenAlias,
+			signature_id: chosen?.signature_id,
+			signature_type_id: chosen?.signature_type_id ?? undefined,
+			size: lockedSize ?? (size === 'auto' ? undefined : size),
+			mass_status: mass,
+			time_status: time,
+		});
+		void copyPending(
+			named.then((n) => n.text),
+			{ failed: 'Could not name the bookmark' },
+		).then((text) => {
+			if (text !== null) toast.success('Bookmark copied', { description: text });
+		});
 	}
 
 	/**

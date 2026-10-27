@@ -172,6 +172,15 @@ export const q = {
 			queryKey: key.systemDetails(id, mss),
 			queryFn: ({ signal }) => api.systemDetails(id, mss, signal),
 		}),
+	// Asked again on every open: a strategy may read the whole map (which way home is), more
+	// than any key here could name. Keyed on what the names are built from too, so a renamed
+	// end or a newly linked signature asks again while the menu is open.
+	connectionBookmarks: (id: number, connectionId: number, basis: string) =>
+		queryOptions({
+			queryKey: ['maps', id, 'connection-bookmarks', connectionId, basis],
+			queryFn: ({ signal }) => api.connectionBookmarks(id, connectionId, signal),
+			staleTime: 0,
+		}),
 	listConnectionJumps: (id: number, connectionId: number) =>
 		queryOptions({
 			queryKey: key.connectionJumps(id, connectionId),

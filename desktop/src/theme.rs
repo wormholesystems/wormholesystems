@@ -191,7 +191,7 @@ pub(crate) fn class_meta(
         return ("?", unknown_class());
     }
     let class = wormhole_class_id
-        .unwrap_or_else(|| crate::naming::class_from_security(security.unwrap_or(0.0)));
+        .unwrap_or_else(|| crate::classes::class_from_security(security.unwrap_or(0.0)));
     dest_class_meta(Some(class))
 }
 
@@ -225,8 +225,8 @@ pub(crate) fn dest_class_meta(class: Option<i64>) -> (&'static str, Hsla) {
         Some(22) => ("C22", unknown_class()),
         Some(23) => ("C23", unknown_class()),
         Some(25) => ("P", oklch(0.505, 0.213, 27.518)),
-        Some(crate::naming::C1_TO_3) => ("C1-3", oklch(0.623, 0.214, 259.815)),
-        Some(crate::naming::C4_TO_5) => ("C4-5", oklch(0.606, 0.25, 292.717)),
+        Some(crate::classes::C1_TO_3) => ("C1-3", oklch(0.623, 0.214, 259.815)),
+        Some(crate::classes::C4_TO_5) => ("C4-5", oklch(0.606, 0.25, 292.717)),
         _ => ("?", unknown_class()),
     }
 }
@@ -289,8 +289,8 @@ pub(crate) fn dest_sort_weight(class: Option<i64>) -> i64 {
         Some(9) => 2,
         Some(25) => 3,
         Some(c @ (1..=6 | 12..=23)) => 10 + 2 * c,
-        Some(crate::naming::C1_TO_3) => 10 + 2 * 3 + 1,
-        Some(crate::naming::C4_TO_5) => 10 + 2 * 5 + 1,
+        Some(crate::classes::C1_TO_3) => 10 + 2 * 3 + 1,
+        Some(crate::classes::C4_TO_5) => 10 + 2 * 5 + 1,
         _ => 199,
     }
 }

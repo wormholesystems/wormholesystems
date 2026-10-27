@@ -223,6 +223,10 @@ test('chain naming previews as you type and survives a reload', async ({ page, a
 	await page.getByTestId('alias-scheme').getByText('Alphabetical').click();
 	await expect(page.getByTestId('alias-preview')).toHaveText('A, B, C, AA');
 
+	// Per system, each system's holes start again rather than extending its alias.
+	await page.getByTestId('naming-strategy').getByText('Per system').click();
+	await expect(page.getByTestId('alias-preview')).toHaveText('A, B, C, A');
+
 	await page.getByTestId('bookmark_wormhole').fill('{alias} {sig} {class} {wh} {life}');
 	await expect(page.getByTestId('bookmark_wormhole-preview')).toHaveText('1a ABC C5 H296 EOL');
 
@@ -233,7 +237,7 @@ test('chain naming previews as you type and survives a reload', async ({ page, a
 	await expect(page.getByTestId('bookmark_wormhole')).toHaveValue(
 		'{alias} {sig} {class} {wh} {life}',
 	);
-	await expect(page.getByTestId('alias-preview')).toHaveText('A, B, C, AA');
+	await expect(page.getByTestId('alias-preview')).toHaveText('A, B, C, A');
 
 	// Copying the bookmark is per user, and gated on location sharing a fresh map lacks.
 	const copy = page.locator('[data-setting="copy-bookmark"]');

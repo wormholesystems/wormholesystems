@@ -54,7 +54,7 @@ function fakeHost(over: Partial<TrackerHost> = {}) {
 			suggest_alias: false,
 			tracked_character_ids: [],
 		}),
-		naming: () => null,
+		suggestAlias: () => Promise.resolve(null),
 		ignored: () => new Set(),
 		stargates: () => new Map(),
 		whenRoutingLoaded: () => Promise.resolve(),
@@ -97,11 +97,15 @@ async function fly(
 		{ character_id: 9, is_active: true, online: true, solar_system_id: to } as CharacterRef,
 	]);
 	tracker.observe();
-	// The decision path awaits routing tables and the catalog.
-	await Promise.resolve();
-	await Promise.resolve();
-	await Promise.resolve();
-	await Promise.resolve();
+	await settle();
+}
+
+/**
+ * Let the decision path finish: it awaits routing tables, the catalog and the alias
+ * suggestion, all already resolved here, so one macrotask drains them however many there are.
+ */
+function settle() {
+	return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 describe('JumpTracker', () => {
@@ -161,7 +165,7 @@ describe('JumpTracker', () => {
 		tracker.observe();
 		at(200, 300, 400);
 		tracker.observe();
-		for (let i = 0; i < 4; i++) await Promise.resolve();
+		await settle();
 		expect(trackJump).toHaveBeenCalledTimes(2);
 		expect(trackJump.mock.calls.map((c) => c[0].to_solar_system_id).sort()).toEqual([200, 300]);
 	});
@@ -195,10 +199,10 @@ describe('JumpTracker', () => {
 		tracker.observe();
 		at(200, 300);
 		tracker.observe();
-		for (let i = 0; i < 6; i++) await Promise.resolve();
+		await settle();
 		expect(tracker.prompt).toMatchObject({ pilot: 'Main', targetSolarSystemId: 200 });
 		tracker.dismiss();
-		for (let i = 0; i < 6; i++) await Promise.resolve();
+		await settle();
 		expect(tracker.prompt).toMatchObject({ pilot: 'Alt', targetSolarSystemId: 300 });
 		tracker.dismiss();
 		expect(tracker.prompt).toBeNull();

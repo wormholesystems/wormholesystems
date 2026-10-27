@@ -1,0 +1,281 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update maps set name = $1, description = $2, image_url = $3,\n                    alias_scheme = $5, ignored_alias = $6, bookmark_wormhole = $7,\n                    bookmark_kspace = $8, bookmark_return = $9, ghost_unlinked_wormholes = $10,\n                    layout = $11, allow_layout_override = $12, is_public = $13,\n                    naming_strategy = $14\n             where id = $4\n             returning id, name, description, image_url, created_at, alias_scheme, naming_strategy, ignored_alias,\n                 bookmark_wormhole, bookmark_kspace, bookmark_return, ghost_unlinked_wormholes,\n                 layout, allow_layout_override, is_public, share_token",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "description",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "image_url",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "image_url"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "alias_scheme",
+        "type_info": {
+          "Custom": {
+            "name": "alias_scheme",
+            "kind": {
+              "Enum": [
+                "numeric",
+                "alphabetical"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "alias_scheme"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "naming_strategy",
+        "type_info": {
+          "Custom": {
+            "name": "naming_strategy",
+            "kind": {
+              "Enum": [
+                "chain",
+                "siblings"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "naming_strategy"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "ignored_alias",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "ignored_alias"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "bookmark_wormhole",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "bookmark_wormhole"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "bookmark_kspace",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "bookmark_kspace"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "bookmark_return",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "bookmark_return"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "ghost_unlinked_wormholes",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "ghost_unlinked_wormholes"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "layout",
+        "type_info": {
+          "Custom": {
+            "name": "map_layout",
+            "kind": {
+              "Enum": [
+                "manual",
+                "tree"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "layout"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "allow_layout_override",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "allow_layout_override"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "is_public",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "is_public"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "share_token",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "share_token"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Int8",
+        {
+          "Custom": {
+            "name": "alias_scheme",
+            "kind": {
+              "Enum": [
+                "numeric",
+                "alphabetical"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Bool",
+        {
+          "Custom": {
+            "name": "map_layout",
+            "kind": {
+              "Enum": [
+                "manual",
+                "tree"
+              ]
+            }
+          }
+        },
+        "Bool",
+        "Bool",
+        {
+          "Custom": {
+            "name": "naming_strategy",
+            "kind": {
+              "Enum": [
+                "chain",
+                "siblings"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "c654bbaf854b2e68750c7090e977976a6aedaaf2215c7b20d67bafe01d96415c"
+}

@@ -15,6 +15,37 @@ export async function copyText(
 	}
 }
 
+/**
+ * Put text that is still on its way onto the clipboard, e.g. a name the server is working
+ * out. Browsers only allow a write during the click that asked for it, and Safari counts a
+ * write after a network round trip as outside it, so the write starts now with the text as
+ * a promise where the browser takes one. Resolves to the text once copied, null when the
+ * browser refuses or the text never arrives; `failed` is what the toast says then.
+ */
+export async function copyPending(
+	text: Promise<string>,
+	opts: { failed?: string } = {},
+): Promise<string | null> {
+	let textFailed = false;
+	const arriving = text.catch((err: unknown) => {
+		textFailed = true;
+		throw err;
+	});
+	try {
+		if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+			const blob = arriving.then((t) => new Blob([t], { type: 'text/plain' }));
+			await navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]);
+			return await arriving;
+		}
+		const resolved = await arriving;
+		await navigator.clipboard.writeText(resolved);
+		return resolved;
+	} catch {
+		toast.error(textFailed ? (opts.failed ?? 'Nothing to copy') : 'Clipboard access denied');
+		return null;
+	}
+}
+
 /** Read the clipboard; null (and a toast) when the browser refuses. */
 export async function readText(): Promise<string | null> {
 	try {

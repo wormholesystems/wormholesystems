@@ -5,12 +5,12 @@ mod alias;
 mod api;
 mod app;
 mod chatlog;
+mod classes;
 mod config;
 mod focus;
 mod fresh;
 mod hotkeys;
 mod jump;
-mod naming;
 #[cfg(not(target_os = "linux"))]
 mod native;
 mod overlay;

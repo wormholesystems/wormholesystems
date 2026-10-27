@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select name, layout, allow_layout_override, alias_scheme, ignored_alias,\n                  bookmark_wormhole, bookmark_kspace, bookmark_return,\n                  (select solar_system_id from map_solar_systems\n                   where map_id = m.id and is_home) as \"home?\",\n                  array(select solar_system_id from map_solar_systems\n                        where map_id = m.id and rallied_at is not null\n                        order by rallied_at, id) as \"rally!: Vec<i64>\"\n           from maps m where m.id = $1",
+  "query": "select name, layout, allow_layout_override, alias_scheme, naming_strategy, ignored_alias,\n                  bookmark_wormhole, bookmark_kspace, bookmark_return,\n                  (select solar_system_id from map_solar_systems\n                   where map_id = m.id and is_home) as \"home?\",\n                  array(select solar_system_id from map_solar_systems\n                        where map_id = m.id and rallied_at is not null\n                        order by rallied_at, id) as \"rally!: Vec<i64>\"\n           from maps m where m.id = $1",
   "describe": {
     "columns": [
       {
@@ -69,6 +69,27 @@
       },
       {
         "ordinal": 4,
+        "name": "naming_strategy",
+        "type_info": {
+          "Custom": {
+            "name": "naming_strategy",
+            "kind": {
+              "Enum": [
+                "chain",
+                "siblings"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "naming_strategy"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
         "name": "ignored_alias",
         "type_info": "Text",
         "origin": {
@@ -79,7 +100,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "bookmark_wormhole",
         "type_info": "Text",
         "origin": {
@@ -90,7 +111,7 @@
         }
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "bookmark_kspace",
         "type_info": "Text",
         "origin": {
@@ -101,7 +122,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "bookmark_return",
         "type_info": "Text",
         "origin": {
@@ -112,13 +133,13 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "home?",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "rally!: Vec<i64>",
         "type_info": "Int8Array",
         "origin": "Expression"
@@ -138,9 +159,10 @@
       false,
       false,
       false,
+      false,
       null,
       null
     ]
   },
-  "hash": "491e861189232576a0a5835026a25d78191c4afdd0e2fc0b974a875cba028ce2"
+  "hash": "885bc75c2dd958c4505d6a95f4af9c935b9820238917d91003e4609a10f059b0"
 }

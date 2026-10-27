@@ -16,6 +16,7 @@ pub mod history;
 pub mod ignored;
 pub mod jumps;
 pub mod map;
+pub mod naming;
 pub mod personal_watchlist;
 pub mod presence;
 pub mod restore;
@@ -126,6 +127,26 @@ text_enum! {
     pub enum AliasScheme as "alias_scheme" {
         Numeric => "numeric",
         Alphabetical => "alphabetical",
+    }
+}
+
+text_enum! {
+    /// Which naming convention a map follows; [`naming::strategy`] maps it to the code.
+    /// `Chain` extends the parent's alias (`1`, `11`, `111`); `Siblings` numbers each
+    /// system's holes afresh (`1`, `2`, and `1`, `2` again one further out).
+    pub enum NamingStrategyKind as "naming_strategy" {
+        Chain => "chain",
+        Siblings => "siblings",
+    }
+}
+
+#[expect(
+    clippy::derivable_impls,
+    reason = "`text_enum!` writes the derive list, and a map that never chose keeps the chain"
+)]
+impl Default for NamingStrategyKind {
+    fn default() -> Self {
+        Self::Chain
     }
 }
 

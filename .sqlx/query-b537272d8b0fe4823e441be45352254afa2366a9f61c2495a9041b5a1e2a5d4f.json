@@ -1,0 +1,123 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id, from_system, to_system, size, mass_status, time_status\n           from map_connections where map_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "map_connections",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "from_system",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "map_connections",
+            "name": "from_system"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "to_system",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "map_connections",
+            "name": "to_system"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "size",
+        "type_info": {
+          "Custom": {
+            "name": "wormhole_size",
+            "kind": {
+              "Enum": [
+                "xl",
+                "large",
+                "medium",
+                "small"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "map_connections",
+            "name": "size"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "mass_status",
+        "type_info": {
+          "Custom": {
+            "name": "mass_status",
+            "kind": {
+              "Enum": [
+                "stable",
+                "reduced",
+                "critical"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "map_connections",
+            "name": "mass_status"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "time_status",
+        "type_info": {
+          "Custom": {
+            "name": "time_status",
+            "kind": {
+              "Enum": [
+                "stable",
+                "eol",
+                "critical",
+                "expired"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "map_connections",
+            "name": "time_status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "b537272d8b0fe4823e441be45352254afa2366a9f61c2495a9041b5a1e2a5d4f"
+}

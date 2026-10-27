@@ -1,6 +1,13 @@
 // Typed client for the Axum JSON API, for the browser and the server-side loads alike.
 
 import type { AddConnection } from './types/AddConnection';
+import type { AliasSuggestion } from './types/AliasSuggestion';
+import type { BookmarkName } from './types/BookmarkName';
+import type { NamingPreview } from './types/NamingPreview';
+import type { EndBookmark } from './types/EndBookmark';
+import type { NameBookmark } from './types/NameBookmark';
+import type { NamingUpdate } from './types/NamingUpdate';
+import type { SuggestAlias } from './types/SuggestAlias';
 import type { AddConnectionJump } from './types/AddConnectionJump';
 import type { AddSignature } from './types/AddSignature';
 import type { AddSystem } from './types/AddSystem';
@@ -297,6 +304,19 @@ export function createApi(
 		// Places the system, connects it, and links the signature in one undoable step. The
 		// response is empty, the socket drives the refetch.
 		trackJump: (cmd: TrackJump) => post<null>(`/api/maps/${cmd.map_id}/track-jump`, cmd),
+
+		// Naming: what the map's naming strategy calls a system or a hole.
+		suggestAlias: (mapId: number, query: SuggestAlias) =>
+			get<AliasSuggestion>(
+				`/api/maps/${mapId}/naming/alias?${new URLSearchParams(
+					Object.entries(query).map(([k, v]) => [k, String(v)]),
+				)}`,
+			),
+		nameBookmark: (mapId: number, cmd: NameBookmark) =>
+			post<BookmarkName>(`/api/maps/${mapId}/naming/bookmark`, cmd),
+		connectionBookmarks: (mapId: number, connectionId: number, signal?: AbortSignal) =>
+			get<EndBookmark[]>(`/api/maps/${mapId}/connections/${connectionId}/bookmarks`, signal),
+		previewNaming: (naming: NamingUpdate) => post<NamingPreview>('/api/naming/preview', naming),
 
 		// Connections
 		addConnection: (cmd: AddConnection) =>
