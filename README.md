@@ -103,7 +103,8 @@ cargo run                  # API on :3000
 cd frontend && npm install && npm run dev
 ```
 
-`cargo test` builds its own database per test and needs `DATABASE_URL` set. After changing
+`cargo test` builds its own database per test and needs `DATABASE_URL` set. The integration
+tests are one binary, so one file runs as `cargo test --test it maps_ghost::`. After changing
 a query, `cargo sqlx prepare --workspace -- --all-targets` refreshes the offline cache that
 CI compiles against; a pre-push hook checks it is current.
 

@@ -46,7 +46,7 @@ Results go to `wormhole_systems.threat_level` / `threat_analyzed_at` and the
 tables, falling back to ESI). The whole result set is replaced on every run.
 
 Rules are covered by unit tests in `src/killmails.rs` and DB-backed tests in
-`tests/threat.rs`.
+`tests/it/threat.rs`.
 
 ## Surface
 
