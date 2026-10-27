@@ -225,6 +225,8 @@ pub(crate) fn dest_class_meta(class: Option<i64>) -> (&'static str, Hsla) {
         Some(22) => ("C22", unknown_class()),
         Some(23) => ("C23", unknown_class()),
         Some(25) => ("P", oklch(0.505, 0.213, 27.518)),
+        Some(crate::naming::C1_TO_3) => ("C1-3", oklch(0.623, 0.214, 259.815)),
+        Some(crate::naming::C4_TO_5) => ("C4-5", oklch(0.606, 0.25, 292.717)),
         _ => ("?", unknown_class()),
     }
 }
@@ -279,15 +281,17 @@ pub(crate) const CATEGORIES: [(&str, i64, &str); 8] = [
 ];
 
 /// Where a destination class sorts in a type picker: k-space, then Pochven, then the
-/// wormhole classes, like the website.
+/// wormhole classes, each K162 group after its last class, like the website.
 pub(crate) fn dest_sort_weight(class: Option<i64>) -> i64 {
     match class {
         Some(7) => 0,
         Some(8) => 1,
         Some(9) => 2,
         Some(25) => 3,
-        Some(c @ (1..=6 | 12..=23)) => 10 + c,
-        _ => 99,
+        Some(c @ (1..=6 | 12..=23)) => 10 + 2 * c,
+        Some(crate::naming::C1_TO_3) => 10 + 2 * 3 + 1,
+        Some(crate::naming::C4_TO_5) => 10 + 2 * 5 + 1,
+        _ => 199,
     }
 }
 

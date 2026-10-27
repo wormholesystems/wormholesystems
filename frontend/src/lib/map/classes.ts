@@ -31,6 +31,24 @@ function meta(
 	};
 }
 
+/** Destination class of a K162 that leads to a C1, C2 or C3. */
+export const C1_TO_3 = 101;
+/** Destination class of a K162 that leads to a C4 or C5. */
+export const C4_TO_5 = 102;
+
+const CLASS_GROUPS = new Map<number, number[]>([
+	[C1_TO_3, [1, 2, 3]],
+	[C4_TO_5, [4, 5]],
+]);
+
+/** Whether a destination class (possibly a group like `C1-3`) covers a system's class. */
+export function destIncludes(destClass: number, wormholeClassId: number | null): boolean {
+	return (
+		destClass === wormholeClassId ||
+		(wormholeClassId !== null && (CLASS_GROUPS.get(destClass)?.includes(wormholeClassId) ?? false))
+	);
+}
+
 const CLASSES = new Map<number, ClassMeta>([
 	[1, meta('C1', 'c1', 11, 'wormhole')],
 	[2, meta('C2', 'c2', 12, 'wormhole')],
@@ -54,6 +72,9 @@ const CLASSES = new Map<number, ClassMeta>([
 	[22, meta('C22', 'unknown', 32, 'other')],
 	[23, meta('C23', 'unknown', 33, 'other')],
 	[25, meta('P', 'pochven', 3, 'other')],
+	// Not real classes: a K162 only tells you it leads to C1/2/3 or C4/5.
+	[C1_TO_3, meta('C1-3', 'c2', 13.5, 'wormhole')],
+	[C4_TO_5, meta('C4-5', 'c4', 15.5, 'wormhole')],
 ]);
 
 const UNKNOWN: ClassMeta = meta('?', 'unknown', 99, 'other');

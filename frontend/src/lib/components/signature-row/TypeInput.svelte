@@ -11,7 +11,7 @@
 	import * as Command from '$lib/components/ui/command';
 	import * as Popover from '$lib/components/ui/popover';
 	import { matchesTypeQuery } from '$lib/signatures/type-search';
-	import { destClassMeta } from '$lib/map/classes';
+	import { destClassMeta, destIncludes } from '$lib/map/classes';
 	import { categoryMeta, typeById, typesForCategory } from '$lib/map/signatures';
 
 	let {
@@ -40,7 +40,9 @@
 	const available = $derived.by(() => {
 		if (categoryId === null) return [];
 		const all = typesForCategory(catalog, categoryId, system.wormhole_class_id);
-		return linkedClass === null ? all : all.filter((t) => t.target_class === linkedClass);
+		return linkedClass === null
+			? all
+			: all.filter((t) => t.target_class !== null && destIncludes(t.target_class, linkedClass));
 	});
 
 	// A static's code can also be scanned outbound, so statics come first, then K162, then
@@ -83,7 +85,8 @@
 		return typesForCategory(catalog, categoryId, null).filter(
 			(t) =>
 				!here.has(t.id) &&
-				(linkedClass === null || t.target_class === linkedClass) &&
+				(linkedClass === null ||
+					(t.target_class !== null && destIncludes(t.target_class, linkedClass))) &&
 				matchesTypeQuery(t, query),
 		);
 	});

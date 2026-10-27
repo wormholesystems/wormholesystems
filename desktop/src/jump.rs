@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::api::{Ghost, MapSnapshot, PlacedSystem, Signature, SignatureType, WormholeSize};
-use crate::naming::{class_short, is_wormhole_class};
+use crate::naming::{class_short, dest_includes, is_wormhole_class};
 
 /// Fixed node width on the website's canvas. Height is two grid cells.
 const NODE_W: f64 = 180.0;
@@ -44,7 +44,7 @@ fn can_be_connection(sig: &Signature) -> bool {
 /// unresolved type (a bare K162) always could.
 fn can_lead_to_class(ty: Option<&SignatureType>, target_class: Option<i64>) -> bool {
     match (ty.and_then(|t| t.target_class), target_class) {
-        (Some(destination), Some(target)) => destination == target,
+        (Some(destination), Some(target)) => dest_includes(destination, Some(target)),
         _ => true,
     }
 }
@@ -450,6 +450,16 @@ mod tests {
         assert_eq!(ids(&c.unlikely), ["ZZZ-100"]);
         let numbered: Vec<_> = c.numbered().map(|s| s.signature_id.as_str()).collect();
         assert_eq!(numbered, ["AAA-100", "CCC-100", "EEE-100", "ZZZ-100"]);
+    }
+
+    #[test]
+    fn a_k162_group_leads_to_each_of_its_classes() {
+        let c1_to_3 = ty(1, Some(crate::naming::C1_TO_3));
+        assert!(can_lead_to_class(Some(&c1_to_3), Some(2)));
+        assert!(!can_lead_to_class(Some(&c1_to_3), Some(4)));
+        let c4_to_5 = ty(2, Some(crate::naming::C4_TO_5));
+        assert!(can_lead_to_class(Some(&c4_to_5), Some(5)));
+        assert!(!can_lead_to_class(Some(&c4_to_5), Some(6)));
     }
 
     const GRID: Grid = Grid {
