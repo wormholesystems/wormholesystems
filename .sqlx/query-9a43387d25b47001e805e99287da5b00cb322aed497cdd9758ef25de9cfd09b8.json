@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "update maps set name = $1, description = $2, image_url = $3,\n                    alias_scheme = $5, ignored_alias = $6, bookmark_wormhole = $7,\n                    bookmark_kspace = $8, bookmark_return = $9, ghost_unlinked_wormholes = $10,\n                    layout = $11, allow_layout_override = $12, is_public = $13\n             where id = $4\n             returning id, name, description, image_url, created_at, alias_scheme, ignored_alias,\n                 bookmark_wormhole, bookmark_kspace, bookmark_return, ghost_unlinked_wormholes,\n                 layout, allow_layout_override, is_public, share_token",
+  "query": "select m.id, m.name, m.description, m.image_url, m.created_at, m.alias_scheme, m.naming_strategy,\n                  m.ignored_alias, m.bookmark_wormhole, m.bookmark_kspace, m.bookmark_return,\n                  m.ghost_unlinked_wormholes, m.layout, m.allow_layout_override,\n                  m.is_public, m.share_token,\n                  -- The view cannot promise not-null the way the table does.\n                  ma.role as \"role!: Role\"\n           from maps m\n           join map_user_roles ma on ma.map_id = m.id\n           where ma.user_id = $1\n           order by m.created_at",
   "describe": {
     "columns": [
       {
@@ -81,6 +81,27 @@
       },
       {
         "ordinal": 6,
+        "name": "naming_strategy",
+        "type_info": {
+          "Custom": {
+            "name": "naming_strategy",
+            "kind": {
+              "Enum": [
+                "chain",
+                "siblings"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "naming_strategy"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
         "name": "ignored_alias",
         "type_info": "Text",
         "origin": {
@@ -91,7 +112,7 @@
         }
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "bookmark_wormhole",
         "type_info": "Text",
         "origin": {
@@ -102,7 +123,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "bookmark_kspace",
         "type_info": "Text",
         "origin": {
@@ -113,7 +134,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "bookmark_return",
         "type_info": "Text",
         "origin": {
@@ -124,7 +145,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "ghost_unlinked_wormholes",
         "type_info": "Bool",
         "origin": {
@@ -135,7 +156,7 @@
         }
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "layout",
         "type_info": {
           "Custom": {
@@ -156,7 +177,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "allow_layout_override",
         "type_info": "Bool",
         "origin": {
@@ -167,7 +188,7 @@
         }
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "is_public",
         "type_info": "Bool",
         "origin": {
@@ -178,7 +199,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 15,
         "name": "share_token",
         "type_info": "Text",
         "origin": {
@@ -187,43 +208,34 @@
             "name": "share_token"
           }
         }
+      },
+      {
+        "ordinal": 16,
+        "name": "role!: Role",
+        "type_info": {
+          "Custom": {
+            "name": "map_role",
+            "kind": {
+              "Enum": [
+                "viewer",
+                "member",
+                "manager",
+                "owner"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "map_user_roles",
+            "name": "role"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
-        "Text",
-        "Text",
-        "Text",
-        "Int8",
-        {
-          "Custom": {
-            "name": "alias_scheme",
-            "kind": {
-              "Enum": [
-                "numeric",
-                "alphabetical"
-              ]
-            }
-          }
-        },
-        "Text",
-        "Text",
-        "Text",
-        "Text",
-        "Bool",
-        {
-          "Custom": {
-            "name": "map_layout",
-            "kind": {
-              "Enum": [
-                "manual",
-                "tree"
-              ]
-            }
-          }
-        },
-        "Bool",
-        "Bool"
+        "Int8"
       ]
     },
     "nullable": [
@@ -241,8 +253,10 @@
       false,
       false,
       false,
+      false,
+      true,
       true
     ]
   },
-  "hash": "815c4a7710c9180bee48d7bd806d68ed3d6497ef8084a22e43f7b311c34e53a9"
+  "hash": "9a43387d25b47001e805e99287da5b00cb322aed497cdd9758ef25de9cfd09b8"
 }

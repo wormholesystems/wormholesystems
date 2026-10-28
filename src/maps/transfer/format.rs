@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::maps::error::{MapError, Result};
 use crate::maps::{
-    AliasScheme, ConnectionType, MapLayout, MassStatus, Role, SignatureGroup, SubjectType,
-    SystemStatus, TimeStatus, WormholeSize,
+    AliasScheme, ConnectionType, MapLayout, MassStatus, NamingStrategyKind, Role, SignatureGroup,
+    SubjectType, SystemStatus, TimeStatus, WormholeSize,
 };
 
 pub const FORMAT: &str = "wormholesystems-map-export";
@@ -63,6 +63,11 @@ pub struct SettingsSection {
     pub bookmark_format_kspace: String,
     pub bookmark_format_return: String,
     pub bookmark_alias_scheme: AliasScheme,
+    /// This app's naming convention. The legacy app has no such choice and writes none, so
+    /// a file without it keeps the chain.
+    #[serde(default)]
+    #[ts(optional)]
+    pub naming_strategy: Option<NamingStrategyKind>,
     pub bookmark_ignored_alias: Option<String>,
     pub home_solarsystem_id: Option<i64>,
     /// Oldest first. On import only the newest two are kept.

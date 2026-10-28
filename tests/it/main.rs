@@ -29,6 +29,7 @@ mod http_auth;
 mod http_background_image;
 mod http_instance;
 mod http_killmails;
+mod http_naming;
 mod http_preferences;
 mod http_reference;
 mod http_settings;

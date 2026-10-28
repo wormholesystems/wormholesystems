@@ -1,21 +1,17 @@
 <script lang="ts">
 	// The alias sequence and the three bookmark formats. The formats are opaque token strings,
-	// so each previews against a worked example as you type.
+	// so each previews against a worked example as you type, rendered by the server the same
+	// way it names everything else.
+	import { createQuery, keepPreviousData } from '@tanstack/svelte-query';
+
 	import { oneOf } from '$lib/lookup';
 
-	import { guessNextAlias } from '$lib/naming/alias';
+	import { api } from '$lib/api/client';
+	import { debounced } from '$lib/debounced.svelte';
 	import { draft as draftOf } from '$lib/draft.svelte';
-	import type { AliasScheme } from '$lib/naming/alias';
-	import {
-		BOOKMARK_TOKENS,
-		DEFAULT_FORMAT_KSPACE,
-		DEFAULT_FORMAT_RETURN,
-		DEFAULT_FORMAT_WORMHOLE,
-		DEFAULT_IGNORED_ALIAS,
-		renderBookmark,
-	} from '$lib/naming/bookmark';
-	import type { BookmarkToken } from '$lib/naming/bookmark';
+	import type { AliasScheme } from '$lib/api/types/AliasScheme';
 	import type { MapNaming } from '$lib/api/types/MapNaming';
+	import type { NamingStrategyKind } from '$lib/api/types/NamingStrategyKind';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
 	import * as Field from '$lib/components/ui/field';
@@ -35,74 +31,37 @@
 	const buffer = draftOf(() => naming);
 	const dirty = $derived(buffer.dirty);
 
+	const STRATEGIES = ['chain', 'siblings'] as const satisfies readonly NamingStrategyKind[];
 	const ALIAS_SCHEMES = ['numeric', 'alphabetical'] as const satisfies readonly AliasScheme[];
 	const scheme = $derived(buffer.value.alias_scheme);
 
-	/** The first three children of a chain, so switching scheme shows the difference. */
-	const aliasPreview = $derived.by(() => {
-		const taken: string[] = [];
-		for (let i = 0; i < 3; i++) {
-			taken.push(guessNextAlias('', taken, { scheme, ignoredAlias: buffer.value.ignored_alias }));
-		}
-		const child = guessNextAlias(taken[0], taken, {
-			scheme,
-			ignoredAlias: buffer.value.ignored_alias,
-		});
-		return [...taken, child].join(', ');
-	});
-
-	const EXAMPLE = {
-		alias: '1a',
-		current: '1',
-		sig: 'ABC',
-		class: 'C5',
-		name: 'J155207',
-		region: 'E-R00028',
-		occupier: 'Hard Knocks',
-		size: 'MD',
-		wh: 'H296',
-		mass: 'crit',
-		life: 'EOL',
-	} satisfies Record<BookmarkToken, string>;
-
-	const KSPACE_EXAMPLE = {
-		...EXAMPLE,
-		alias: '1b',
-		class: 'HS',
-		name: 'Jita',
-		region: 'The Forge',
-		occupier: '',
-		wh: 'B041',
-	} satisfies Record<BookmarkToken, string>;
-
-	/** Back up the chain, so the two aliases swap. */
-	const RETURN_EXAMPLE = {
-		...EXAMPLE,
-		alias: '1',
-		current: '1a',
-	} satisfies Record<BookmarkToken, string>;
+	/** The draft, settled for a moment, so typing does not ask the server on every key. */
+	const settled = debounced(() => ({ ...buffer.value }), 200);
+	const previewQuery = createQuery(() => ({
+		queryKey: ['naming-preview', settled.current],
+		queryFn: () => api.previewNaming(settled.current),
+		placeholderData: keepPreviousData,
+	}));
+	const preview = $derived(previewQuery.data ?? null);
 
 	const FORMATS = [
 		{
 			key: 'bookmark_wormhole' as const,
+			preview: 'wormhole' as const,
 			label: 'Wormhole',
 			help: 'A hole leading further into wormhole space.',
-			fallback: DEFAULT_FORMAT_WORMHOLE,
-			example: EXAMPLE,
 		},
 		{
 			key: 'bookmark_kspace' as const,
+			preview: 'kspace' as const,
 			label: 'K-space',
 			help: 'A hole leading out to known space.',
-			fallback: DEFAULT_FORMAT_KSPACE,
-			example: KSPACE_EXAMPLE,
 		},
 		{
 			key: 'bookmark_return' as const,
+			preview: 'return' as const,
 			label: 'Return',
 			help: 'The hole back the way you came.',
-			fallback: DEFAULT_FORMAT_RETURN,
-			example: RETURN_EXAMPLE,
 		},
 	];
 </script>
@@ -116,6 +75,32 @@
 	</Card.Header>
 	<Card.Content>
 		<Field.FieldGroup>
+			<Field.Field>
+				<Field.FieldLabel>Strategy</Field.FieldLabel>
+				<ToggleGroup.Root
+					type="single"
+					variant="outline"
+					value={buffer.value.strategy}
+					{disabled}
+					onValueChange={(value) => {
+						const picked = oneOf(STRATEGIES, value);
+						if (picked) buffer.value.strategy = picked;
+					}}
+					data-testid="naming-strategy"
+				>
+					<ToggleGroup.Item value="chain">Chain</ToggleGroup.Item>
+					<ToggleGroup.Item value="siblings">Per system</ToggleGroup.Item>
+				</ToggleGroup.Root>
+				<Field.FieldDescription>
+					{#if buffer.value.strategy === 'siblings'}
+						Each system numbers its own holes, so one further out starts again. The map, not the
+						alias, says which way home is, so set a home system.
+					{:else}
+						An alias extends the one it was reached from, so it carries the way home.
+					{/if}
+				</Field.FieldDescription>
+			</Field.Field>
+
 			<Field.Field>
 				<Field.FieldLabel>Alias scheme</Field.FieldLabel>
 				<ToggleGroup.Root
@@ -133,7 +118,9 @@
 					<ToggleGroup.Item value="alphabetical">Alphabetical</ToggleGroup.Item>
 				</ToggleGroup.Root>
 				<Field.FieldDescription>
-					Chains start <span class="font-mono" data-testid="alias-preview">{aliasPreview}</span>
+					Chains start <span class="font-mono" data-testid="alias-preview"
+						>{preview?.aliases.join(', ') ?? ''}</span
+					>
 					{#if scheme === 'alphabetical'}
 						. H, L, N and P are reserved for exits to known space.
 					{/if}
@@ -145,7 +132,7 @@
 				<Input
 					id="ignored-alias"
 					bind:value={buffer.value.ignored_alias}
-					placeholder={DEFAULT_IGNORED_ALIAS}
+					placeholder={preview?.defaults.ignored_alias}
 					{disabled}
 					data-testid="ignored-alias"
 				/>
@@ -158,7 +145,7 @@
 			<Field.FieldSet>
 				<Field.FieldLegend>Bookmark formats</Field.FieldLegend>
 				<Field.FieldDescription>
-					Available: {BOOKMARK_TOKENS.map((t) => `{${t}}`).join(' ')}. Empty ones drop out.
+					Available: {(preview?.tokens ?? []).map((t) => `{${t}}`).join(' ')}. Empty ones drop out.
 				</Field.FieldDescription>
 				<Field.FieldGroup>
 					{#each FORMATS as format (format.key)}
@@ -167,7 +154,7 @@
 							<Input
 								id={format.key}
 								bind:value={buffer.value[format.key]}
-								placeholder={format.fallback}
+								placeholder={preview?.defaults[format.preview]}
 								{disabled}
 								class="font-mono"
 								data-testid={format.key}
@@ -175,7 +162,7 @@
 							<Field.FieldDescription>
 								{format.help}
 								<span class="font-mono text-foreground" data-testid="{format.key}-preview">
-									{renderBookmark(buffer.value[format.key] || format.fallback, format.example)}
+									{preview?.[format.preview] ?? ''}
 								</span>
 							</Field.FieldDescription>
 						</Field.Field>

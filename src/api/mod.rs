@@ -20,6 +20,7 @@ pub mod identity;
 pub mod ignored;
 pub mod killmails;
 pub mod maps;
+pub mod naming;
 pub mod reference;
 pub mod search;
 pub mod signatures;
@@ -272,6 +273,7 @@ Live updates go over WebSockets, which this document cannot describe: see \
         (name = "systems", description = "The nodes on the map: placing and removing solar systems, moving them, and everything written on a node such as its alias, status, notes, occupier, and the home and rally markers. Also the unresolved hole placeholders and clearing a map."),
         (name = "connections", description = "The wormholes between two placed systems: adding and removing them, setting mass and lifetime status, the jump log that feeds the mass estimate, and pruning connections nobody has used in a while."),
         (name = "signatures", description = "Scan results per system: pasting the probe scanner, editing single signatures, and linking a wormhole signature to the connection it turned out to be. The type catalogue for the pickers lives here too."),
+        (name = "naming", description = "How a map names things: the alias a newly reached system gets and the bookmark names for its holes, both decided by the map's naming strategy so every client names alike."),
         (name = "tracking", description = "Jump tracking on behalf of a pilot: telling the map a character moved from one system to another, so the hole gets mapped and linked the way the automatic tracker would."),
         (name = "history", description = "The map's undo history: the event log, stepping back and forward, and jumping to a point in it. Every write elsewhere lands here as an event."),
         (name = "watchlist", description = "Systems a map keeps an eye on for routing: the list, adding and removing entries, and pinning the ones that matter most."),
@@ -328,6 +330,7 @@ fn areas() -> OpenApiRouter<AppState> {
         .merge(reference::routes())
         .merge(eve_scout::routes())
         .merge(maps::routes())
+        .merge(naming::routes())
         .merge(systems::routes())
         .merge(connections::routes())
         .merge(signatures::routes())

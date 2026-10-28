@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select signature, target_class from signature_types where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "signature",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "signature_types",
+            "name": "signature"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "target_class",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "signature_types",
+            "name": "target_class"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "15ee58b6163f49de6bb5476d2fb56cdc13e61c72897e3e8b48fa000435424719"
+}

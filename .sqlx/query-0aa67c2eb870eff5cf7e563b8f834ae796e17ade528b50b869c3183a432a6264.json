@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "update maps\n         set name = $2, layout = $3, allow_layout_override = $4, alias_scheme = $5,\n             ignored_alias = $6, bookmark_wormhole = $7, bookmark_kspace = $8,\n             bookmark_return = $9\n         where id = $1",
+  "query": "update maps\n         set name = $2, layout = $3, allow_layout_override = $4, alias_scheme = $5,\n             ignored_alias = $6, bookmark_wormhole = $7, bookmark_kspace = $8,\n             bookmark_return = $9, naming_strategy = $10\n         where id = $1",
   "describe": {
     "columns": [],
     "parameters": {
@@ -33,10 +33,21 @@
         "Text",
         "Text",
         "Text",
-        "Text"
+        "Text",
+        {
+          "Custom": {
+            "name": "naming_strategy",
+            "kind": {
+              "Enum": [
+                "chain",
+                "siblings"
+              ]
+            }
+          }
+        }
       ]
     },
     "nullable": []
   },
-  "hash": "77349794a74e82b2b97d4987f219e75ce86f3507e479852dd1277d488004d578"
+  "hash": "0aa67c2eb870eff5cf7e563b8f834ae796e17ade528b50b869c3183a432a6264"
 }

@@ -14,8 +14,8 @@ use crate::maps::map::Map;
 use crate::maps::solar_system::MAX_RALLY_POINTS;
 use crate::maps::store;
 use crate::maps::{
-    Actor, AliasScheme, ConnectionType, MapLayout, Role, SignatureGroup, SubjectType, SystemStatus,
-    WormholeSize, signatures,
+    Actor, AliasScheme, ConnectionType, MapLayout, NamingStrategyKind, Role, SignatureGroup,
+    SubjectType, SystemStatus, WormholeSize, signatures,
 };
 
 use super::format::{
@@ -233,7 +233,7 @@ async fn import_settings(
         "update maps
          set name = $2, layout = $3, allow_layout_override = $4, alias_scheme = $5,
              ignored_alias = $6, bookmark_wormhole = $7, bookmark_kspace = $8,
-             bookmark_return = $9
+             bookmark_return = $9, naming_strategy = $10
          where id = $1",
         map_id,
         settings.name.trim(),
@@ -244,6 +244,7 @@ async fn import_settings(
         settings.bookmark_format_wormhole,
         settings.bookmark_format_kspace,
         settings.bookmark_format_return,
+        settings.naming_strategy.unwrap_or_default() as NamingStrategyKind,
     )
     .execute(&mut **tx)
     .await?;

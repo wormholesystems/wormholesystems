@@ -141,6 +141,7 @@ fn map_view_round_trips() {
             image_url: None,
             created_at: ts(),
             naming: wormholesystems::maps::map::MapNaming {
+                strategy: wormholesystems::maps::NamingStrategyKind::Siblings,
                 alias_scheme: AliasScheme::Numeric,
                 ignored_alias: "HOME".into(),
                 bookmark_wormhole: "{alias} {sig} {class}".into(),

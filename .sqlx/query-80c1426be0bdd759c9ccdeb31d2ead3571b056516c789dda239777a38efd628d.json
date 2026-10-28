@@ -1,0 +1,124 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select mss.id, mss.alias, mss.is_home, mss.solar_system_id,\n                  ss.name as \"name?\", ss.security_status as \"security?\", ss.wormhole_class_id,\n                  r.name as \"region?\", d.occupying_group\n           from map_solar_systems mss\n           -- Left joins: a ghost has no system to join to.\n           left join solar_systems ss on ss.id = mss.solar_system_id\n           left join regions r on r.id = ss.region_id\n           left join map_solar_system_details d\n               on d.map_id = mss.map_id and d.solar_system_id = mss.solar_system_id\n           where mss.map_id = $1\n           order by mss.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "map_solar_systems",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "alias",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "map_solar_systems",
+            "name": "alias"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "is_home",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "map_solar_systems",
+            "name": "is_home"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "solar_system_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "map_solar_systems",
+            "name": "solar_system_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "name?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "solar_systems",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "security?",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "solar_systems",
+            "name": "security_status"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "wormhole_class_id",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "solar_systems",
+            "name": "wormhole_class_id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "region?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "regions",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "occupying_group",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "map_solar_system_details",
+            "name": "occupying_group"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "80c1426be0bdd759c9ccdeb31d2ead3571b056516c789dda239777a38efd628d"
+}

@@ -6,6 +6,7 @@
 'subject_type' = "crate::maps::SubjectType"
 'connection_type' = "crate::maps::ConnectionType"
 'alias_scheme' = "crate::maps::AliasScheme"
+'naming_strategy' = "crate::maps::NamingStrategyKind"
 'map_layout' = "crate::maps::MapLayout"
 'route_preference' = "crate::maps::RoutePreference"
 'killmail_scope' = "crate::maps::KillmailScope"

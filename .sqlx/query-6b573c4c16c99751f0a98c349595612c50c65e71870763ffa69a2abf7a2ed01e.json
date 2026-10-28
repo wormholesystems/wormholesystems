@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select s.solar_system_id, s.signature_id, st.signature as \"code?\"\n           from signatures s\n           left join signature_types st on st.id = s.signature_type_id\n           where s.map_id = $1 and s.connection_id = $2\n           order by s.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "solar_system_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "signatures",
+            "name": "solar_system_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "signature_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "signatures",
+            "name": "signature_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "code?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "signature_types",
+            "name": "signature"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "6b573c4c16c99751f0a98c349595612c50c65e71870763ffa69a2abf7a2ed01e"
+}

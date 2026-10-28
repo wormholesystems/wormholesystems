@@ -10,7 +10,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::api::{Ghost, MapSnapshot, PlacedSystem, Signature, SignatureType, WormholeSize};
-use crate::naming::{class_short, dest_includes, is_wormhole_class};
+use crate::classes::dest_includes;
 
 /// Fixed node width on the website's canvas. Height is two grid cells.
 const NODE_W: f64 = 180.0;
@@ -175,235 +175,9 @@ pub(crate) fn size_for_jump_mass(kg: Option<f64>) -> Option<WormholeSize> {
     })
 }
 
-// Aliases. One extends its parent's, so it carries the path: `1`, `11`, `112`, or `A`,
-// `AB`, `ABC`.
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AliasScheme {
-    Numeric,
-    Alphabetical,
-}
-
-impl AliasScheme {
-    pub(crate) fn parse(text: Option<&str>) -> AliasScheme {
-        match text {
-            Some("alphabetical") => AliasScheme::Alphabetical,
-            _ => AliasScheme::Numeric,
-        }
-    }
-}
-
-/// A-Z less H, L, N and P: those are reserved for k-space exits.
-const WORMHOLE_LETTERS: &[u8] = b"ABCDEFGIJKMOQRSTUVWXYZ";
-
-/// The reserved letter for a k-space target, or `None` for a wormhole (or Pochven, which
-/// gets no letter of its own).
-pub(crate) fn kspace_letter(class: Option<i64>, security: f64) -> Option<char> {
-    let id = class.unwrap_or_else(|| crate::naming::class_from_security(security));
-    match class_short(id)? {
-        "H" => Some('H'),
-        "L" => Some('L'),
-        "N" => Some('N'),
-        "P" => Some('P'),
-        _ => None,
-    }
-}
-
-fn is_ignored_alias(alias: &str, ignored: &str) -> bool {
-    let ignored = ignored.trim();
-    !ignored.is_empty() && alias.trim().eq_ignore_ascii_case(ignored)
-}
-
-fn lowest_free(used: &HashSet<u32>) -> u32 {
-    // One of the first `len + 1` is always free.
-    let last = u32::try_from(used.len())
-        .unwrap_or(u32::MAX)
-        .saturating_add(1);
-    (1..=last).find(|i| !used.contains(i)).unwrap_or(1)
-}
-
-/// The next child alias of `parent`, given every alias in use. Gaps are filled before the
-/// sequence grows. `kspace` is the target's reserved letter, which only the alphabetical
-/// scheme uses.
-pub(crate) fn guess_next_alias(
-    parent: Option<&str>,
-    aliases: &[String],
-    scheme: AliasScheme,
-    kspace: Option<char>,
-    ignored: &str,
-) -> String {
-    let mut prefix = parent.unwrap_or("").trim().to_uppercase();
-    // The home system is not a chain node, so its children start a fresh sequence.
-    if is_ignored_alias(&prefix, ignored) {
-        prefix.clear();
-    }
-    let known: Vec<String> = aliases.iter().map(|a| a.trim().to_uppercase()).collect();
-
-    if scheme == AliasScheme::Alphabetical {
-        if let Some(letter) = kspace {
-            let marker = format!("{prefix}{letter}");
-            let used: HashSet<u32> = known
-                .iter()
-                .filter_map(|a| a.strip_prefix(&marker))
-                .filter(|tail| !tail.is_empty() && tail.bytes().all(|b| b.is_ascii_digit()))
-                .filter_map(|tail| tail.parse().ok())
-                .collect();
-            return format!("{marker}{}", lowest_free(&used));
-        }
-        let used: HashSet<usize> = known
-            .iter()
-            .filter(|a| a.len() == prefix.len() + 1 && a.starts_with(&prefix))
-            .filter_map(|a| {
-                WORMHOLE_LETTERS
-                    .iter()
-                    .position(|&l| l == a.as_bytes()[prefix.len()])
-            })
-            .collect();
-        let index = (0..=used.len()).find(|i| !used.contains(i)).unwrap_or(0);
-        // Past 22 direct children the sequence repeats rather than blocking the jump.
-        let letter = char::from(WORMHOLE_LETTERS[index.min(WORMHOLE_LETTERS.len() - 1)]);
-        return format!("{prefix}{letter}");
-    }
-
-    let numeric: Vec<&String> = known
-        .iter()
-        .filter(|a| {
-            a.len() > prefix.len()
-                && a.starts_with(&prefix)
-                && a[prefix.len()..].bytes().all(|b| b.is_ascii_digit())
-        })
-        .collect();
-    // Drop grandchildren: `121` extends `12`, which itself extends the prefix.
-    let used: HashSet<u32> = numeric
-        .iter()
-        .filter(|a| {
-            !numeric
-                .iter()
-                .any(|o| o != *a && o.len() < a.len() && a.starts_with(o.as_str()))
-        })
-        .filter_map(|a| a[prefix.len()..].parse().ok())
-        .collect();
-    format!("{prefix}{}", lowest_free(&used))
-}
-
-/// An alias for a system reached by a jump, or `None` when it should go unnamed: a hop
-/// between two unaliased k-space systems is travel, not chain.
-pub(crate) fn suggest_alias(
-    origin: &PlacedSystem,
-    target_class: Option<i64>,
-    target_security: f64,
-    aliases: &[String],
-    scheme: AliasScheme,
-    ignored: &str,
-) -> Option<String> {
-    let parent = origin.alias.as_deref().filter(|a| !a.trim().is_empty());
-    let target_is_wormhole = is_wormhole_class(target_class);
-    if !target_is_wormhole && !is_wormhole_class(origin.wormhole_class_id) && parent.is_none() {
-        return None;
-    }
-    let kspace = if target_is_wormhole {
-        None
-    } else {
-        kspace_letter(target_class, target_security)
-    };
-    Some(guess_next_alias(parent, aliases, scheme, kspace, ignored))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn aliases(list: &[&str]) -> Vec<String> {
-        list.iter().map(std::string::ToString::to_string).collect()
-    }
-
-    fn numeric(parent: Option<&str>, list: &[&str]) -> String {
-        guess_next_alias(parent, &aliases(list), AliasScheme::Numeric, None, "")
-    }
-
-    fn alpha(parent: &str, list: &[&str], kspace: Option<char>) -> String {
-        guess_next_alias(
-            Some(parent),
-            &aliases(list),
-            AliasScheme::Alphabetical,
-            kspace,
-            "",
-        )
-    }
-
-    #[test]
-    fn numeric_aliases_carry_the_path() {
-        assert_eq!(numeric(None, &[]), "1");
-        assert_eq!(numeric(None, &["1", "2"]), "3");
-        assert_eq!(numeric(Some("1"), &["1"]), "11");
-        assert_eq!(numeric(Some("12"), &["1", "12"]), "121");
-        // A gap left by a deleted system is filled first.
-        assert_eq!(numeric(None, &["1", "3", "4"]), "2");
-        // A grandchild is not a direct child.
-        assert_eq!(numeric(Some("1"), &["1", "11", "111"]), "12");
-        assert_eq!(numeric(Some("a"), &["a", "a1"]), "A2");
-    }
-
-    #[test]
-    fn alphabetical_aliases_skip_the_kspace_letters() {
-        assert_eq!(alpha("A", &["A"], None), "AA");
-        assert_eq!(alpha("A", &["A", "AA", "AB"], None), "AC");
-        assert_eq!(alpha("", &["A", "B", "C", "D", "E", "F", "G"], None), "I");
-        assert_eq!(alpha("A", &["A", "AA", "AAB"], None), "AB");
-        assert_eq!(alpha("A", &["A"], Some('H')), "AH1");
-        assert_eq!(alpha("A", &["A", "AH1"], Some('H')), "AH2");
-        assert_eq!(alpha("A", &["A", "AH1"], Some('L')), "AL1");
-        assert_eq!(alpha("A", &["A", "AH1", "AH1A"], Some('H')), "AH2");
-    }
-
-    #[test]
-    fn home_starts_a_fresh_sequence() {
-        let next = guess_next_alias(
-            Some("HOME"),
-            &aliases(&["HOME", "1"]),
-            AliasScheme::Numeric,
-            None,
-            "HOME",
-        );
-        assert_eq!(next, "2");
-    }
-
-    fn system(alias: Option<&str>, class: Option<i64>) -> PlacedSystem {
-        PlacedSystem {
-            id: 1,
-            solar_system_id: 31000001,
-            name: "J100001".into(),
-            alias: alias.map(Into::into),
-            region: String::new(),
-            wormhole_class_id: class,
-            security_status: -1.0,
-            occupying_group: None,
-            is_home: false,
-            position_x: 0.0,
-            position_y: 0.0,
-            statics: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn suggests_for_chain_and_not_for_travel() {
-        let list = aliases(&["1"]);
-        let s = |origin: &PlacedSystem, class, sec| {
-            suggest_alias(origin, class, sec, &list, AliasScheme::Numeric, "")
-        };
-        // A wormhole reached from anywhere.
-        assert_eq!(
-            s(&system(Some("1"), Some(7)), Some(3), -1.0).as_deref(),
-            Some("11")
-        );
-        // K-space reached from an aliased hole continues the chain.
-        assert_eq!(
-            s(&system(Some("1"), Some(3)), Some(7), 0.9).as_deref(),
-            Some("11")
-        );
-        // K-space to k-space with nothing aliased is travel.
-        assert_eq!(s(&system(None, Some(7)), Some(8), 0.3), None);
-    }
 
     fn sig(id: &str, group: &str, ty: Option<i64>, connection: Option<i64>) -> Signature {
         Signature {
@@ -454,10 +228,10 @@ mod tests {
 
     #[test]
     fn a_k162_group_leads_to_each_of_its_classes() {
-        let c1_to_3 = ty(1, Some(crate::naming::C1_TO_3));
+        let c1_to_3 = ty(1, Some(crate::classes::C1_TO_3));
         assert!(can_lead_to_class(Some(&c1_to_3), Some(2)));
         assert!(!can_lead_to_class(Some(&c1_to_3), Some(4)));
-        let c4_to_5 = ty(2, Some(crate::naming::C4_TO_5));
+        let c4_to_5 = ty(2, Some(crate::classes::C4_TO_5));
         assert!(can_lead_to_class(Some(&c4_to_5), Some(5)));
         assert!(!can_lead_to_class(Some(&c4_to_5), Some(6)));
     }
