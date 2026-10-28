@@ -37,3 +37,7 @@ Home
 ```
 
 Standing in the C6, the bookmark back to its parent reads `*1 …`: it's a return, so it gets the return format even though both are called `1`.
+
+## Naming it your own way
+
+Per-system numbering and the standard convention are both **strategies**, and more can be added. If your group uses a convention neither covers, see "Your own naming convention" under [Contributing](/documentation/contributing-and-self-hosting/contributing).

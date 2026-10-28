@@ -33,6 +33,17 @@ links all follow on their own.
 Writing for somebody flying, rather than somebody reading the source, is the only rule
 worth stating.
 
+## Your own naming convention
+
+If your group names its holes in a way neither
+[the standard convention](/documentation/bookmarking/why-this-system) nor
+[per-system numbering](/documentation/bookmarking/per-system-numbering) covers, it can be
+added as a strategy of its own. A strategy is one Rust file that decides the alias a new
+system gets and the bookmark name for a hole, and every map can then pick it in
+**Map settings → Naming**. The
+[naming README](https://github.com/wormholesystems/wormholesystems/tree/main/src/maps/naming)
+explains how to write one and what it gets to look at.
+
 ## Why bother
 
 - **It helps everyone.** A fix or a page you add is one every group using it gets.
