@@ -20,7 +20,7 @@ use gpui_kit::{
 
 use crate::alias;
 use crate::api::NameBookmark;
-use crate::api::{Client, MapEntry, MapSnapshot, SignatureCatalog, SignatureEdit};
+use crate::api::{Beat, Client, MapEntry, MapSnapshot, SignatureCatalog, SignatureEdit};
 use crate::chatlog::{self, ChatEvent, Watcher};
 use crate::config::Config;
 use crate::focus::{self, Focus};
@@ -38,6 +38,11 @@ use crate::ui::{self, Mood, Notice};
 
 /// How often the map and its signatures are fetched again.
 const REFRESH: Duration = Duration::from_secs(5);
+/// How often the server hears which characters' jumps this app maps. It lets them go after a
+/// few missed beats, and the website maps them again.
+const HEARTBEAT: Duration = Duration::from_secs(30);
+/// How long quitting waits to hand the characters back before giving up on it.
+const RELEASE_ON_QUIT: Duration = Duration::from_secs(2);
 const LOG_LINES: usize = 60;
 /// Only a poll holds the chat log watcher's lock, and it does not panic holding it.
 const WATCHER_LOCK: &str = "a chat log poll panicked";
@@ -128,6 +133,8 @@ pub(crate) struct DesktopApp {
     active: Option<String>,
     last: Option<LastJump>,
     last_bookmark: Option<String>,
+    /// The characters the server was last told this app maps jumps for.
+    held: Option<Held>,
     /// A jump is being looked into or mapped; the next waits its turn.
     thinking: bool,
     /// Jumps that landed while another was being asked about, oldest first.
@@ -221,6 +228,7 @@ impl DesktopApp {
             active: tracked,
             last: None,
             last_bookmark: None,
+            held: None,
             thinking: false,
             queued: VecDeque::new(),
             alias_window: None,
@@ -253,6 +261,7 @@ impl DesktopApp {
         this.tasks.push(Self::focus_loop(cx));
         this.tasks.push(Self::refresh_loop(cx));
         this.tasks.push(Self::update_loop(cx));
+        this.tasks.push(Self::heartbeat_loop(cx));
         if this.config.token.is_empty() {
             this.page = Page::Settings;
         } else {
@@ -279,6 +288,14 @@ impl DesktopApp {
             cx.observe(sigs, |_, _, cx| cx.notify()),
             cx.subscribe(sigs, |this, _, command: &Command, cx| {
                 this.command(command.clone(), cx);
+            }),
+            cx.on_app_quit(|this, _| {
+                let held = this.held.take();
+                async move {
+                    if let Some(held) = held {
+                        held.release_blocking();
+                    }
+                }
             }),
             // Follow the system's light or dark when asked to.
             cx.observe_window_appearance(window, |this, window, cx| {
@@ -398,6 +415,7 @@ impl DesktopApp {
                             this.save();
                         }
                         this.maps = maps;
+                        this.heartbeat(cx);
                         if this.page == Page::Settings && this.config.map_id.is_some() {
                             this.page = Page::Signatures;
                         }
@@ -425,6 +443,7 @@ impl DesktopApp {
         self.save();
         self.clear_map(cx);
         self.drop_jumps(cx);
+        self.heartbeat(cx);
         cx.notify();
     }
 
@@ -445,6 +464,7 @@ impl DesktopApp {
         self.save();
         self.clear_map(cx);
         self.drop_jumps(cx);
+        self.heartbeat(cx);
         self.load_map_settings(cx);
         self.refresh(cx);
         cx.notify();
@@ -519,6 +539,66 @@ impl DesktopApp {
         .detach();
     }
 
+    // Heartbeat.
+
+    /// The characters whose jumps this app maps: the one it follows, or all of them.
+    fn watched(&self) -> Vec<String> {
+        match &self.config.tracked {
+            Some(name) => vec![name.clone()],
+            None => self.characters.iter().map(|(n, _, _)| n.clone()).collect(),
+        }
+    }
+
+    /// Tell the server which characters' jumps this app maps, so the website leaves them to
+    /// it, and hand back the ones it no longer does.
+    fn heartbeat(&mut self, cx: &mut Context<'_, Self>) {
+        let wanted = match (self.client(), self.config.map_id, &self.account) {
+            (Some(client), Some(map_id), Some(_)) => Some(Held {
+                client,
+                map_id,
+                characters: self.watched(),
+            })
+            .filter(|held| !held.characters.is_empty()),
+            _ => None,
+        };
+        let released = self.held.take().and_then(|held| {
+            let gone: Vec<String> = held
+                .characters
+                .iter()
+                .filter(|name| wanted.as_ref().is_none_or(|w| !w.characters.contains(name)))
+                .cloned()
+                .collect();
+            (!gone.is_empty()).then_some(Held {
+                characters: gone,
+                ..held
+            })
+        });
+        let held = wanted.clone();
+        self.held = wanted;
+        cx.background_spawn(async move {
+            // A server from before heartbeats refuses them, and the website then maps
+            // these jumps too, as it always did: nothing worth telling anyone.
+            if let Some(released) = released {
+                released.send(Beat::Release).ok();
+            }
+            if let Some(held) = held {
+                held.send(Beat::Hold).ok();
+            }
+        })
+        .detach();
+    }
+
+    fn heartbeat_loop(cx: &mut Context<'_, Self>) -> Task<()> {
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(HEARTBEAT).await;
+                if this.update(cx, DesktopApp::heartbeat).is_err() {
+                    return;
+                }
+            }
+        })
+    }
+
     fn refresh_loop(cx: &mut Context<'_, Self>) -> Task<()> {
         cx.spawn(async move |this, cx| {
             loop {
@@ -585,7 +665,14 @@ impl DesktopApp {
                     Ok((events, seen)) => {
                         let moved = seen != this.characters;
                         if moved {
+                            let joined = seen
+                                .iter()
+                                .map(|(n, _, _)| n)
+                                .ne(this.characters.iter().map(|(n, _, _)| n));
                             this.characters = seen;
+                            if joined {
+                                this.heartbeat(cx);
+                            }
                             this.fetch_portraits(cx);
                             cx.notify();
                         }
@@ -647,6 +734,7 @@ impl DesktopApp {
         if character.is_some() {
             self.active = character;
         }
+        self.heartbeat(cx);
         self.locate(cx);
         self.refresh(cx);
         cx.notify();
@@ -1723,5 +1811,31 @@ impl DesktopApp {
             self.save();
         }
         cx.notify();
+    }
+}
+
+/// Characters the server was told this app maps jumps for, and the account that told it.
+#[derive(Clone)]
+struct Held {
+    client: Client,
+    map_id: i64,
+    characters: Vec<String>,
+}
+
+impl Held {
+    fn send(&self, beat: Beat) -> anyhow::Result<()> {
+        self.client
+            .desktop_heartbeat(self.map_id, &self.characters, beat)
+    }
+
+    /// Hand them back while quitting, waiting a moment for it but no longer: the server
+    /// lets them go on its own soon enough.
+    fn release_blocking(self) {
+        let (done, wait) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            self.send(Beat::Release).ok();
+            done.send(()).ok();
+        });
+        wait.recv_timeout(RELEASE_ON_QUIT).ok();
     }
 }

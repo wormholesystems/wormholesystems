@@ -462,9 +462,15 @@ pub(super) async fn apply_resolve_ghost_system(
 
     // Whatever survives the merge is what carries the alias; the ghost row may not.
     let surviving = existing.unwrap_or(cmd.map_solar_system_id);
-    let (undo, events) = carry_details(tx, &cmd, surviving).await?;
+    let twin = match existing {
+        Some(target) => twin_of(tx, cmd.map_id, cmd.map_solar_system_id, target).await?,
+        None => None,
+    };
+    let (undo, events) = carry_details(tx, &cmd, surviving, twin.map(|t| t.existing)).await?;
 
-    let effect = if let Some(target) = existing {
+    let effect = if let (Some(target), Some(twin)) = (existing, twin) {
+        fold(tx, cmd.map_id, cmd.map_solar_system_id, target, twin, &name).await
+    } else if let Some(target) = existing {
         merge(tx, cmd.map_id, cmd.map_solar_system_id, target, &name).await
     } else {
         let was = Raised {
@@ -493,11 +499,13 @@ pub(super) async fn apply_resolve_ghost_system(
 }
 
 /// Set the alias and connection status the resolve carries, on whichever node survives the
-/// merge. Returns their undo steps and events.
+/// merge. The status goes on `connection` when the ghost's own edge is about to be folded
+/// into it. Returns their undo steps and events.
 async fn carry_details(
     tx: &mut Tx<'_>,
     cmd: &ResolveGhostSystem,
     surviving: i64,
+    connection: Option<i64>,
 ) -> Result<(Vec<MapCommand>, Vec<MapEvent>)> {
     let mut undo = Vec::new();
     let mut events = Vec::new();
@@ -516,15 +524,20 @@ async fn carry_details(
     }
     if cmd.size.is_some() || cmd.mass_status.is_some() || cmd.time_status.is_some() {
         // Connections keep their id through a merge, so this holds either way.
-        let connection_id = sqlx::query_scalar!(
-            "select id from map_connections
-             where map_id = $1 and (from_system = $2 or to_system = $2)
-             order by id limit 1",
-            cmd.map_id,
-            cmd.map_solar_system_id,
-        )
-        .fetch_optional(&mut **tx)
-        .await?;
+        let connection_id = match connection {
+            Some(id) => Some(id),
+            None => {
+                sqlx::query_scalar!(
+                    "select id from map_connections
+                     where map_id = $1 and (from_system = $2 or to_system = $2)
+                     order by id limit 1",
+                    cmd.map_id,
+                    cmd.map_solar_system_id,
+                )
+                .fetch_optional(&mut **tx)
+                .await?
+            }
+        };
         if let Some(connection_id) = connection_id {
             let effect = super::connection::apply_set_connection_status(
                 tx,
@@ -619,6 +632,130 @@ async fn unresolve(
         map_id: cmd.map_id,
         map_solar_system_id: cmd.map_solar_system_id,
     }))
+}
+
+/// A ghost's edge that the map already has another copy of: the ghost hangs off a system
+/// that is already connected to the one it turned out to be.
+#[derive(Debug, Clone, Copy)]
+struct Twin {
+    /// The ghost's own edge.
+    ghost: i64,
+    /// The edge between the same two systems the map already had.
+    existing: i64,
+}
+
+/// The ghost's edge that merging it into `target` would duplicate. That happens when the
+/// same jump is mapped twice at once, once as a new system and once as this ghost.
+async fn twin_of(tx: &mut Tx<'_>, map_id: i64, ghost_id: i64, target: i64) -> Result<Option<Twin>> {
+    let row = sqlx::query!(
+        r#"select c.id as ghost, d.id as existing
+           from map_connections c
+           join map_connections d
+             on d.map_id = c.map_id and d.id <> c.id
+            and (d.from_system, d.to_system) in (
+                (case when c.from_system = $2 then c.to_system else c.from_system end, $3),
+                ($3, case when c.from_system = $2 then c.to_system else c.from_system end))
+           where c.map_id = $1 and $2 in (c.from_system, c.to_system)
+           order by c.id, d.id
+           limit 1"#,
+        map_id,
+        ghost_id,
+        target,
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(row.map(|r| Twin {
+        ghost: r.ghost,
+        existing: r.existing,
+    }))
+}
+
+/// The ghost is a hole the map already has: its scan moves to the existing edge, its own
+/// edge goes, and whatever else it was connected to is merged as usual.
+async fn fold(
+    tx: &mut Tx<'_>,
+    map_id: i64,
+    ghost_id: i64,
+    target: i64,
+    twin: Twin,
+    name: &str,
+) -> Result<Effect> {
+    let scans = sqlx::query_scalar!(
+        "select id from signatures where map_id = $1 and connection_id = $2 order by id",
+        map_id,
+        twin.ghost,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+
+    let mut undo = Vec::new();
+    let mut events = Vec::new();
+    for signature_pk in scans {
+        let linked = super::signatures::apply_link_signature(
+            tx,
+            super::signatures::LinkSignature {
+                map_id,
+                signature_pk,
+                connection_id: twin.existing,
+            },
+        )
+        .await?;
+        undo.extend(linked.inverse);
+        events.extend(linked.events);
+    }
+
+    // Takes the ghost with it, unless it is held by something else (a pin, another edge).
+    let removed = super::connection::apply_remove_connection(
+        tx,
+        super::connection::RemoveConnection {
+            map_id,
+            connection_id: twin.ghost,
+        },
+    )
+    .await?;
+    undo.extend(removed.inverse);
+    events.extend(removed.events);
+
+    let still_there = sqlx::query_scalar!(
+        "select exists(select 1 from map_solar_systems where id = $1 and map_id = $2)",
+        ghost_id,
+        map_id,
+    )
+    .fetch_one(&mut **tx)
+    .await?
+    .unwrap_or(false);
+    let placed = if still_there {
+        let merged = merge(tx, map_id, ghost_id, target, name).await?;
+        undo.extend(merged.inverse);
+        events.extend(merged.events);
+        merged.output.take::<MapSolarSystem>()?
+    } else {
+        sqlx::query_as!(
+            MapSolarSystem,
+            "select id, map_id, solar_system_id, position_x, position_y, alias, created_at
+             from map_solar_systems where id = $1",
+            target,
+        )
+        .fetch_one(&mut **tx)
+        .await?
+    };
+    events.push(MapEvent::SystemDetailsChanged {
+        map_id,
+        map_solar_system_id: target,
+    });
+
+    // Undone last to first: the edge comes back before its scan is linked to it again.
+    undo.reverse();
+    Ok(Effect::new(
+        "systems.details",
+        format!("scanned that hole as {name}, already connected"),
+        CommandOutput::System(Box::new(placed)),
+    )
+    .undo_with(MapCommand::Sequence(Sequence {
+        map_id,
+        steps: undo,
+    }))
+    .emit_all(events))
 }
 
 /// The ghost turned out to be a system already on the map: hand its edges over and drop

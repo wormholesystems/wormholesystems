@@ -361,6 +361,15 @@ struct ApiErrorBody {
     message: Option<String>,
 }
 
+/// What a heartbeat says about the characters it names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Beat {
+    /// This app maps their jumps.
+    Hold,
+    /// It no longer does.
+    Release,
+}
+
 #[derive(Clone)]
 pub(crate) struct Client {
     base: String,
@@ -556,6 +565,25 @@ impl Client {
             .with_context(|| format!("could not reach {}", self.base))
             .and_then(|r| Self::read("/api/systems/search", r))?;
         Ok(hits.into_iter().find(|h| h.name.eq_ignore_ascii_case(name)))
+    }
+
+    /// Tell the server which characters' jumps this app maps onto `map_id`, so the website
+    /// leaves them to it, or hand them back.
+    pub(crate) fn desktop_heartbeat(
+        &self,
+        map_id: i64,
+        characters: &[String],
+        beat: Beat,
+    ) -> Result<()> {
+        self.post::<serde_json::Value>(
+            "/api/desktop/heartbeat",
+            &serde_json::json!({
+                "map_id": map_id,
+                "characters": characters,
+                "active": beat == Beat::Hold,
+            }),
+        )?;
+        Ok(())
     }
 
     pub(crate) fn track_jump(&self, cmd: &TrackJump) -> Result<()> {

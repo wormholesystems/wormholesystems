@@ -33,6 +33,10 @@
 	).map((k) => AUTOMATION[k]);
 
 	const pilots = $derived(map.characters.mine);
+	// Their jumps are the desktop app's to map, so this tab leaves them alone.
+	const onDesktop = $derived(
+		pilots.filter((p) => p.desktop_map_id === map.mapId).map((p) => p.name),
+	);
 	const tracked = $derived(
 		new Set(
 			trackedPilots(pilots, settings?.tracked_character_ids ?? []).map((p) => p.character_id),
@@ -87,6 +91,14 @@
 					/>
 				</label>
 			{/each}
+			{#if onDesktop.length > 0}
+				<span
+					class="border-t pt-3 text-[11px] text-muted-foreground"
+					data-testid="tracking-desktop"
+				>
+					The desktop app is mapping {onDesktop.join(', ')}, so this tab leaves those jumps to it.
+				</span>
+			{/if}
 			{#if pilots.length > 1}
 				<div class="flex flex-col gap-0.5 border-t pt-3">
 					<span class="text-xs font-medium">Pilots mapping here</span>

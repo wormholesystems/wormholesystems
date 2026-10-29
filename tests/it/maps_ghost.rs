@@ -224,6 +224,65 @@ async fn a_ghost_that_leads_back_into_the_chain_is_merged() {
     );
 }
 
+/// The same jump mapped twice at once: once as a new system with its own edge, once as the
+/// ghost the scan raised. The ghost is that edge, not a second one.
+#[tokio::test]
+async fn a_ghost_for_a_hole_already_mapped_folds_into_it() {
+    let (pool, _db) = common::db::fresh().await;
+    let w = world(&pool).await;
+    let home = place(&pool, w.owner, w.map_id, SYS_A).await;
+    ghosting(&pool, w.owner, w.map_id).await;
+    let sig = scan(&pool, w.owner, w.map_id, SYS_A, "ABC-123").await;
+    let ghost = ghost_for(&pool, w.map_id, sig).await;
+    let far = place(&pool, w.owner, w.map_id, SYS_C).await;
+    let edge = connect(&pool, w.owner, w.map_id, home, far).await;
+
+    let resolved = resolve_ghost_system(
+        &pool,
+        w.owner,
+        ResolveGhostSystem {
+            map_id: w.map_id,
+            map_solar_system_id: ghost,
+            solar_system_id: Some(SYS_C),
+            alias: Some("1".into()),
+            time_status: Some(TimeStatus::Eol),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(resolved.id, far);
+
+    let view = get_map(&pool, w.owner, GetMap { map_id: w.map_id })
+        .await
+        .unwrap();
+    assert_eq!(view.systems.len(), 2, "the ghost is gone");
+    assert_eq!(view.connections.len(), 1, "no second edge");
+    assert_eq!(view.connections[0].id, edge.id);
+    assert_eq!(view.connections[0].time_status, Some(TimeStatus::Eol));
+    let far_view = view.systems.iter().find(|s| s.id() == far).unwrap();
+    assert_eq!(far_view.alias(), Some("1"));
+    let sigs = list_signatures(&pool, w.owner, w.map_id).await.unwrap();
+    assert_eq!(
+        sigs.iter().find(|s| s.id == sig).unwrap().connection_id,
+        Some(edge.id),
+        "the scan is the existing edge's"
+    );
+
+    undo(&pool, w.owner, MapIdBody { map_id: w.map_id })
+        .await
+        .unwrap();
+    let view = get_map(&pool, w.owner, GetMap { map_id: w.map_id })
+        .await
+        .unwrap();
+    assert!(
+        view.systems.iter().any(|s| s.id() == ghost),
+        "the ghost is back"
+    );
+    assert_eq!(view.connections.len(), 2);
+    assert_eq!(ghost_for(&pool, w.map_id, sig).await, ghost);
+}
+
 #[tokio::test]
 async fn a_ghost_cannot_lead_to_the_system_it_hangs_off() {
     let (pool, _db) = common::db::fresh().await;
