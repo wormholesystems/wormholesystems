@@ -81,6 +81,9 @@ pub struct CharacterRef {
     /// The required ESI permissions this character has not granted, so the UI can
     /// say which of them is why something does not work for it.
     pub missing_scopes: Vec<String>,
+    /// The map a desktop app is mapping this character's jumps onto right now. The website
+    /// leaves those jumps to it, so the two do not map the same one twice.
+    pub desktop_map_id: Option<i64>,
 }
 
 /// One ESI permission and whether the acting character has consented to it.
@@ -195,6 +198,7 @@ pub async fn list(pool: &PgPool, actor: Actor) -> Result<Vec<CharacterRef>> {
             online: r.online,
             solar_system_id: r.solar_system_id,
             needs_login: r.needs_login,
+            desktop_map_id: crate::pilots::desktop::mapping_on(r.id),
         })
         .collect())
 }

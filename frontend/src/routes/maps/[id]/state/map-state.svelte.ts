@@ -446,6 +446,7 @@ export class MapState {
 	/** The jump tracker's narrow view of this map, commands included. */
 	trackerHost(): TrackerHost {
 		return {
+			mapId: () => this.mapId,
 			myCharacters: () => this.characters.mine,
 			systems: () => this.systemsView,
 			connections: () => this.connectionsView,

@@ -376,3 +376,68 @@ async fn the_connection_claims_the_transit_recorded_before_it_existed() {
     .unwrap();
     assert_eq!(claimed, 1);
 }
+
+/// A desktop app watching a character takes that character's jumps off the website until
+/// it says it stopped, and only for the account it is signed in to.
+#[tokio::test]
+async fn a_desktop_app_holds_the_characters_it_watches() {
+    use wormholesystems::identity::characters;
+    use wormholesystems::pilots::desktop::{DesktopHeartbeat, heartbeat};
+    use wormholesystems::realtime::{UserEvent, UserHub};
+
+    let (pool, _db) = common::db::fresh().await;
+    let w = world(&pool).await;
+    let name: String = sqlx::query_scalar("select name from characters where id = $1")
+        .bind(w.owner.character_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let users = UserHub::new();
+    let mut heard = users.subscribe(w.owner.user_id);
+    let mine = |list: Vec<characters::CharacterRef>| {
+        list.into_iter()
+            .find(|c| c.character_id == w.owner.character_id)
+            .unwrap()
+            .desktop_map_id
+    };
+    assert_eq!(mine(characters::list(&pool, w.owner).await.unwrap()), None);
+
+    let beat = |active| DesktopHeartbeat {
+        map_id: w.map_id,
+        characters: vec![name.to_uppercase()],
+        active,
+    };
+    heartbeat(&pool, &users, w.owner.user_id, beat(true))
+        .await
+        .unwrap();
+    assert_eq!(
+        mine(characters::list(&pool, w.owner).await.unwrap()),
+        Some(w.map_id)
+    );
+    assert!(matches!(
+        heard.try_recv(),
+        Ok(UserEvent::CharacterStatusChanged { character_id }) if character_id == w.owner.character_id
+    ));
+
+    // Renewing it is not news.
+    heartbeat(&pool, &users, w.owner.user_id, beat(true))
+        .await
+        .unwrap();
+    assert!(heard.try_recv().is_err());
+
+    // Somebody else's account cannot let it go.
+    let other = member_with_role(&pool, w.owner, w.map_id, 1003, 2003, Role::Member).await;
+    heartbeat(&pool, &users, other.user_id, beat(false))
+        .await
+        .unwrap();
+    assert_eq!(
+        mine(characters::list(&pool, w.owner).await.unwrap()),
+        Some(w.map_id)
+    );
+
+    heartbeat(&pool, &users, w.owner.user_id, beat(false))
+        .await
+        .unwrap();
+    assert_eq!(mine(characters::list(&pool, w.owner).await.unwrap()), None);
+    assert!(heard.try_recv().is_ok());
+}

@@ -68,6 +68,7 @@ function statusFromSignature(signature: Signature | null) {
  * eagerly-built request promises.
  */
 export interface TrackerHost {
+	mapId(): number;
 	myCharacters(): CharacterRef[];
 	systems(): MapSystemView[];
 	connections(): MapConnection[];
@@ -127,6 +128,9 @@ export class JumpTracker {
 			const prev = { characterId, systemId: this.seen.get(characterId) ?? null };
 			seen.set(characterId, next.systemId);
 			const jump = detectJump(prev, next);
+			// A desktop app watching this pilot maps their jumps the moment they happen;
+			// mapping them here too only races it.
+			if (pilot.desktop_map_id === this.map.mapId()) continue;
 			if (jump) jumps.push({ ...jump, pilot: pilot.name });
 		}
 		// A pilot dropped from the set starts over when brought back, rather than arriving
@@ -181,7 +185,10 @@ export class JumpTracker {
 			// here: that is the one just flown.
 			if (ghosts.size === 1) {
 				const [ghost] = ghosts.values();
-				this.resolve(ghost, toSystemId);
+				// A hole scanned and named before anyone flew it keeps that name.
+				const named = map.systems().find((s) => s.id === ghost)?.alias;
+				const alias = named ? undefined : await this.suggestAliasFor(origin, toSystemId, existing);
+				this.resolve(ghost, toSystemId, { alias: alias?.trim() || undefined });
 				return;
 			}
 			this.submit({

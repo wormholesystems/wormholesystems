@@ -43,6 +43,7 @@ function fakeHost(over: Partial<TrackerHost> = {}) {
 	const resolveGhost = vi.fn();
 	let myCharacters: CharacterRef[] = [];
 	const host: TrackerHost = {
+		mapId: () => 1,
 		myCharacters: () => myCharacters,
 		systems: () => [system(1, 100)],
 		connections: () => [],
@@ -297,6 +298,70 @@ describe('JumpTracker', () => {
 			solar_system_id: 200,
 		});
 		expect(trackJump).not.toHaveBeenCalled();
+	});
+
+	it('names the lone ghost it resolves', async () => {
+		const { host, resolveGhost, setPilots } = fakeHost({
+			systems: () => [system(1, 100), ghost(2)],
+			connections: () => [conn(10, 1, 2)],
+			settings: () => ({
+				tracking_allowed: true,
+				prompt_for_signature: true,
+				suggest_alias: true,
+				tracked_character_ids: [],
+			}),
+			suggestAlias: () => Promise.resolve('1'),
+		});
+		const tracker = new JumpTracker(host);
+		await fly(tracker, setPilots, 100, 200);
+		expect(resolveGhost.mock.calls[0][0]).toMatchObject({ map_solar_system_id: 2, alias: '1' });
+	});
+
+	it('keeps the name a lone ghost was given before it was flown', async () => {
+		const suggestAlias = vi.fn(() => Promise.resolve('1'));
+		const { host, resolveGhost, setPilots } = fakeHost({
+			systems: () => [system(1, 100), { ...ghost(2), alias: 'B' } as MapSystemView],
+			connections: () => [conn(10, 1, 2)],
+			settings: () => ({
+				tracking_allowed: true,
+				prompt_for_signature: true,
+				suggest_alias: true,
+				tracked_character_ids: [],
+			}),
+			suggestAlias,
+		});
+		const tracker = new JumpTracker(host);
+		await fly(tracker, setPilots, 100, 200);
+		expect(suggestAlias).not.toHaveBeenCalled();
+		expect(resolveGhost.mock.calls[0][0].alias).toBeUndefined();
+	});
+
+	it('leaves a pilot the desktop app is watching to it', async () => {
+		const { host, trackJump, resolveGhost, setPilots } = fakeHost();
+		const tracker = new JumpTracker(host);
+		const pilot = (system: number, desktop: number | null) =>
+			({
+				character_id: 9,
+				is_active: true,
+				online: true,
+				solar_system_id: system,
+				desktop_map_id: desktop,
+			}) as CharacterRef;
+		setPilots([pilot(100, null)]);
+		tracker.observe();
+		setPilots([pilot(200, 1)]);
+		tracker.observe();
+		await settle();
+		expect(trackJump).not.toHaveBeenCalled();
+		expect(resolveGhost).not.toHaveBeenCalled();
+
+		// On another map, it is this one's to map.
+		setPilots([pilot(100, 2)]);
+		tracker.observe();
+		setPilots([pilot(300, 2)]);
+		tracker.observe();
+		await settle();
+		expect(trackJump).toHaveBeenCalledOnce();
 	});
 
 	it('records nothing for an already-mapped, already-explained connection', async () => {

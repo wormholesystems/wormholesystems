@@ -282,7 +282,7 @@ pub(crate) fn submit(
         .and_then(|c| ask.ghost_aliases.get(&c).cloned())
         .or_else(|| ask.alias.clone());
 
-    if let Some(ghost) = ghost {
+    let sent = if let Some(ghost) = ghost {
         client.resolve_ghost(&ResolveGhost {
             map_id: ask.map_id,
             map_solar_system_id: ghost,
@@ -291,7 +291,7 @@ pub(crate) fn submit(
             size,
             mass_status,
             time_status,
-        })?;
+        })
     } else {
         client.track_jump(&TrackJump {
             map_id: ask.map_id,
@@ -304,11 +304,13 @@ pub(crate) fn submit(
             size,
             mass_status,
             time_status,
-        })?;
-    }
+        })
+    };
+    // Refused because someone mapped it a moment earlier (the website, a fleet mate): the
+    // jump is on the map all the same, and its way back is still worth copying.
     let snapshot = client.snapshot(ask.map_id)?;
     let Some(jump) = landed_on(&snapshot, ask.map_id, &ask.origin.name, &ask.target.name) else {
-        return Ok(None);
+        return sent.map(|()| None);
     };
     let bookmark = way_back(client, &snapshot, &jump);
     Ok(Some((jump, bookmark)))
@@ -650,6 +652,80 @@ mod tests {
         assert_eq!(resolved[0].solar_system_id, J100001);
         assert!(map.tracked.borrow().is_empty());
         assert_eq!(jump.connection_id, 60);
+    }
+
+    #[test]
+    fn a_jump_mapped_elsewhere_first_still_lands() {
+        /// Refuses every change, as the server does once someone else mapped the jump.
+        struct Refusing<'a>(&'a FakeMap);
+        impl MapApi for Refusing<'_> {
+            fn snapshot(&self, id: i64) -> anyhow::Result<MapSnapshot> {
+                self.0.snapshot(id)
+            }
+            fn find_system(&self, name: &str) -> anyhow::Result<Option<SystemHit>> {
+                self.0.find_system(name)
+            }
+            fn ignored(&self, id: i64) -> anyhow::Result<Vec<i64>> {
+                self.0.ignored(id)
+            }
+            fn track_jump(&self, _: &TrackJump) -> anyhow::Result<()> {
+                anyhow::bail!("that connection is already on the map")
+            }
+            fn resolve_ghost(&self, _: &ResolveGhost) -> anyhow::Result<()> {
+                anyhow::bail!("that node is already a system")
+            }
+            fn suggest_alias(&self, m: i64, o: i64, t: i64) -> anyhow::Result<Option<String>> {
+                self.0.suggest_alias(m, o, t)
+            }
+            fn connection_bookmarks(&self, m: i64, c: i64) -> anyhow::Result<Vec<EndBookmark>> {
+                self.0.connection_bookmarks(m, c)
+            }
+        }
+
+        let mut snapshot = snapshot();
+        snapshot.ghosts.push(Ghost {
+            id: 7,
+            alias: None,
+            position_x: 0.0,
+            position_y: 0.0,
+        });
+        snapshot.connections.push(connection(60, 10, 7));
+        let map = FakeMap::new(snapshot);
+        let Plan::Mapped(..) = plan(&map, "Amarr", "J100001") else {
+            panic!("not mapped");
+        };
+
+        // The same jump again, as if the website had resolved the ghost first: the server
+        // refuses, the map already shows it.
+        let map = Refusing(&map);
+        let ask = Ask {
+            character: "Pilot".into(),
+            map_id: MAP,
+            origin: system(10, AMARR, "Amarr", 7, "Domain"),
+            target: Target {
+                solar_system_id: J100001,
+                name: "J100001".into(),
+                class: Some(3),
+                security: -1.0,
+            },
+            options: Vec::new(),
+            likely: 0,
+            ghosts: HashMap::from([(60, 7)]),
+            ghost_aliases: HashMap::new(),
+            alias: None,
+            at: (0.0, 0.0),
+        };
+        let landed = submit(
+            &map,
+            &SignatureCatalog::default(),
+            &ask,
+            None,
+            LoneGhost::Take,
+        )
+        .unwrap()
+        .expect("landed");
+        assert_eq!(landed.0.connection_id, 60);
+        assert_eq!(landed.1, "to Amarr");
     }
 
     #[test]
