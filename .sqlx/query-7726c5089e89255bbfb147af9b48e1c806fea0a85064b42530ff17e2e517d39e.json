@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select st.id, st.signature, st.name, st.signature_category_id, st.target_class,\n                  st.extra,\n                  coalesce(array_agg(sa.wormhole_class_id order by sa.wormhole_class_id)\n                           filter (where sa.wormhole_class_id is not null), '{}') as \"spawn_areas!\",\n                  wt.total_mass, wt.max_mass_per_jump, wt.lifetime_hours, wt.signature_strength\n           from signature_types st\n           left join wormhole_types wt on wt.code = st.signature\n           left join signature_type_spawn_areas sa on sa.signature_type_id = st.id\n           group by st.id, wt.code\n           order by st.id",
+  "query": "select st.id, st.signature, st.name, st.signature_category_id, st.target_class,\n                  st.extra,\n                  coalesce(array_agg(sa.wormhole_class_id order by sa.wormhole_class_id)\n                           filter (where sa.wormhole_class_id is not null), '{}') as \"spawn_areas!\",\n                  array(select l.region_id from signature_type_locations l\n                        where l.signature_type_id = st.id and l.region_id is not null\n                        order by l.region_id) as \"regions!: Vec<i64>\",\n                  array(select l.constellation_id from signature_type_locations l\n                        where l.signature_type_id = st.id and l.constellation_id is not null\n                        order by l.constellation_id) as \"constellations!: Vec<i64>\",\n                  array(select l.solar_system_id from signature_type_locations l\n                        where l.signature_type_id = st.id and l.solar_system_id is not null\n                        order by l.solar_system_id) as \"systems!: Vec<i64>\",\n                  wt.total_mass, wt.max_mass_per_jump, wt.lifetime_hours, wt.signature_strength\n           from signature_types st\n           left join wormhole_types wt on wt.code = st.signature\n           left join signature_type_spawn_areas sa on sa.signature_type_id = st.id\n           group by st.id, wt.code\n           order by st.id",
   "describe": {
     "columns": [
       {
@@ -77,6 +77,24 @@
       },
       {
         "ordinal": 7,
+        "name": "regions!: Vec<i64>",
+        "type_info": "Int8Array",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "constellations!: Vec<i64>",
+        "type_info": "Int8Array",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "systems!: Vec<i64>",
+        "type_info": "Int8Array",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
         "name": "total_mass",
         "type_info": "Int8",
         "origin": {
@@ -87,7 +105,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 11,
         "name": "max_mass_per_jump",
         "type_info": "Int8",
         "origin": {
@@ -98,7 +116,7 @@
         }
       },
       {
-        "ordinal": 9,
+        "ordinal": 12,
         "name": "lifetime_hours",
         "type_info": "Float8",
         "origin": {
@@ -109,7 +127,7 @@
         }
       },
       {
-        "ordinal": 10,
+        "ordinal": 13,
         "name": "signature_strength",
         "type_info": "Float8",
         "origin": {
@@ -131,11 +149,14 @@
       true,
       true,
       null,
+      null,
+      null,
+      null,
       true,
       true,
       true,
       true
     ]
   },
-  "hash": "33a781d0c3a8e2fa6afb3f306521add0bb86834fa35886eb6939eedfbdc89222"
+  "hash": "7726c5089e89255bbfb147af9b48e1c806fea0a85064b42530ff17e2e517d39e"
 }

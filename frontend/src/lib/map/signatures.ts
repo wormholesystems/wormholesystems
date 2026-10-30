@@ -36,7 +36,7 @@ let scanNames: Promise<ScanNames> | null = null;
 
 /**
  * The localized names [`parseScan`] reads. Fetched on the first paste rather than shipped
- * with every page that shows a signature row: the table is most of a hundred kilobytes, and
+ * with every page that shows a signature row: the table is a few hundred kilobytes, and
  * only a paste ever looks at it.
  */
 export function loadScanNames(): Promise<ScanNames> {
@@ -142,24 +142,47 @@ export function loadCatalog(client: QueryClient): Promise<SignatureCatalog> {
 	return client.ensureQueryData(q.signatureCatalog());
 }
 
+/** Where a type is being picked for: the system's class, and where it sits in known space. */
+export interface SpawnLocation {
+	systemId: number;
+	classId: number | null;
+	regionId: number;
+	constellationId: number;
+}
+
+const KNOWN_SPACE: ReadonlySet<number> = new Set([7, 8, 9]);
+
 /**
- * Types of one category that can spawn in a system of the given class, sorted by destination
- * class (wormholes) with sites left in catalog order.
+ * Whether a type can spawn at a location; a system of unknown class rules nothing out.
+ * Pirate sites are tied to their faction's regions,
+ * and a few to one constellation, but only in known space: the same sites in C1-C3 spawn
+ * whatever the region.
+ */
+export function spawnsAt(t: SignatureTypeInfo, at: SpawnLocation): boolean {
+	if (t.systems.includes(at.systemId)) return true;
+	if (at.classId === null) return true;
+	if (!t.spawn_areas.includes(at.classId)) return false;
+	if (!KNOWN_SPACE.has(at.classId)) return true;
+	if (t.regions.length === 0 && t.constellations.length === 0) return true;
+	return t.regions.includes(at.regionId) || t.constellations.includes(at.constellationId);
+}
+
+/**
+ * Types of one category that can spawn at the given location (all of them for `null`),
+ * sorted by destination class (wormholes) with sites left in catalog order. Types named for
+ * the system replace the rest of their category there: the Sansha-occupied wormholes get
+ * Sansha sites instead of Sleeper ones, and nothing else changes.
  */
 export function typesForCategory(
 	catalog: SignatureCatalog,
 	categoryId: number,
-	systemClassId: number | null,
+	at: SpawnLocation | null,
 ): SignatureTypeInfo[] {
-	return catalog.types
-		.filter(
-			(t) =>
-				t.signature_category_id === categoryId &&
-				(systemClassId === null || t.spawn_areas.includes(systemClassId)),
-		)
-		.sort(
-			(a, b) => destClassMeta(a.target_class).sortWeight - destClassMeta(b.target_class).sortWeight,
-		);
+	const ofCategory = catalog.types.filter((t) => t.signature_category_id === categoryId);
+	const named = at === null ? [] : ofCategory.filter((t) => t.systems.includes(at.systemId));
+	return (named.length > 0 ? named : ofCategory.filter((t) => at === null || spawnsAt(t, at))).sort(
+		(a, b) => destClassMeta(a.target_class).sortWeight - destClassMeta(b.target_class).sortWeight,
+	);
 }
 
 // One index per catalog object, built on first lookup. The catalog is cached for the whole

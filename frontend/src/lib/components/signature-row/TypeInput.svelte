@@ -1,8 +1,8 @@
 <script lang="ts">
 	// Catalog types of the row's category that can spawn in this system, narrowed to the
 	// linked target's class once linked. An unmatched raw scanner name shows muted. When a
-	// search finds nothing here it looks at the other classes, since the spawn data lags
-	// the game.
+	// search finds nothing here it looks at the rest of the catalog, since the spawn data
+	// lags the game.
 	import type { MappedSystem } from '$lib/map/system';
 	import type { Signature } from '$lib/api/types/Signature';
 	import type { SignatureCatalog } from '$lib/api/types/SignatureCatalog';
@@ -39,7 +39,12 @@
 
 	const available = $derived.by(() => {
 		if (categoryId === null) return [];
-		const all = typesForCategory(catalog, categoryId, system.wormhole_class_id);
+		const all = typesForCategory(catalog, categoryId, {
+			systemId: system.solar_system_id,
+			classId: system.wormhole_class_id,
+			regionId: system.region_id,
+			constellationId: system.constellation_id,
+		});
 		return linkedClass === null
 			? all
 			: all.filter((t) => t.target_class !== null && destIncludes(t.target_class, linkedClass));

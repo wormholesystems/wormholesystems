@@ -379,6 +379,8 @@ mod tests {
             name: name.into(),
             alias: None,
             region: region.into(),
+            region_id: 0,
+            constellation_id: 0,
             wormhole_class_id: Some(class),
             security_status: if class == 7 { 0.9 } else { -1.0 },
             position_x: 0.0,

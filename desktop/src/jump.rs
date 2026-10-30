@@ -199,6 +199,9 @@ mod tests {
             max_jump_mass: None,
             extra: None,
             spawn_areas: Vec::new(),
+            regions: Vec::new(),
+            constellations: Vec::new(),
+            systems: Vec::new(),
         }
     }
 

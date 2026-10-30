@@ -108,8 +108,9 @@ file keeps the legacy spelling so files still move between the two apps.
 
 Factional Warfare sites are anomalies that the scanner labels
 `Factional Warfare Site - Combat Site`, with a type name (`Amarr Scout BSC-1`,
-`Minmatar Large NVY-1`, ...) that rotates with the war. The catalogue carries the
-category only; the type stays the pasted raw name.
+`Minmatar Large NVY-1`, ...). The catalogue has the complexes, battlefields and insurgency
+sites from the SDE dungeons, limited to their war zone's constellations; a name it doesn't
+know stays the pasted raw name.
 
 | Column | Type | Notes |
 |--------|------|-------|
@@ -141,6 +142,28 @@ category only; the type stays the pasted raw name.
 | `wormhole_class_id` | int | a spawn class |
 
 Primary key `(signature_type_id, wormhole_class_id)`.
+
+### `signature_type_locations`
+
+*From `signatures.json` `regions[]`, `constellations[]` and `systems[]`.* Where a type
+spawns beyond its spawn areas.
+
+Region and constellation rows limit a type in known space: pirate sites to their rat
+faction's regions (per DOTLAN's region list), nebulae, chemical labs and a few one-offs to a
+region or constellation. A type without them spawns wherever its spawn areas allow. Wormhole
+space ignores them, since C1–C3 get the pirate data and relic sites of every faction.
+
+System rows name a system outright and replace rather than narrow: where any type of a
+category names a system, only those types of that category spawn there. The Sansha sites
+name the three shattered C4s Sansha's Nation holds (J005299, J011195, J010556), which get
+them instead of Sleeper sites.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `signature_type_id` | fk signature_types | |
+| `region_id` | fk regions, null | |
+| `constellation_id` | fk constellations, null | |
+| `solar_system_id` | fk solar_systems, null | exactly one of the three is set |
 
 ## `jove_observatories`
 

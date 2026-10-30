@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseScan as parseWith, typeById } from './signatures';
+import { parseScan as parseWith, spawnsAt, typeById, typesForCategory } from './signatures';
 import type { SignatureCatalog } from '$lib/api/types/SignatureCatalog';
 import type { SignatureTypeInfo } from '$lib/api/types/SignatureTypeInfo';
 import translations from '$lib/signatures/translations.json';
@@ -19,6 +19,9 @@ function type(
 		target_class: null,
 		extra: null,
 		spawn_areas: [],
+		regions: [],
+		constellations: [],
+		systems: [],
 		total_mass: null,
 		max_jump_mass: null,
 		lifetime_hours: null,
@@ -203,6 +206,9 @@ describe('parseScan', () => {
 				type({ id: 17, name: 'Core Garrison', signature_category_id: 4 }),
 				type({ id: 35, name: 'Unstable Wormhole', signature_category_id: 4 }),
 				type({ id: 136, name: 'Barren Perimeter Reservoir', signature_category_id: 5 }),
+				// Both "Gewöhnliche Erzvorkommen im Grenzgebiet" in German.
+				type({ id: 147, name: 'Unexceptional Frontier Deposit', signature_category_id: 6 }),
+				type({ id: 148, name: 'Average Frontier Deposit', signature_category_id: 6 }),
 			],
 		};
 
@@ -312,5 +318,102 @@ describe('typeById', () => {
 		};
 		typeById(catalog, 20);
 		expect(typeById(other, 20)?.name).toBe('Renamed');
+	});
+});
+
+describe('spawnsAt', () => {
+	// Kimotoro in The Forge (Guristas), and XPJ1-6 and OK-FEM in Delve (Blood Raiders).
+	const forge = { systemId: 30000142, regionId: 10000002, constellationId: 20000020 };
+	const delve = { systemId: 30004759, regionId: 10000060, constellationId: 20000688 };
+	const okFem = { systemId: 30004778, regionId: 10000060, constellationId: 20000702 };
+
+	const guristasDen = type({
+		id: 1,
+		name: 'Guristas Den',
+		signature_category_id: 4,
+		spawn_areas: [7, 8],
+		regions: [forge.regionId],
+	});
+	const centralGuristas = type({
+		id: 2,
+		name: 'Central Guristas Survey Site',
+		signature_category_id: 2,
+		spawn_areas: [1, 2, 3, 9],
+		regions: [forge.regionId],
+	});
+	const hazyNebula = type({
+		id: 3,
+		name: 'Hazy Nebula',
+		signature_category_id: 5,
+		spawn_areas: [9],
+		constellations: [okFem.constellationId],
+	});
+
+	it('keeps a pirate site to its faction regions in known space', () => {
+		expect(spawnsAt(guristasDen, { classId: 8, ...forge })).toBe(true);
+		expect(spawnsAt(guristasDen, { classId: 8, ...delve })).toBe(false);
+	});
+
+	it('ignores regions in wormhole space', () => {
+		expect(spawnsAt(centralGuristas, { classId: 2, ...delve })).toBe(true);
+		expect(spawnsAt(centralGuristas, { classId: 9, ...delve })).toBe(false);
+	});
+
+	it('matches a constellation without its region listed', () => {
+		expect(spawnsAt(hazyNebula, { classId: 9, ...okFem })).toBe(true);
+		expect(spawnsAt(hazyNebula, { classId: 9, ...delve })).toBe(false);
+	});
+
+	it('still checks the system class first', () => {
+		expect(spawnsAt(guristasDen, { classId: 9, ...forge })).toBe(false);
+	});
+
+	it('rules nothing out for a system of unknown class', () => {
+		expect(spawnsAt(hazyNebula, { classId: null, ...forge })).toBe(true);
+	});
+});
+
+describe('typesForCategory', () => {
+	// J005299, a C4 Sansha's Nation holds, and J011824, an ordinary shattered C4.
+	const sanshaHole = {
+		systemId: 31002552,
+		classId: 4,
+		regionId: 11000016,
+		constellationId: 21000328,
+	};
+	const plainC4 = { systemId: 31002540, classId: 4, regionId: 11000016, constellationId: 21000328 };
+
+	const sites: SignatureCatalog = {
+		categories: [
+			{ id: 4, name: 'Combat Site', code: 'combat' },
+			{ id: 6, name: 'Ore Site', code: 'ore' },
+		],
+		types: [
+			type({ id: 1, name: 'Frontier Barracks', signature_category_id: 4, spawn_areas: [4] }),
+			type({
+				id: 2,
+				name: 'Sansha Haven',
+				signature_category_id: 4,
+				spawn_areas: [9],
+				regions: [10000012],
+				systems: [sanshaHole.systemId],
+			}),
+			type({ id: 3, name: 'Average Frontier Deposit', signature_category_id: 6, spawn_areas: [4] }),
+		],
+	};
+	const names = (category: number, at: Parameters<typeof typesForCategory>[2]) =>
+		typesForCategory(sites, category, at).map((t) => t.name);
+
+	it('swaps the Sleeper sites for the ones named for the system', () => {
+		expect(names(4, sanshaHole)).toEqual(['Sansha Haven']);
+		expect(names(4, plainC4)).toEqual(['Frontier Barracks']);
+	});
+
+	it('leaves the categories that name nothing alone', () => {
+		expect(names(6, sanshaHole)).toEqual(['Average Frontier Deposit']);
+	});
+
+	it('lists everything without a location', () => {
+		expect(names(4, null)).toEqual(['Frontier Barracks', 'Sansha Haven']);
 	});
 });

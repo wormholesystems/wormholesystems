@@ -11329,14 +11329,24 @@
       },
       "SignatureTypeInfo": {
         "type": "object",
-        "description": "A cosmic-signature type from the seeded catalog. `signature` is the wormhole code\n(wormhole types only); `target_class` its destination class; `spawn_areas` the system\nclasses this type can appear in.",
+        "description": "A cosmic-signature type from the seeded catalog. `signature` is the wormhole code\n(wormhole types only); `target_class` its destination class; `spawn_areas` the system\nclasses this type can appear in. `regions` and `constellations` narrow that in known\nspace: when either is non-empty, a known-space system must be in one of them. `systems`\nnames systems the type spawns in outright; where any type of a category names a system,\nonly those types of that category spawn there.",
         "required": [
           "id",
           "name",
           "signature_category_id",
-          "spawn_areas"
+          "spawn_areas",
+          "regions",
+          "constellations",
+          "systems"
         ],
         "properties": {
+          "constellations": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
           "extra": {
             "type": [
               "string",
@@ -11364,6 +11374,13 @@
           "name": {
             "type": "string"
           },
+          "regions": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
           "signature": {
             "type": [
               "string",
@@ -11386,6 +11403,13 @@
             "items": {
               "type": "integer",
               "format": "int32"
+            }
+          },
+          "systems": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
             }
           },
           "target_class": {

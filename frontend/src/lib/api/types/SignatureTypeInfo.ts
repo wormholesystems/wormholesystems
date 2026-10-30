@@ -3,9 +3,12 @@
 /**
  * A cosmic-signature type from the seeded catalog. `signature` is the wormhole code
  * (wormhole types only); `target_class` its destination class; `spawn_areas` the system
- * classes this type can appear in.
+ * classes this type can appear in. `regions` and `constellations` narrow that in known
+ * space: when either is non-empty, a known-space system must be in one of them. `systems`
+ * names systems the type spawns in outright; where any type of a category names a system,
+ * only those types of that category spawn there.
  */
-export type SignatureTypeInfo = { id: number, signature: string | null, name: string, signature_category_id: number, target_class: number | null, extra: string | null, spawn_areas: Array<number>, 
+export type SignatureTypeInfo = { id: number, signature: string | null, name: string, signature_category_id: number, target_class: number | null, extra: string | null, spawn_areas: Array<number>, regions: Array<number>, constellations: Array<number>, systems: Array<number>, 
 /**
  * Wormhole physics (joined from `wormhole_types` by code; wormhole types only).
  */

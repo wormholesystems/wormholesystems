@@ -11,6 +11,9 @@ const type = (over: Partial<SignatureTypeInfo>): SignatureTypeInfo =>
 		target_class: null,
 		extra: null,
 		spawn_areas: [],
+		regions: [],
+		constellations: [],
+		systems: [],
 		...over,
 	}) as SignatureTypeInfo;
 
