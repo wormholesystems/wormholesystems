@@ -28,7 +28,10 @@ pub struct SignatureCategoryInfo {
 
 /// A cosmic-signature type from the seeded catalog. `signature` is the wormhole code
 /// (wormhole types only); `target_class` its destination class; `spawn_areas` the system
-/// classes this type can appear in.
+/// classes this type can appear in. `regions` and `constellations` narrow that in known
+/// space: when either is non-empty, a known-space system must be in one of them. `systems`
+/// names systems the type spawns in outright; where any type of a category names a system,
+/// only those types of that category spawn there.
 #[derive(Clone, Debug, Serialize, Deserialize, ts_rs::TS, utoipa::ToSchema)]
 #[ts(export)]
 pub struct SignatureTypeInfo {
@@ -39,6 +42,9 @@ pub struct SignatureTypeInfo {
     pub target_class: Option<i32>,
     pub extra: Option<String>,
     pub spawn_areas: Vec<i32>,
+    pub regions: Vec<i64>,
+    pub constellations: Vec<i64>,
+    pub systems: Vec<i64>,
     /// Wormhole physics (joined from `wormhole_types` by code; wormhole types only).
     pub total_mass: Option<i64>,
     pub max_jump_mass: Option<i64>,
@@ -262,6 +268,15 @@ async fn build_signature_catalog(db: &sqlx::PgPool) -> Result<SignatureCatalog, 
                   st.extra,
                   coalesce(array_agg(sa.wormhole_class_id order by sa.wormhole_class_id)
                            filter (where sa.wormhole_class_id is not null), '{}') as "spawn_areas!",
+                  array(select l.region_id from signature_type_locations l
+                        where l.signature_type_id = st.id and l.region_id is not null
+                        order by l.region_id) as "regions!: Vec<i64>",
+                  array(select l.constellation_id from signature_type_locations l
+                        where l.signature_type_id = st.id and l.constellation_id is not null
+                        order by l.constellation_id) as "constellations!: Vec<i64>",
+                  array(select l.solar_system_id from signature_type_locations l
+                        where l.signature_type_id = st.id and l.solar_system_id is not null
+                        order by l.solar_system_id) as "systems!: Vec<i64>",
                   wt.total_mass, wt.max_mass_per_jump, wt.lifetime_hours, wt.signature_strength
            from signature_types st
            left join wormhole_types wt on wt.code = st.signature
@@ -280,6 +295,9 @@ async fn build_signature_catalog(db: &sqlx::PgPool) -> Result<SignatureCatalog, 
         target_class: r.target_class,
         extra: r.extra,
         spawn_areas: r.spawn_areas,
+        regions: r.regions,
+        constellations: r.constellations,
+        systems: r.systems,
         total_mass: r.total_mass,
         max_jump_mass: r.max_mass_per_jump,
         lifetime_hours: r.lifetime_hours,

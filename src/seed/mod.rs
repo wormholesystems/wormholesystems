@@ -96,7 +96,7 @@ pub async fn ensure_seeded(pool: &PgPool) -> Result<bool, BoxError> {
 
 /// Bump when the seed logic or bundled static data changes in a way that requires
 /// re-seeding an already-loaded SDE build.
-const SEED_REVISION: i32 = 9;
+const SEED_REVISION: i32 = 10;
 
 /// The SDE build currently unpacked in `data/sde` (from its `_sde.jsonl` marker).
 #[derive(Deserialize)]
@@ -713,6 +713,20 @@ struct SigType {
     extra: Option<String>,
     #[serde(default)]
     spawn_areas: Vec<i32>,
+    /// Where the type spawns beyond its spawn areas (see `signature_type_locations`).
+    #[serde(default)]
+    regions: Vec<i64>,
+    #[serde(default)]
+    constellations: Vec<i64>,
+    #[serde(default)]
+    systems: Vec<i64>,
+}
+
+/// One `signature_type_locations` row's place: exactly one of the three columns.
+enum Location {
+    Region(i64),
+    Constellation(i64),
+    System(i64),
 }
 
 fn read_json<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, BoxError> {
@@ -859,10 +873,18 @@ async fn seed_signatures(tx: &mut sqlx::PgConnection) -> Result<(), BoxError> {
     // signature catalogue
     let sig: SignaturesFile = read_json("data/static/signatures.json")?;
     let mut spawn_areas = Vec::new();
+    let mut locations = Vec::new();
     for t in &sig.types {
         for area in &t.spawn_areas {
             spawn_areas.push((t.id, *area));
         }
+        locations.extend(t.regions.iter().map(|&r| (t.id, Location::Region(r))));
+        locations.extend(
+            t.constellations
+                .iter()
+                .map(|&c| (t.id, Location::Constellation(c))),
+        );
+        locations.extend(t.systems.iter().map(|&s| (t.id, Location::System(s))));
     }
     let n = bulk!(
         tx,
@@ -892,6 +914,28 @@ async fn seed_signatures(tx: &mut sqlx::PgConnection) -> Result<(), BoxError> {
         |b, s| { b.push_bind(s.0).push_bind(s.1) }
     );
     tracing::info!("signature_type_spawn_areas: {n}");
+    // Nothing references these rows, so the file replaces them outright: a type whose
+    // regions change in the file loses the old ones here too.
+    sqlx::query!("delete from signature_type_locations")
+        .execute(&mut *tx)
+        .await?;
+    let n = bulk!(
+        tx,
+        "signature_type_locations (signature_type_id, region_id, constellation_id, solar_system_id)",
+        &locations,
+        |b, (id, at)| {
+            let (region, constellation, system) = match *at {
+                Location::Region(r) => (Some(r), None, None),
+                Location::Constellation(c) => (None, Some(c), None),
+                Location::System(s) => (None, None, Some(s)),
+            };
+            b.push_bind(*id)
+                .push_bind(region)
+                .push_bind(constellation)
+                .push_bind(system)
+        }
+    );
+    tracing::info!("signature_type_locations: {n}");
     Ok(())
 }
 

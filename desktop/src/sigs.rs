@@ -327,7 +327,7 @@ impl Sigs {
     }
 
     /// The types a signature can be, grouped the way the website's picker lists them:
-    /// the category's types that spawn in this class, narrowed to the far end's class once
+    /// the category's types that spawn in this system, narrowed to the far end's class once
     /// linked. For wormholes, statics (when wanted), then K162, then the rest.
     pub(crate) fn type_sections(
         &self,
@@ -336,14 +336,25 @@ impl Sigs {
         let Some(&(_, category, _)) = theme::CATEGORIES.iter().find(|c| c.0 == sig.group) else {
             return Vec::new();
         };
-        let class = self.system().and_then(|s| s.wormhole_class_id);
+        let system = self.system();
         let linked = self.linked_class(sig);
+        // Types named for this system replace the rest of their category here.
+        let named = system.is_some_and(|s| {
+            self.catalog
+                .types
+                .iter()
+                .any(|t| t.signature_category_id == category && t.names(s))
+        });
         let mut types: Vec<&SignatureType> = self
             .catalog
             .types
             .iter()
             .filter(|t| t.signature_category_id == category)
-            .filter(|t| class.is_none_or(|c| t.spawn_areas.contains(&c)))
+            .filter(|t| match system {
+                Some(s) if named => t.names(s),
+                Some(s) => t.spawns_in(s),
+                None => true,
+            })
             .filter(|t| {
                 linked.is_none()
                     || t.target_class

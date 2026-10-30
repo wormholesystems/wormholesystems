@@ -102,6 +102,10 @@ pub(crate) struct PlacedSystem {
     pub name: String,
     pub alias: Option<String>,
     pub region: String,
+    #[serde(default)]
+    pub region_id: i64,
+    #[serde(default)]
+    pub constellation_id: i64,
     pub wormhole_class_id: Option<i64>,
     pub security_status: f64,
     #[serde(default)]
@@ -200,6 +204,42 @@ pub(crate) struct SignatureType {
     /// The system classes it can appear in.
     #[serde(default)]
     pub spawn_areas: Vec<i64>,
+    /// Where in known space it is limited to; both empty means anywhere.
+    #[serde(default)]
+    pub regions: Vec<i64>,
+    #[serde(default)]
+    pub constellations: Vec<i64>,
+    /// Systems it is named for, where it replaces the rest of its category.
+    #[serde(default)]
+    pub systems: Vec<i64>,
+}
+
+impl SignatureType {
+    /// Whether it can spawn in this system. Regions only count in known space: pirate
+    /// sites in C1-C3 spawn whatever the region. An unknown class rules nothing out.
+    pub(crate) fn spawns_in(&self, system: &PlacedSystem) -> bool {
+        if self.names(system) {
+            return true;
+        }
+        let Some(class) = system.wormhole_class_id else {
+            return true;
+        };
+        if !self.spawn_areas.contains(&class) {
+            return false;
+        }
+        if !(7..=9).contains(&class) || (self.regions.is_empty() && self.constellations.is_empty())
+        {
+            return true;
+        }
+        self.regions.contains(&system.region_id)
+            || self.constellations.contains(&system.constellation_id)
+    }
+
+    /// Whether it is named for this system, as the Sansha sites are for the shattered
+    /// wormholes Sansha's Nation holds.
+    pub(crate) fn names(&self, system: &PlacedSystem) -> bool {
+        self.systems.contains(&system.solar_system_id)
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -707,5 +747,68 @@ impl Client {
             &body,
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn system(class: i64, region_id: i64, constellation_id: i64) -> PlacedSystem {
+        PlacedSystem {
+            id: 1,
+            solar_system_id: 1,
+            name: "Somewhere".into(),
+            alias: None,
+            region: String::new(),
+            region_id,
+            constellation_id,
+            wormhole_class_id: Some(class),
+            security_status: 0.0,
+            position_x: 0.0,
+            position_y: 0.0,
+            statics: Vec::new(),
+        }
+    }
+
+    fn site(spawn_areas: Vec<i64>, regions: Vec<i64>, constellations: Vec<i64>) -> SignatureType {
+        SignatureType {
+            id: 1,
+            signature: None,
+            name: "Central Guristas Survey Site".into(),
+            signature_category_id: 2,
+            target_class: None,
+            max_jump_mass: None,
+            extra: None,
+            spawn_areas,
+            regions,
+            constellations,
+            systems: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn regions_only_narrow_known_space() {
+        let guristas = site(vec![2, 9], vec![10], Vec::new());
+        assert!(guristas.spawns_in(&system(9, 10, 100)));
+        assert!(!guristas.spawns_in(&system(9, 11, 110)));
+        assert!(guristas.spawns_in(&system(2, 11, 110)));
+        assert!(!guristas.spawns_in(&system(8, 10, 100)));
+    }
+
+    #[test]
+    fn a_named_system_needs_no_class_or_region() {
+        let haven = SignatureType {
+            systems: vec![1],
+            ..site(vec![9], vec![10], Vec::new())
+        };
+        assert!(haven.spawns_in(&system(4, 11, 110)));
+    }
+
+    #[test]
+    fn a_constellation_matches_on_its_own() {
+        let nebula = site(vec![9], Vec::new(), vec![100]);
+        assert!(nebula.spawns_in(&system(9, 10, 100)));
+        assert!(!nebula.spawns_in(&system(9, 10, 101)));
     }
 }
