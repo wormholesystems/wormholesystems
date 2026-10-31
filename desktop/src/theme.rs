@@ -227,6 +227,7 @@ pub(crate) fn dest_class_meta(class: Option<i64>) -> (&'static str, Hsla) {
         Some(25) => ("P", oklch(0.505, 0.213, 27.518)),
         Some(crate::classes::C1_TO_3) => ("C1-3", oklch(0.623, 0.214, 259.815)),
         Some(crate::classes::C4_TO_5) => ("C4-5", oklch(0.606, 0.25, 292.717)),
+        Some(crate::classes::K_SPACE) => ("K", oklch(0.637, 0.237, 25.331)),
         _ => ("?", unknown_class()),
     }
 }
@@ -280,8 +281,8 @@ pub(crate) const CATEGORIES: [(&str, i64, &str); 8] = [
     ("faction_warfare", 8, "Factional Warfare Site"),
 ];
 
-/// Where a destination class sorts in a type picker: k-space, then Pochven, then the
-/// wormhole classes, each K162 group after its last class, like the website.
+/// Where a destination class sorts in a type picker: k-space (any of it after null), then
+/// Pochven, then the wormhole classes, each K162 group after its last class, like the website.
 pub(crate) fn dest_sort_weight(class: Option<i64>) -> i64 {
     match class {
         Some(7) => 0,
@@ -291,6 +292,7 @@ pub(crate) fn dest_sort_weight(class: Option<i64>) -> i64 {
         Some(c @ (1..=6 | 12..=23)) => 10 + 2 * c,
         Some(crate::classes::C1_TO_3) => 10 + 2 * 3 + 1,
         Some(crate::classes::C4_TO_5) => 10 + 2 * 5 + 1,
+        Some(crate::classes::K_SPACE) => 2,
         _ => 199,
     }
 }

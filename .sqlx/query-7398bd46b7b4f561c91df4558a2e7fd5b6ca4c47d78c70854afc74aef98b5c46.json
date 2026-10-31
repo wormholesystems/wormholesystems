@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from signature_type_spawn_areas",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "7398bd46b7b4f561c91df4558a2e7fd5b6ca4c47d78c70854afc74aef98b5c46"
+}

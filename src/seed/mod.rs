@@ -96,7 +96,7 @@ pub async fn ensure_seeded(pool: &PgPool) -> Result<bool, BoxError> {
 
 /// Bump when the seed logic or bundled static data changes in a way that requires
 /// re-seeding an already-loaded SDE build.
-const SEED_REVISION: i32 = 10;
+const SEED_REVISION: i32 = 11;
 
 /// The SDE build currently unpacked in `data/sde` (from its `_sde.jsonl` marker).
 #[derive(Deserialize)]
@@ -893,9 +893,14 @@ async fn seed_signatures(tx: &mut sqlx::PgConnection) -> Result<(), BoxError> {
         |b, c| { b.push_bind(c.id).push_bind(&c.name).push_bind(&c.code) }
     );
     tracing::info!("signature_categories: {n}");
+    // Upserted by id: stored signatures reference the ids, and the file's fields win, so
+    // a corrected destination or name reaches databases seeded before the fix.
     let n = bulk!(
         tx,
         "signature_types (id, signature, name, signature_category_id, target_class, extra)",
+        "on conflict (id) do update set signature = excluded.signature, name = excluded.name, \
+         signature_category_id = excluded.signature_category_id, \
+         target_class = excluded.target_class, extra = excluded.extra",
         &sig.types,
         |b, t| {
             b.push_bind(t.id)
@@ -907,6 +912,9 @@ async fn seed_signatures(tx: &mut sqlx::PgConnection) -> Result<(), BoxError> {
         }
     );
     tracing::info!("signature_types: {n}");
+    sqlx::query!("delete from signature_type_spawn_areas")
+        .execute(&mut *tx)
+        .await?;
     let n = bulk!(
         tx,
         "signature_type_spawn_areas (signature_type_id, wormhole_class_id)",
@@ -914,8 +922,7 @@ async fn seed_signatures(tx: &mut sqlx::PgConnection) -> Result<(), BoxError> {
         |b, s| { b.push_bind(s.0).push_bind(s.1) }
     );
     tracing::info!("signature_type_spawn_areas: {n}");
-    // Nothing references these rows, so the file replaces them outright: a type whose
-    // regions change in the file loses the old ones here too.
+    // Like the spawn areas, nothing references these rows, so the file replaces them.
     sqlx::query!("delete from signature_type_locations")
         .execute(&mut *tx)
         .await?;
@@ -961,4 +968,72 @@ async fn seed_jove_observatories(
     );
     tracing::info!("jove_observatories: {n}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const THERA: i32 = 12;
+    const POCHVEN: i32 = 25;
+
+    fn wormholes() -> Vec<SigType> {
+        let sig: SignaturesFile = read_json("data/static/signatures.json").expect("catalog");
+        sig.types
+            .into_iter()
+            .filter(|t| t.signature_category_id == 1)
+            .collect()
+    }
+
+    fn leads(types: &[SigType], from: i32, to: i32) -> Vec<&str> {
+        types
+            .iter()
+            .filter(|t| t.spawn_areas.contains(&from) && t.target_class == Some(to))
+            .map(|t| t.name.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn holes_into_pochven_can_be_picked_from_where_they_spawn() {
+        let types = wormholes();
+        // A shattered C3 such as J001398, lowsec such as Turnur, and nullsec.
+        for from in [3, 8, 9] {
+            assert!(
+                leads(&types, from, POCHVEN).len() >= 2,
+                "class {from}: {:?}",
+                leads(&types, from, POCHVEN)
+            );
+        }
+    }
+
+    #[test]
+    fn pochven_has_its_way_out() {
+        let types = wormholes();
+        // C729 on both sides: into Pochven from k-space, and every Pochven system's static out.
+        let c729: Vec<(Option<i32>, &[i32])> = types
+            .iter()
+            .filter(|t| t.signature.as_deref() == Some("C729"))
+            .map(|t| (t.target_class, t.spawn_areas.as_slice()))
+            .collect();
+        assert!(c729.contains(&(Some(POCHVEN), [7, 8, 9].as_slice())));
+        assert!(c729.contains(&(Some(103), [POCHVEN].as_slice())));
+        assert_ne!(leads(&types, POCHVEN, 4), Vec::<&str>::new());
+        assert_ne!(leads(&types, POCHVEN, 9), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn every_class_a_k162_reaches_has_one() {
+        let types = wormholes();
+        let k162: Vec<&SigType> = types
+            .iter()
+            .filter(|t| t.signature.as_deref() == Some("K162"))
+            .collect();
+        for class in [1, 2, 3, 4, 5, 6, 7, 8, 9, THERA, POCHVEN] {
+            assert!(
+                k162.iter().any(|t| t.spawn_areas.contains(&class)),
+                "no K162 spawns in {class}"
+            );
+        }
+        assert!(k162.iter().any(|t| t.target_class == Some(POCHVEN)));
+    }
 }

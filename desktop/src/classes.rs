@@ -1,16 +1,18 @@
 //! Solar system classes as the website numbers them: 1 to 6 and 12 to 18 wormhole space,
-//! 7, 8 and 9 high, low and null, 25 Pochven, and the K162 destination groups.
+//! 7, 8 and 9 high, low and null, 25 Pochven, and the destination groups.
 
 /// Destination class of a K162 that leads to a C1, C2 or C3. Not a real class: the game
 /// only tells you that much.
 pub(crate) const C1_TO_3: i64 = 101;
 /// Destination class of a K162 that leads to a C4 or C5.
 pub(crate) const C4_TO_5: i64 = 102;
+/// Destination class of Pochven's C729, which leads to high, low or null.
+pub(crate) const K_SPACE: i64 = 103;
 
 /// Whether a destination class (possibly a group like `C1-3`) covers a system's class.
 pub(crate) fn dest_includes(dest: i64, class: Option<i64>) -> bool {
     match (dest, class) {
-        (C1_TO_3, Some(1..=3)) | (C4_TO_5, Some(4..=5)) => true,
+        (C1_TO_3, Some(1..=3)) | (C4_TO_5, Some(4..=5)) | (K_SPACE, Some(7..=9)) => true,
         _ => class == Some(dest),
     }
 }

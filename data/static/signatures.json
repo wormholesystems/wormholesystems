@@ -2226,6 +2226,7 @@
                 7,
                 8,
                 9,
+                12,
                 13,
                 14,
                 15,
@@ -2253,6 +2254,7 @@
                 7,
                 8,
                 9,
+                12,
                 13,
                 14,
                 15,
@@ -2280,6 +2282,7 @@
                 7,
                 8,
                 9,
+                12,
                 13,
                 14,
                 15,
@@ -2307,6 +2310,7 @@
                 7,
                 8,
                 9,
+                12,
                 13,
                 14,
                 15,
@@ -2334,6 +2338,7 @@
                 7,
                 8,
                 9,
+                12,
                 13,
                 14,
                 15,
@@ -2361,6 +2366,7 @@
                 7,
                 8,
                 9,
+                12,
                 13,
                 14,
                 15,
@@ -2388,6 +2394,7 @@
                 7,
                 8,
                 9,
+                12,
                 13,
                 14,
                 15,
@@ -2415,6 +2422,7 @@
                 7,
                 8,
                 9,
+                12,
                 13,
                 14,
                 15,
@@ -2442,6 +2450,7 @@
                 7,
                 8,
                 9,
+                12,
                 13,
                 14,
                 15,
@@ -2469,6 +2478,7 @@
                 7,
                 8,
                 9,
+                12,
                 13,
                 14,
                 15,
@@ -3766,7 +3776,7 @@
             "signature": "C729",
             "signature_category_id": 1,
             "category_name": "Wormhole",
-            "target_class": 9,
+            "target_class": 25,
             "extra": "Pochven",
             "spawn_areas": [
                 7,
@@ -3780,10 +3790,20 @@
             "signature": "U372",
             "signature_category_id": 1,
             "category_name": "Wormhole",
-            "target_class": 9,
+            "target_class": 25,
             "extra": "Pochven",
             "spawn_areas": [
                 9
+            ],
+            "regions": [
+                10000013,
+                10000018,
+                10000021,
+                10000027,
+                10000034,
+                10000040,
+                10000053,
+                10000066
             ]
         },
         {
@@ -3792,7 +3812,7 @@
             "signature": "F216",
             "signature_category_id": 1,
             "category_name": "Wormhole",
-            "target_class": 9,
+            "target_class": 25,
             "extra": "Pochven",
             "spawn_areas": [
                 2,
@@ -4026,6 +4046,7 @@
                 7,
                 8,
                 9,
+                12,
                 13,
                 14,
                 15,
@@ -4053,6 +4074,7 @@
                 7,
                 8,
                 9,
+                12,
                 13,
                 14,
                 15,
@@ -20584,6 +20606,82 @@
                 10000028,
                 10000030,
                 10000042
+            ]
+        },
+        {
+            "id": 1003,
+            "name": "K162 - P",
+            "signature": "K162",
+            "signature_category_id": 1,
+            "category_name": "Wormhole",
+            "target_class": 25,
+            "extra": null,
+            "spawn_areas": [
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                25
+            ]
+        },
+        {
+            "id": 1004,
+            "name": "I078 - P Pochven",
+            "signature": "I078",
+            "signature_category_id": 1,
+            "category_name": "Wormhole",
+            "target_class": 25,
+            "extra": "Pochven",
+            "spawn_areas": [
+                25
+            ]
+        },
+        {
+            "id": 1005,
+            "name": "L687 - P Pochven",
+            "signature": "L687",
+            "signature_category_id": 1,
+            "category_name": "Wormhole",
+            "target_class": 25,
+            "extra": "Pochven",
+            "spawn_areas": [
+                25
+            ]
+        },
+        {
+            "id": 1006,
+            "name": "O546 - P Pochven",
+            "signature": "O546",
+            "signature_category_id": 1,
+            "category_name": "Wormhole",
+            "target_class": 25,
+            "extra": "Pochven",
+            "spawn_areas": [
+                25
+            ]
+        },
+        {
+            "id": 1007,
+            "name": "C729 - K Pochven",
+            "signature": "C729",
+            "signature_category_id": 1,
+            "category_name": "Wormhole",
+            "target_class": 103,
+            "extra": "Pochven",
+            "spawn_areas": [
+                25
             ]
         }
     ]

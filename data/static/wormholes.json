@@ -1338,6 +1338,125 @@
       "sibling_groups": null,
       "typeID": 87827,
       "signature_strength": null
+    },
+    "C729": {
+      "mass_regen": 0,
+      "dest": 103,
+      "src": [
+        7,
+        8,
+        9,
+        25
+      ],
+      "static": true,
+      "max_mass_per_jump": 410000000,
+      "lifetime": 12,
+      "total_mass": 1000000000,
+      "sibling_groups": null,
+      "typeID": 56026,
+      "signature_strength": null
+    },
+    "U372": {
+      "mass_regen": 0,
+      "dest": 25,
+      "src": [
+        9
+      ],
+      "static": false,
+      "max_mass_per_jump": 375000000,
+      "lifetime": 12,
+      "total_mass": 1000000000,
+      "sibling_groups": null,
+      "typeID": 56544,
+      "signature_strength": null
+    },
+    "F216": {
+      "mass_regen": 0,
+      "dest": 25,
+      "src": [
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "static": false,
+      "max_mass_per_jump": 375000000,
+      "lifetime": 12,
+      "total_mass": 1000000000,
+      "sibling_groups": null,
+      "typeID": 56542,
+      "signature_strength": null
+    },
+    "X450": {
+      "mass_regen": 0,
+      "dest": 9,
+      "src": [
+        25
+      ],
+      "static": false,
+      "max_mass_per_jump": 375000000,
+      "lifetime": 12,
+      "total_mass": 1000000000,
+      "sibling_groups": null,
+      "typeID": 56540,
+      "signature_strength": null
+    },
+    "R081": {
+      "mass_regen": 0,
+      "dest": 4,
+      "src": [
+        25
+      ],
+      "static": false,
+      "max_mass_per_jump": 375000000,
+      "lifetime": 12,
+      "total_mass": 1000000000,
+      "sibling_groups": null,
+      "typeID": 56541,
+      "signature_strength": null
+    },
+    "I078": {
+      "mass_regen": 0,
+      "dest": 25,
+      "src": [
+        25
+      ],
+      "static": false,
+      "max_mass_per_jump": 62000000,
+      "lifetime": 12,
+      "total_mass": 750000000,
+      "sibling_groups": null,
+      "typeID": 92287,
+      "signature_strength": null
+    },
+    "L687": {
+      "mass_regen": 0,
+      "dest": 25,
+      "src": [
+        25
+      ],
+      "static": false,
+      "max_mass_per_jump": 62000000,
+      "lifetime": 12,
+      "total_mass": 750000000,
+      "sibling_groups": null,
+      "typeID": 92288,
+      "signature_strength": null
+    },
+    "O546": {
+      "mass_regen": 0,
+      "dest": 25,
+      "src": [
+        25
+      ],
+      "static": false,
+      "max_mass_per_jump": 62000000,
+      "lifetime": 12,
+      "total_mass": 750000000,
+      "sibling_groups": null,
+      "typeID": 92289,
+      "signature_strength": null
     }
   }
 }
