@@ -185,7 +185,7 @@
 		{/if}
 	</div>
 
-	<div class="w-20 shrink-0">
+	<div class="w-26 shrink-0">
 		<Select.Root
 			type="single"
 			value={sig.group === 'unknown' ? '' : sig.group}

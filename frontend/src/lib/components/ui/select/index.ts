@@ -7,10 +7,11 @@ import Portal from "./select-portal.svelte";
 import ScrollDownButton from "./select-scroll-down-button.svelte";
 import ScrollUpButton from "./select-scroll-up-button.svelte";
 import Separator from "./select-separator.svelte";
-import Trigger from "./select-trigger.svelte";
+import Trigger, { triggerClasses } from "./select-trigger.svelte";
 import Root from "./select.svelte";
 
 export {
+	triggerClasses,
 	Root,
 	Group,
 	Label,

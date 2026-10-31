@@ -10,6 +10,8 @@
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import * as Command from '$lib/components/ui/command';
 	import * as Popover from '$lib/components/ui/popover';
+	import { triggerClasses } from '$lib/components/ui/select';
+	import { cn } from '$lib/utils';
 	import { matchesTypeQuery } from '$lib/signatures/type-search';
 	import { destClassMeta, destIncludes } from '$lib/map/classes';
 	import { categoryMeta, typeById, typesForCategory } from '$lib/map/signatures';
@@ -119,21 +121,23 @@
 {/snippet}
 
 <Popover.Root bind:open>
+	<!-- Dressed as a select so the row's three pickers look alike. -->
 	<Popover.Trigger
 		disabled={!canWrite || categoryId === null}
-		class="flex w-full min-w-0 items-center justify-between gap-1 overflow-hidden rounded-md border
-			border-input bg-transparent px-2 text-xs shadow-xs disabled:cursor-not-allowed
-			disabled:opacity-50 {compact ? 'h-5 py-0' : 'h-6'}"
+		data-size="default"
+		class={cn(triggerClasses, 'w-full min-w-0 overflow-hidden text-xs', compact && '!h-5 !py-0')}
 		data-testid="sig-type"
 	>
-		{#if selected}
-			{@render typeLabel(selected)}
-		{:else if sig.name}
-			<span class="truncate text-muted-foreground">{sig.name}</span>
-		{:else}
-			<span class="text-muted-foreground">Type</span>
-		{/if}
-		<ChevronDownIcon class="size-3 shrink-0 opacity-50" />
+		<span class="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+			{#if selected}
+				{@render typeLabel(selected)}
+			{:else if sig.name}
+				<span class="truncate text-muted-foreground">{sig.name}</span>
+			{:else}
+				<span class="text-muted-foreground">Type</span>
+			{/if}
+		</span>
+		<ChevronDownIcon class="pointer-events-none size-3.5 shrink-0 text-muted-foreground" />
 	</Popover.Trigger>
 	<Popover.Content class="w-64 p-0" align="start">
 		<!-- The list filters itself, so the Command primitive must not filter it again on
