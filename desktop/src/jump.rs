@@ -237,6 +237,9 @@ mod tests {
         let c4_to_5 = ty(2, Some(crate::classes::C4_TO_5));
         assert!(can_lead_to_class(Some(&c4_to_5), Some(5)));
         assert!(!can_lead_to_class(Some(&c4_to_5), Some(6)));
+        let c729 = ty(3, Some(crate::classes::K_SPACE));
+        assert!(can_lead_to_class(Some(&c729), Some(8)));
+        assert!(!can_lead_to_class(Some(&c729), Some(25)));
     }
 
     const GRID: Grid = Grid {

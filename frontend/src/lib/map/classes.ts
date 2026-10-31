@@ -35,10 +35,13 @@ function meta(
 export const C1_TO_3 = 101;
 /** Destination class of a K162 that leads to a C4 or C5. */
 export const C4_TO_5 = 102;
+/** Destination class of Pochven's C729, which leads to high, low or null. */
+export const K_SPACE = 103;
 
 const CLASS_GROUPS = new Map<number, number[]>([
 	[C1_TO_3, [1, 2, 3]],
 	[C4_TO_5, [4, 5]],
+	[K_SPACE, [7, 8, 9]],
 ]);
 
 /** Whether a destination class (possibly a group like `C1-3`) covers a system's class. */
@@ -72,9 +75,10 @@ const CLASSES = new Map<number, ClassMeta>([
 	[22, meta('C22', 'unknown', 32, 'other')],
 	[23, meta('C23', 'unknown', 33, 'other')],
 	[25, meta('P', 'pochven', 3, 'other')],
-	// Not real classes: a K162 only tells you it leads to C1/2/3 or C4/5.
+	// Not real classes: a K162 only tells you it leads to C1/2/3 or C4/5, a C729 to k-space.
 	[C1_TO_3, meta('C1-3', 'c2', 13.5, 'wormhole')],
 	[C4_TO_5, meta('C4-5', 'c4', 15.5, 'wormhole')],
+	[K_SPACE, meta('K', 'ns', 2.5, 'known')],
 ]);
 
 const UNKNOWN: ClassMeta = meta('?', 'unknown', 99, 'other');

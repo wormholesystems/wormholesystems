@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { canBeConnection, canLeadToClass, groupSignatures } from './compatibility';
-import { C1_TO_3, C4_TO_5 } from '$lib/map/classes';
+import { C1_TO_3, C4_TO_5, K_SPACE } from '$lib/map/classes';
 import type { Signature } from '$lib/api/types/Signature';
 import type { SignatureGroup } from '$lib/api/types/SignatureGroup';
 import type { SignatureTypeInfo } from '$lib/api/types/SignatureTypeInfo';
@@ -99,6 +99,13 @@ describe('canLeadToClass', () => {
 		const toC4To5 = type(5, C4_TO_5);
 		expect(canLeadToClass(toC4To5, 5)).toBe(true);
 		expect(canLeadToClass(toC4To5, 6)).toBe(false);
+	});
+
+	it('lets a C729 lead anywhere in known space', () => {
+		const c729 = type(6, K_SPACE);
+		expect(canLeadToClass(c729, 7)).toBe(true);
+		expect(canLeadToClass(c729, 9)).toBe(true);
+		expect(canLeadToClass(c729, 25)).toBe(false);
 	});
 
 	it('lets anything lead somewhere unknown', () => {
