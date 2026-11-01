@@ -3,7 +3,7 @@
 
 use crate::common;
 
-use common::map::{connect, place};
+use common::map::{connect, ghost_for, ghosting, place, scan};
 use common::{SYS_A, SYS_B, SYS_C, world};
 use sqlx::PgPool;
 use wormholesystems::maps::MapSystemView;
@@ -21,61 +21,8 @@ use wormholesystems::maps::solar_system::{
     RemoveSystem, RemoveSystems, SetAlias, SetPinned, remove_system, remove_systems, set_alias,
     set_pinned,
 };
-use wormholesystems::maps::{
-    Actor, MapError, MassStatus, SignatureGroup, TimeStatus, WormholeSize,
-};
+use wormholesystems::maps::{MapError, MassStatus, SignatureGroup, TimeStatus, WormholeSize};
 use wormholesystems::realtime::MapEvent;
-
-async fn scan(pool: &PgPool, actor: Actor, map_id: i64, system: i64, sig: &str) -> i64 {
-    add_signature(
-        pool,
-        actor,
-        AddSignature {
-            map_id,
-            solar_system_id: system,
-            signature_id: sig.into(),
-            group: SignatureGroup::Wormhole,
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("add_signature")
-    .id
-}
-
-/// A map that draws the far side of every hole it knows about. Ghosts are never placed by
-/// hand here, any more than they are in the app: the map raises them, and these tests say
-/// so by scanning.
-async fn ghosting(pool: &PgPool, actor: Actor, map_id: i64) {
-    update_map(
-        pool,
-        actor,
-        UpdateMap {
-            map_id,
-            ghost_unlinked_wormholes: Some(true),
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("update_map");
-}
-
-/// The node the map raised for this scan.
-async fn ghost_for(pool: &PgPool, map_id: i64, sig: i64) -> i64 {
-    sqlx::query_scalar::<_, i64>(
-        "select case when f.solar_system_id is null then f.id else t.id end
-         from signatures s
-         join map_connections c on c.id = s.connection_id
-         join map_solar_systems f on f.id = c.from_system
-         join map_solar_systems t on t.id = c.to_system
-         where s.id = $1 and s.map_id = $2",
-    )
-    .bind(sig)
-    .bind(map_id)
-    .fetch_one(pool)
-    .await
-    .expect("query signatures")
-}
 
 /// Where a node sits, for the assertions that care that it stayed there.
 async fn position(pool: &PgPool, id: i64) -> (f64, f64) {
@@ -141,6 +88,7 @@ async fn resolving_names_the_ghost_and_keeps_where_it_sits() {
     let sig = scan(&pool, w.owner, w.map_id, SYS_A, "ABC-123").await;
     let ghost = ghost_for(&pool, w.map_id, sig).await;
     let where_it_sat = position(&pool, ghost).await;
+    let mut events = wormholesystems::realtime::hub().subscribe(w.map_id);
 
     let resolved = resolve_ghost_system(
         &pool,
@@ -164,6 +112,11 @@ async fn resolving_names_the_ghost_and_keeps_where_it_sits() {
         "and where it was drawn"
     );
     assert_eq!(resolved.alias.as_deref(), Some("1a"));
+    // Until now it was nowhere; alerts measure from the moment it lands.
+    assert!(seen(&mut events).contains(&MapEvent::SystemAdded {
+        map_id: w.map_id,
+        map_solar_system_id: ghost,
+    }));
 
     // Only ghosts are resolvable; a real system is not re-pointed at another one.
     assert!(matches!(

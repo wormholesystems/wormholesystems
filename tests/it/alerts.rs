@@ -16,6 +16,8 @@ use sqlx::PgPool;
 use wormholesystems::alerts::filters::{Candidates, Match, Mode, Rule, Side, Subject};
 use wormholesystems::alerts::{self, AlertKind, Runtime};
 use wormholesystems::maps::Actor;
+use wormholesystems::maps::ghost::{ResolveGhostSystem, resolve_ghost_system};
+use wormholesystems::maps::history::{MapIdBody, undo};
 use wormholesystems::maps::solar_system::{RemoveSystem, remove_system};
 
 async fn make_webhook(pool: &PgPool, map_id: i64, url: &str) -> i64 {
@@ -501,6 +503,61 @@ async fn an_unrelated_placement_does_not_alert_again() {
     );
 }
 
+/// A pasted hole lands as a ghost, which is nowhere yet. It reaches the chain when someone
+/// says what it is, and named again as something else after an undo, it lands again.
+#[tokio::test]
+async fn a_ghost_alerts_once_it_is_named() {
+    let (pool, _db) = common::db::fresh().await;
+    let w = world(&pool).await;
+    seed_gates(&pool).await;
+    let inbox = Inbox::start().await;
+    proximity_alert(&pool, w.map_id, &inbox, SYS_D, None, 1).await;
+    let runtime = Runtime::load(&pool, None, PUBLIC_URL.into()).await.unwrap();
+
+    common::map::place(&pool, w.owner, w.map_id, SYS_A).await;
+    common::map::ghosting(&pool, w.owner, w.map_id).await;
+    let sig = common::map::scan(&pool, w.owner, w.map_id, SYS_A, "ABC-123").await;
+    let ghost = common::map::ghost_for(&pool, w.map_id, sig).await;
+    let evaluate = async || {
+        for out in runtime.placed(&pool, w.map_id, ghost).await {
+            runtime.send(&pool, out).await;
+        }
+    };
+    evaluate().await;
+    assert!(inbox.descriptions().is_empty(), "a ghost is nowhere yet");
+
+    let name = async |system: i64| {
+        resolve_ghost_system(
+            &pool,
+            w.owner,
+            ResolveGhostSystem {
+                map_id: w.map_id,
+                map_solar_system_id: ghost,
+                solar_system_id: Some(system),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    };
+    name(SYS_C).await;
+    evaluate().await;
+    assert_eq!(inbox.descriptions().len(), 1, "C is one gate from D");
+
+    undo(&pool, w.owner, MapIdBody { map_id: w.map_id })
+        .await
+        .unwrap();
+    name(SYS_E).await;
+    evaluate().await;
+    let sent = inbox.descriptions();
+    assert_eq!(sent.len(), 2, "E is one gate from D too");
+    assert!(
+        sent[1].contains("**Tunttaras** was just added"),
+        "{}",
+        sent[1]
+    );
+}
+
 /// The message links back to the map by its full address: Discord refuses an embed whose
 /// link is relative, and with it the whole message.
 #[tokio::test]
@@ -535,7 +592,7 @@ async fn a_refused_message_is_recorded_and_not_sent_again() {
 
     let placed = place(&pool, &runtime, w.owner, w.map_id, SYS_B).await;
     assert_eq!(inbox.descriptions().len(), 1, "a refusal is not retried");
-    assert!(!alerts::claim(&pool, alert, &format!("placement:{placed}")).await);
+    assert!(!alerts::claim(&pool, alert, &format!("placement:{placed}:{SYS_B}")).await);
 
     let failed = sqlx::query_scalar!(
         "select detail from map_alert_events where map_alert_id = $1 and kind = 'failed'",

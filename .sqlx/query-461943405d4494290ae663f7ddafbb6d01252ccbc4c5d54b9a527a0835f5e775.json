@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select distinct e.map_id, (step #>> '{}')::bigint as \"id!\"\n               from map_events e,\n                    jsonb_path_query(e.inverse,\n                        'strict $.** ? (@.command == \"resolve_ghost_system\"\n                                        && @.solar_system_id == null).map_solar_system_id') step\n               where e.map_id = any($1) and e.kind = 'systems.details'\n                 and e.created_at > now() - make_interval(secs => $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "map_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "map_events",
+            "name": "map_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "461943405d4494290ae663f7ddafbb6d01252ccbc4c5d54b9a527a0835f5e775"
+}

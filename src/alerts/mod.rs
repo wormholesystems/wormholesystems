@@ -297,6 +297,22 @@ impl Runtime {
         .fetch_all(pool)
         .await
         .unwrap_or_default();
+        // A ghost named in the gap was created before it, so only the journal knows when
+        // it landed: its entry's undo is the resolve that clears the system again.
+        let named = sqlx::query!(
+            r#"select distinct e.map_id, (step #>> '{}')::bigint as "id!"
+               from map_events e,
+                    jsonb_path_query(e.inverse,
+                        'strict $.** ? (@.command == "resolve_ghost_system"
+                                        && @.solar_system_id == null).map_solar_system_id') step
+               where e.map_id = any($1) and e.kind = 'systems.details'
+                 and e.created_at > now() - make_interval(secs => $2)"#,
+            &maps,
+            secs,
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
         let connected = sqlx::query!(
             "select map_id, id from map_connections
              where map_id = any($1) and type = 'wormhole'
@@ -310,6 +326,9 @@ impl Runtime {
         .unwrap_or_default();
         let mut out = Vec::new();
         for row in placed {
+            out.extend(self.placed(pool, row.map_id, row.id).await);
+        }
+        for row in named {
             out.extend(self.placed(pool, row.map_id, row.id).await);
         }
         for row in connected {

@@ -62,9 +62,9 @@ async fn old_deliveries_go_once_their_occasion_cannot_return() {
 
     delivery(&pool, alert_id, "killmail:1", 40).await;
     delivery(&pool, alert_id, "killmail:2", 5).await;
-    delivery(&pool, alert_id, &format!("placement:{placed}"), 40).await;
-    delivery(&pool, alert_id, "placement:999999999", 40).await;
-    delivery(&pool, alert_id, "placement:999999998", 5).await;
+    delivery(&pool, alert_id, &format!("placement:{placed}:{SYS_A}"), 40).await;
+    delivery(&pool, alert_id, "placement:999999999:1", 40).await;
+    delivery(&pool, alert_id, "placement:999999998:1", 5).await;
     delivery(&pool, alert_id, "something:else", 400).await;
 
     let swept = sweep(&pool).await.unwrap();
@@ -73,8 +73,8 @@ async fn old_deliveries_go_once_their_occasion_cannot_return() {
         keys(&pool).await,
         [
             "killmail:2".to_string(),
-            format!("placement:{placed}"),
-            "placement:999999998".to_string(),
+            format!("placement:{placed}:{SYS_A}"),
+            "placement:999999998:1".to_string(),
             "something:else".to_string(),
         ]
     );

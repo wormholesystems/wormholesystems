@@ -76,7 +76,7 @@ pub async fn evaluate(pool: &PgPool, alerts: &[Alert], map_solar_system_id: i64)
         if distance > ship.max_range_ly(jdc) {
             continue;
         }
-        let key = format!("placement:{map_solar_system_id}");
+        let key = super::place::placement_key(map_solar_system_id, placed_id);
         if !super::claim(pool, alert.id, &key).await {
             continue;
         }

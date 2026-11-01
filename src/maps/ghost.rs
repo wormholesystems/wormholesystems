@@ -492,6 +492,12 @@ pub(super) async fn apply_resolve_ghost_system(
         .emit(MapEvent::SystemDetailsChanged {
             map_id: cmd.map_id,
             map_solar_system_id: cmd.map_solar_system_id,
+        })
+        // The system arrives on the map now, not when its ghost was drawn: alerts
+        // measure from here.
+        .emit(MapEvent::SystemAdded {
+            map_id: cmd.map_id,
+            map_solar_system_id: cmd.map_solar_system_id,
         }))
     }?;
 
