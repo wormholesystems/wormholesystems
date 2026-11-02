@@ -7,10 +7,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
 use crate::maps::access::require_role;
-use crate::maps::command::{CommandOutput, Effect, EventActor, MapCommand, Tx, run, run_as};
+use crate::maps::command::{CommandOutput, Effect, EventActor, Tx, run, run_as};
 use crate::maps::error::{MapError, Result};
-use crate::maps::store::connections;
-use crate::maps::store::placements;
+use crate::maps::removal::{Orphans, Removal};
 use crate::maps::{Actor, ConnectionType, Role, TimeStatus};
 use crate::realtime::MapEvent;
 
@@ -68,7 +67,7 @@ pub async fn list_stale_connections(
     Ok(rows)
 }
 
-/// Sweep every stale connection, plus any placement they leave behind. Member+. Recorded
+/// Sweep every stale connection, with its signatures and any placement it leaves behind. Member+. Recorded
 /// as one entry, so a sweep that went too far is a single undo.
 pub async fn clean_stale_connections(
     pool: &PgPool,
@@ -82,9 +81,8 @@ pub(in crate::maps) async fn apply_clean_stale(
     tx: &mut Tx<'_>,
     cmd: CleanStaleConnections,
 ) -> Result<Effect> {
-    let stale = sqlx::query!(
-        r#"select id as "id!", from_system as "from_system!", to_system as "to_system!"
-           from map_connections
+    let stale = sqlx::query_scalar!(
+        r#"select id as "id!" from map_connections
            where map_id = $1
              and time_status in ('critical', 'expired')
              and time_status_updated_at < now() - make_interval(mins => $2)"#,
@@ -96,18 +94,10 @@ pub(in crate::maps) async fn apply_clean_stale(
     if stale.is_empty() {
         return Err(MapError::Conflict("nothing to clean".into()));
     }
-    let edges = stale
-        .into_iter()
-        .map(|r| SweptEdge {
-            id: r.id,
-            from_system: r.from_system,
-            to_system: r.to_system,
-        })
-        .collect();
     sweep(
         tx,
         cmd.map_id,
-        edges,
+        &stale,
         "connections.cleaned",
         |n, m| match (n, m) {
             (1, 0) => "cleaned a stale connection".to_string(),
@@ -119,62 +109,31 @@ pub(in crate::maps) async fn apply_clean_stale(
     .await
 }
 
-struct SweptEdge {
-    id: i64,
-    from_system: i64,
-    to_system: i64,
-}
-
-/// Delete a set of edges plus any placement they leave behind, as one undoable step. The
-/// stale clean and the expiry differ only in which edges they pick and what they call it.
+/// Delete a set of edges plus what they take with them (both ends' scans, and any
+/// placement left without an edge), as one undoable step. The stale clean and the expiry
+/// differ only in which edges they pick and what they call it.
 async fn sweep(
     tx: &mut Tx<'_>,
     map_id: i64,
-    edges: Vec<SweptEdge>,
+    ids: &[i64],
     kind: &'static str,
     label: impl Fn(u64, usize) -> String,
 ) -> Result<Effect> {
-    // Snapshot the edges before deleting them, then the placements they orphan. Order
-    // matters: a placement only looks orphaned once its edges are gone.
-    let ids: Vec<i64> = edges.iter().map(|e| e.id).collect();
-    let mut snapshot = crate::maps::restore::capture_connections(tx, map_id, &ids).await?;
-    connections::delete(tx, map_id, &ids).await?;
+    let removed = Removal::new(map_id)
+        .connections(ids)
+        .orphans(Orphans::Sweep)
+        .apply(tx)
+        .await?;
 
-    let mut endpoints: Vec<i64> = edges
-        .iter()
-        .flat_map(|e| [e.from_system, e.to_system])
-        .collect();
-    endpoints.sort_unstable();
-    endpoints.dedup();
-
-    // Same orphan rule as the signature cascade: unpinned, unmarked, and now edgeless.
-    let orphans = placements::orphans(tx, map_id, &endpoints).await?;
-
-    if !orphans.is_empty() {
-        let captured = crate::maps::restore::capture_systems(tx, map_id, &orphans).await?;
-        snapshot.absorb(captured);
-        placements::delete(tx, map_id, &orphans).await?;
-    }
-
-    let removed = u64::try_from(ids.len()).expect("a usize fits in u64");
-    let mut events: Vec<MapEvent> = ids
-        .iter()
-        .map(|id| MapEvent::ConnectionChanged {
-            map_id,
-            connection_id: *id,
-        })
-        .collect();
-    events.extend(orphans.iter().map(|id| MapEvent::SystemRemoved {
-        map_id,
-        map_solar_system_id: *id,
-    }));
+    let count = u64::try_from(removed.connections.len()).expect("a usize fits in u64");
+    let events = removed.events();
     Ok(Effect::new(
         kind,
-        label(removed, orphans.len()),
-        CommandOutput::Count(removed),
+        label(count, removed.systems.len()),
+        CommandOutput::Count(count),
     )
-    .entries(ids.len() + orphans.len())
-    .undo_with(MapCommand::RestoreSystems(snapshot))
+    .entries(removed.connections.len() + removed.systems.len())
+    .undo_with(removed.undo())
     .emit_all(events))
 }
 
@@ -347,9 +306,8 @@ pub async fn age_connections(pool: &PgPool) -> Result<u64> {
     Ok(aged)
 }
 
-/// Remove a map's wormhole edges older than [`EXPIRE_AFTER_DAYS`], plus the placements
-/// they strand. Background only. The signatures they were linked to are left unlinked for
-/// the signature expiry to collect.
+/// Remove a map's wormhole edges older than [`EXPIRE_AFTER_DAYS`], with the signatures
+/// linked to them and the placements they strand. Background only.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExpireConnections {
     pub map_id: i64,
@@ -359,9 +317,8 @@ pub(in crate::maps) async fn apply_expire_connections(
     tx: &mut Tx<'_>,
     cmd: ExpireConnections,
 ) -> Result<Effect> {
-    let dead = sqlx::query!(
-        r#"select id as "id!", from_system as "from_system!", to_system as "to_system!"
-           from map_connections
+    let dead = sqlx::query_scalar!(
+        r#"select id as "id!" from map_connections
            where map_id = $1
              and type = 'wormhole'
              and created_at < now() - make_interval(days => $2)"#,
@@ -373,18 +330,10 @@ pub(in crate::maps) async fn apply_expire_connections(
     if dead.is_empty() {
         return Err(MapError::Conflict("nothing to expire".into()));
     }
-    let edges = dead
-        .into_iter()
-        .map(|r| SweptEdge {
-            id: r.id,
-            from_system: r.from_system,
-            to_system: r.to_system,
-        })
-        .collect();
     sweep(
         tx,
         cmd.map_id,
-        edges,
+        &dead,
         "connections.expired",
         |n, m| match (n, m) {
             (1, 0) => "removed a dead connection".to_string(),

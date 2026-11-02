@@ -50,6 +50,7 @@ mod maps_ignored;
 mod maps_jumps;
 mod maps_map;
 mod maps_personal_watchlist;
+mod maps_removal;
 mod maps_signatures;
 mod maps_signatures_paste;
 mod maps_solar_system;

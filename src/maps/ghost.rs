@@ -997,58 +997,6 @@ pub(super) async fn apply_restore_ghost_system(
     .emit_all(events))
 }
 
-/// The nodes these scans raised. Deleting a scan takes them by the foreign key, so this is
-/// asked beforehand, while they are still there to be named.
-pub(super) async fn raised_by(
-    tx: &mut Tx<'_>,
-    map_id: i64,
-    signature_pks: &[i64],
-) -> Result<Vec<i64>> {
-    Ok(sqlx::query_scalar!(
-        "select id from map_solar_systems
-         where map_id = $1 and raised_by_signature_id = any($2)",
-        map_id,
-        signature_pks,
-    )
-    .fetch_all(&mut **tx)
-    .await?)
-}
-
-/// The ghosts that removing these placements or connections would strand. A ghost with no
-/// connection left is not a place at all and goes with whatever it hung off; real systems
-/// are left alone even when they end up edgeless. Asked before the deletion, so the caller
-/// can fold the answer into its snapshot and undo restores both in one step.
-pub(super) async fn stranded_ghosts(
-    tx: &mut Tx<'_>,
-    map_id: i64,
-    removed_systems: &[i64],
-    removed_connections: &[i64],
-) -> Result<Vec<i64>> {
-    Ok(sqlx::query_scalar!(
-        r#"select g.id as "id!" from map_solar_systems g
-           where g.map_id = $1
-             and g.solar_system_id is null
-             and not g.is_home and not g.is_pinned and not g.is_rally
-             and exists (
-                 select 1 from map_connections c
-                 where c.map_id = $1 and (c.from_system = g.id or c.to_system = g.id)
-             )
-             and not exists (
-                 select 1 from map_connections c
-                 where c.map_id = $1
-                   and (c.from_system = g.id or c.to_system = g.id)
-                   and c.id <> all($3)
-                   and c.from_system <> all($2)
-                   and c.to_system <> all($2)
-             )"#,
-        map_id,
-        removed_systems,
-        removed_connections,
-    )
-    .fetch_all(&mut **tx)
-    .await?)
-}
-
 /// A hole is often flown before it is named. Once the far side is known, transits that
 /// were recorded without a connection can be claimed by the edges of this placement.
 async fn claim_pending_for(

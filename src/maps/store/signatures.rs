@@ -284,27 +284,14 @@ pub(crate) async fn set_connection(
     Ok(())
 }
 
-/// Where a signature that was just deleted had been, and what it was linked to.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct DeletedSignature {
-    pub solar_system_id: i64,
-    pub connection_id: Option<i64>,
-}
-
 /// Delete these signatures. A ghost one of them raised goes with it, by the foreign key.
-/// Returns what the ones that were there had been.
-pub(crate) async fn delete(
-    tx: &mut Tx<'_>,
-    map_id: i64,
-    ids: &[i64],
-) -> Result<Vec<DeletedSignature>> {
-    Ok(sqlx::query_as!(
-        DeletedSignature,
-        "delete from signatures where map_id = $1 and id = any($2)
-         returning solar_system_id, connection_id",
+pub(crate) async fn delete(tx: &mut Tx<'_>, map_id: i64, ids: &[i64]) -> Result<()> {
+    sqlx::query!(
+        "delete from signatures where map_id = $1 and id = any($2)",
         map_id,
         ids,
     )
-    .fetch_all(&mut **tx)
-    .await?)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }

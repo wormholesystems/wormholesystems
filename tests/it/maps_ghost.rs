@@ -644,31 +644,16 @@ async fn a_ghost_goes_with_the_connection_that_made_it() {
     .await
     .unwrap();
 
-    // That node is gone. What is not gone is the scan, which still says a hole is there,
-    // so the map draws it again: a ghost is a rendering of a signature, and cutting the
-    // edge is not how you say the hole was never found. Deleting the signature is.
+    // The node goes, and the scan that drew it: cutting the edge says the hole is gone,
+    // so nothing is left to draw it again.
     let view = get_map(&pool, w.owner, GetMap { map_id: w.map_id })
         .await
         .unwrap();
     assert!(view.systems.iter().all(|s| s.id() != ghost));
-    assert_eq!(view.systems.len(), 2);
-    assert_eq!(view.connections.len(), 1);
-
-    remove_signature(
-        &pool,
-        w.owner,
-        RemoveSignature {
-            map_id: w.map_id,
-            signature_pk: sig,
-        },
-    )
-    .await
-    .unwrap();
-    let view = get_map(&pool, w.owner, GetMap { map_id: w.map_id })
-        .await
-        .unwrap();
     assert_eq!(view.systems.len(), 1, "the hole had nothing else to be");
     assert!(view.connections.is_empty());
+    let left = list_signatures(&pool, w.owner, w.map_id).await.unwrap();
+    assert!(left.iter().all(|s| s.id != sig));
 }
 
 #[tokio::test]

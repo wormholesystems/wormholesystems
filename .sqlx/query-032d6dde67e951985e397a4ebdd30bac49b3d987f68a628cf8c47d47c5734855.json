@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select s.id as \"id!\" from signatures s\n               join map_solar_systems p\n                 on p.map_id = s.map_id and p.solar_system_id = s.solar_system_id\n               where s.map_id = $1 and p.id = any($2)\n               union\n               select id from signatures where map_id = $1 and connection_id = any($3)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8Array",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "032d6dde67e951985e397a4ebdd30bac49b3d987f68a628cf8c47d47c5734855"
+}

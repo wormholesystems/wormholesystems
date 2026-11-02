@@ -119,7 +119,7 @@ async fn add_connection_returns_fields_and_validates() {
 }
 
 #[tokio::test]
-async fn remove_connection_clears_signature_link() {
+async fn remove_connection_takes_its_signature() {
     let (pool, _db) = common::db::fresh().await;
     let w = world(&pool).await;
     let a = add_system(
@@ -184,19 +184,13 @@ async fn remove_connection_clears_signature_link() {
     .await
     .unwrap();
 
-    // The signature survives, with its connection_id cleared.
+    // The hole is gone, and its scan with it rather than left behind unlinked.
     let total: i64 = sqlx::query_scalar("select count(*) from signatures where map_id = $1")
         .bind(w.map_id)
         .fetch_one(&pool)
         .await
         .unwrap();
-    let linked: i64 =
-        sqlx::query_scalar("select count(*) from signatures where connection_id is not null")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(total, 1);
-    assert_eq!(linked, 0);
+    assert_eq!(total, 0);
 
     // Unknown connection → NotFound.
     assert!(matches!(
@@ -651,13 +645,12 @@ async fn expiry_removes_dead_wormholes_and_what_they_strand() {
         "the stranded J-system goes, the pinned one stays"
     );
 
-    let link: Option<i64> =
-        sqlx::query_scalar("select connection_id from signatures where id = $1")
-            .bind(sig)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(link, None);
+    let left: i64 = sqlx::query_scalar("select count(*) from signatures where id = $1")
+        .bind(sig)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left, 0, "the dead hole's scan goes with it");
 
     let newest = list_history(&pool, w.owner, w.map_id)
         .await

@@ -1,16 +1,16 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id from map_solar_systems\n         where map_id = $1 and raised_by_signature_id = any($2)",
+  "query": "select distinct solar_system_id as \"id!\" from signatures\n               where map_id = $1 and id = any($2)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id",
+        "name": "id!",
         "type_info": "Int8",
         "origin": {
           "Table": {
-            "table": "map_solar_systems",
-            "name": "id"
+            "table": "signatures",
+            "name": "solar_system_id"
           }
         }
       }
@@ -25,5 +25,5 @@
       false
     ]
   },
-  "hash": "8047ed1f02d14af27488c1a1c9f44b5639274d4f90d7fe24e53d15fcdd266c75"
+  "hash": "68cc0b74bfc2a5171b9449495e87958883cdf33c7f17dc5283fb11a448cfd7d5"
 }

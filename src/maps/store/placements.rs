@@ -265,42 +265,6 @@ pub(crate) async fn delete(tx: &mut Tx<'_>, map_id: i64, ids: &[i64]) -> Result<
     Ok(())
 }
 
-/// Take these placements off the map, passing over home and pinned ones. The guard is
-/// repeated on the delete itself, so the rule travels with the query whatever the caller
-/// checked beforehand. Returns how many went.
-pub(crate) async fn delete_unprotected(tx: &mut Tx<'_>, map_id: i64, ids: &[i64]) -> Result<u64> {
-    Ok(sqlx::query!(
-        "delete from map_solar_systems
-         where map_id = $1 and id = any($2) and not is_home and not is_pinned",
-        map_id,
-        ids,
-    )
-    .execute(&mut **tx)
-    .await?
-    .rows_affected())
-}
-
-/// Which of these placements are orphans: unpinned, unmarked, and without a connection
-/// left. Asked by a sweep or a signature removal, which snapshot them before they go.
-pub(crate) async fn orphans(tx: &mut Tx<'_>, map_id: i64, ids: &[i64]) -> Result<Vec<i64>> {
-    if ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    Ok(sqlx::query_scalar!(
-        r#"select id as "id!" from map_solar_systems mss
-           where mss.map_id = $1 and mss.id = any($2)
-             and not mss.is_pinned and not mss.is_home and not mss.is_rally
-             and not exists (
-                 select 1 from map_connections c
-                 where c.map_id = $1 and (c.from_system = mss.id or c.to_system = mss.id)
-             )"#,
-        map_id,
-        ids,
-    )
-    .fetch_all(&mut **tx)
-    .await?)
-}
-
 /// Turn a ghost into the system it was found to be. A real system names no scan and hangs
 /// off nothing, so both go in the same write.
 pub(crate) async fn assign_system(

@@ -59,23 +59,6 @@ fn merge<T>(rows: &mut Vec<T>, more: Vec<T>, id: impl Fn(&T) -> i64) {
     rows.extend(more.into_iter().filter(|row| known.insert(id(row))));
 }
 
-/// Take the signatures the snapshot claimed that the database will not cascade: the ones in
-/// the systems staying on the map, linked to a connection that died with its endpoint.
-/// Runs after the placements go, because deleting a scan takes the node it raised, and one
-/// of those may be the placement this removal is about.
-pub(super) async fn remove_captured_signatures(
-    tx: &mut Tx<'_>,
-    map_id: i64,
-    snapshot: &RestoreSystems,
-) -> Result<()> {
-    let ids: Vec<i64> = snapshot.signatures.iter().map(|s| s.id).collect();
-    if ids.is_empty() {
-        return Ok(());
-    }
-    signatures::delete(tx, map_id, &ids).await?;
-    Ok(())
-}
-
 /// Snapshot placements and their cascade so a removal can be undone.
 pub(super) async fn capture_systems(
     tx: &mut Tx<'_>,
@@ -213,19 +196,9 @@ pub(super) async fn apply_remove_restored(tx: &mut Tx<'_>, cmd: RemoveRestored) 
     )
 }
 
-/// Snapshot one connection so removing it can be undone, with the signatures linked to it
-/// (they outlive it unlinked, and restoring it links them again) and its jump log.
-pub(super) async fn capture_connection(
-    tx: &mut Tx<'_>,
-    map_id: i64,
-    connection_id: i64,
-) -> Result<Option<RestoreSystems>> {
-    let snapshot = capture_connections(tx, map_id, &[connection_id]).await?;
-    Ok((!snapshot.connections.is_empty()).then_some(snapshot))
-}
-
-/// [`capture_connection`] for several at once, in three queries however many there are.
-/// The ones not on the map are left out.
+/// Snapshot connections so removing them can be undone, with the signatures linked to them
+/// and their jump log, in three queries however many there are. The ones not on the map
+/// are left out.
 pub(super) async fn capture_connections(
     tx: &mut Tx<'_>,
     map_id: i64,

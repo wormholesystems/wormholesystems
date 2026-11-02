@@ -9,7 +9,7 @@ use sqlx::PgPool;
 use super::access::require_role;
 use super::command::{CommandOutput, Effect, MapCommand, Tx, run};
 use super::error::{MapError, Result};
-use super::restore::{capture_systems, remove_captured_signatures};
+use super::removal::Removal;
 use super::store::placements::{self, NewPlacement};
 use super::{Actor, Role};
 use crate::realtime::MapEvent;
@@ -121,28 +121,27 @@ pub(super) async fn apply_remove_system(tx: &mut Tx<'_>, cmd: RemoveSystem) -> R
         return Ok(kept("systems.removed", "kept a protected system"));
     }
 
-    // The unmapped holes hanging off it go with it, and into the same snapshot, so one undo
-    // brings both back.
-    let mut ids = vec![cmd.map_solar_system_id];
-    ids.extend(super::ghost::stranded_ghosts(tx, cmd.map_id, &ids, &[]).await?);
-
-    let snapshot = capture_systems(tx, cmd.map_id, &ids).await?;
-    let deleted = placements::delete_unprotected(tx, cmd.map_id, &ids).await?;
-    if deleted == 0 {
+    // Its edges, the scans at both ends of them and the ghosts left hanging go with it, in
+    // one snapshot, so one undo brings all of it back.
+    let removed = Removal::new(cmd.map_id)
+        .systems(&[cmd.map_solar_system_id])
+        .apply(tx)
+        .await?;
+    if removed.systems.is_empty() {
         return Err(MapError::NotFound);
     }
-    remove_captured_signatures(tx, cmd.map_id, &snapshot).await?;
-    let label = format!("removed {}", snapshot.label());
-    let events: Vec<MapEvent> = ids
-        .iter()
-        .map(|id| MapEvent::SystemRemoved {
-            map_id: cmd.map_id,
-            map_solar_system_id: *id,
-        })
-        .collect();
+    let label = format!("removed {}", systems_label(removed.systems.len()));
+    let events = removed.events();
     Ok(Effect::new("systems.removed", label, CommandOutput::None)
-        .undo_with(MapCommand::RestoreSystems(snapshot))
+        .undo_with(removed.undo())
         .emit_all(events))
+}
+
+fn systems_label(n: usize) -> String {
+    match n {
+        1 => "a system".to_string(),
+        n => format!("{n} systems"),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, utoipa::ToSchema)]
@@ -177,24 +176,26 @@ pub(super) async fn apply_remove_systems(tx: &mut Tx<'_>, cmd: RemoveSystems) ->
         return Ok(kept("systems.removed", "kept the protected systems"));
     }
 
-    // Same as the single removal: the unmapped holes these leave behind come too.
-    let mut removable = removable;
-    removable.extend(super::ghost::stranded_ghosts(tx, cmd.map_id, &removable, &[]).await?);
-
-    let snapshot = capture_systems(tx, cmd.map_id, &removable).await?;
-    let deleted = placements::delete_unprotected(tx, cmd.map_id, &removable).await?;
-    remove_captured_signatures(tx, cmd.map_id, &snapshot).await?;
+    // Same cascade as the single removal.
+    let removed = Removal::new(cmd.map_id)
+        .systems(&removable)
+        .apply(tx)
+        .await?;
+    let deleted = removed.systems.len();
 
     let label = match held {
-        0 => format!("removed {}", snapshot.label()),
-        n => format!("removed {} (kept {n} protected)", snapshot.label()),
+        0 => format!("removed {}", systems_label(deleted)),
+        n => format!("removed {} (kept {n} protected)", systems_label(deleted)),
     };
-    Ok(
-        Effect::new("systems.removed", label, CommandOutput::Count(deleted))
-            .entries(deleted)
-            .undo_with(MapCommand::RestoreSystems(snapshot))
-            .emit(MapEvent::MapUpdated { map_id: cmd.map_id }),
+    let events = removed.events();
+    Ok(Effect::new(
+        "systems.removed",
+        label,
+        CommandOutput::Count(u64::try_from(deleted).expect("a usize fits in u64")),
     )
+    .entries(deleted)
+    .undo_with(removed.undo())
+    .emit_all(events))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, utoipa::ToSchema)]
@@ -217,18 +218,28 @@ pub(super) async fn apply_clear_map(tx: &mut Tx<'_>, cmd: ClearMap) -> Result<Ef
     )
     .fetch_all(&mut **tx)
     .await?;
-    let snapshot = capture_systems(tx, cmd.map_id, &doomed).await?;
-    // Exactly the rows the snapshot holds. Matching the condition again would also take a
-    // placement committed since the select, which the undo then could not bring back.
-    let deleted = placements::delete_unprotected(tx, cmd.map_id, &doomed).await?;
+    // Exactly the rows selected. Matching the condition again would also take a placement
+    // committed since the select, which the undo then could not bring back. The kept
+    // systems lose the scans of the holes that led off the map with the rest.
+    let removed = Removal::new(cmd.map_id).systems(&doomed).apply(tx).await?;
+    let deleted = removed.systems.len();
+    let signature_events: Vec<MapEvent> = removed
+        .signature_systems
+        .iter()
+        .map(|&solar_system_id| MapEvent::SignatureChanged {
+            map_id: cmd.map_id,
+            solar_system_id,
+        })
+        .collect();
     Ok(Effect::new(
         "map.cleared",
         format!("cleared the map ({deleted} systems)"),
-        CommandOutput::Count(deleted),
+        CommandOutput::Count(u64::try_from(deleted).expect("a usize fits in u64")),
     )
     .entries(deleted)
-    .undo_with(MapCommand::RestoreSystems(snapshot))
-    .emit(MapEvent::MapUpdated { map_id: cmd.map_id }))
+    .undo_with(removed.undo())
+    .emit(MapEvent::MapUpdated { map_id: cmd.map_id })
+    .emit_all(signature_events))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, utoipa::ToSchema)]

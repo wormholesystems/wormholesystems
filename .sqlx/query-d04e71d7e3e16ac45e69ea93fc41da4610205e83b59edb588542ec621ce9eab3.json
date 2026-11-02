@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id as \"id!\" from map_solar_systems\n               where map_id = $1 and (raised_by_signature_id = any($2) or hangs_off_id = any($3))\n               union\n               select p.id from map_solar_systems p\n               where p.map_id = $1\n                 and not p.is_home and not p.is_pinned and not p.is_rally\n                 and exists (\n                     select 1 from map_connections c\n                     where c.map_id = $1 and c.id = any($4)\n                       and (c.from_system = p.id or c.to_system = p.id)\n                 )\n                 and not exists (\n                     select 1 from map_connections c\n                     where c.map_id = $1 and not (c.id = any($4))\n                       and (c.from_system = p.id or c.to_system = p.id)\n                 )\n                 and (p.solar_system_id is null\n                      or ($5 and not (p.solar_system_id = any($6))))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8Array",
+        "Int8Array",
+        "Int8Array",
+        "Bool",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d04e71d7e3e16ac45e69ea93fc41da4610205e83b59edb588542ec621ce9eab3"
+}

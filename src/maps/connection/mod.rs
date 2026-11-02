@@ -21,8 +21,8 @@ use sqlx::PgPool;
 use super::Actor;
 use super::command::{CommandOutput, Effect, MapCommand, Tx, run};
 use super::error::{MapError, Result};
+use super::removal::Removal;
 use super::store::connections::{self, NewConnection};
-use super::store::placements;
 
 mod lifecycle;
 
@@ -338,7 +338,8 @@ pub struct RemoveConnection {
     pub connection_id: i64,
 }
 
-/// Remove a connection. Linked signatures survive with their `connection_id` cleared.
+/// Remove a connection, with the signatures linked to it at both ends and the ghost it led
+/// to: the hole is gone, so nothing of it is left to raise a ghost again.
 pub async fn remove_connection(pool: &PgPool, actor: Actor, cmd: RemoveConnection) -> Result<()> {
     run(pool, actor, cmd).await
 }
@@ -347,38 +348,22 @@ pub(super) async fn apply_remove_connection(
     tx: &mut Tx<'_>,
     cmd: RemoveConnection,
 ) -> Result<Effect> {
-    let mut restore = super::restore::capture_connection(tx, cmd.map_id, cmd.connection_id)
-        .await?
-        .ok_or(MapError::NotFound)?;
-
-    // An unmapped hole is this connection's far side and nothing else, so taking the
-    // connection away takes it too. Captured first, so one undo puts both back.
-    let ghosts = super::ghost::stranded_ghosts(tx, cmd.map_id, &[], &[cmd.connection_id]).await?;
-    if !ghosts.is_empty() {
-        restore.systems = super::restore::capture_systems(tx, cmd.map_id, &ghosts)
-            .await?
-            .systems;
-        placements::delete(tx, cmd.map_id, &ghosts).await?;
+    let removed = Removal::new(cmd.map_id)
+        .connections(&[cmd.connection_id])
+        .apply(tx)
+        .await?;
+    if removed.connections.is_empty() {
+        return Err(MapError::NotFound);
     }
-
-    connections::delete(tx, cmd.map_id, &[cmd.connection_id]).await?;
-
-    let label = match ghosts.len() {
+    let label = match removed.systems.len() {
         0 => "removed a connection".to_string(),
         1 => "removed a connection and the hole it led to".to_string(),
         n => format!("removed a connection and the {n} holes it led to"),
     };
-    let mut events = vec![MapEvent::ConnectionChanged {
-        map_id: cmd.map_id,
-        connection_id: cmd.connection_id,
-    }];
-    events.extend(ghosts.iter().map(|id| MapEvent::SystemRemoved {
-        map_id: cmd.map_id,
-        map_solar_system_id: *id,
-    }));
+    let events = removed.events();
     Ok(
         Effect::new("connections.removed", label, CommandOutput::None)
-            .undo_with(MapCommand::RestoreSystems(restore))
+            .undo_with(removed.undo())
             .emit_all(events),
     )
 }

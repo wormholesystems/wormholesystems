@@ -19,6 +19,7 @@ pub mod map;
 pub mod naming;
 pub mod personal_watchlist;
 pub mod presence;
+mod removal;
 pub mod restore;
 pub mod search;
 pub mod signatures;

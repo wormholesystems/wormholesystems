@@ -188,7 +188,9 @@ catalogue of signature groups and known wormhole types is
   It never deletes, and never touches `size` / `mass_status` / `time_status` /
   `created_at`. Rows missing from a scan are removed explicitly via the bulk delete.
 - **Delete cascade** (legacy): deleting a signature also deletes its linked connection
-  unless another signature *in the same system* still references it. The bulk delete
+  unless another signature *in the same system* still references it, and a connection
+  that goes takes the signatures linked to it at both ends (the FK's `set null` is only a
+  backstop; `maps::removal` deletes them first). The bulk delete
   additionally removes the far end of each deleted connection when it is not pinned /
   home / rally and has no remaining connections. The system the signatures were in
   always stays.

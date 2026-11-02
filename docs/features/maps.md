@@ -266,6 +266,25 @@ settings, not at creation: a new map has nothing on it to picture either way rou
 Distinct from `clear_map`, which takes everything *except* the anchors. Clean takes the
 dead branches a collapsed hole left behind; clear empties the map back to its anchors.
 
+### What a removal takes with it
+
+Every removal (systems, connections, signatures, the stale clean, the expiry, clearing the
+map) works out what goes in one place, `maps::removal`, with the same rules:
+
+- a system takes its connections, its signatures and the ghosts hanging off it;
+- a connection takes every signature linked to it, at both ends. The hole is gone, and a
+  scan left behind unlinked would only draw a ghost for it again;
+- a signature takes the ghost it raised, and its connection once no signature on its side
+  still names it;
+- a ghost left without a connection goes. A real system left without one stays, except in
+  the stale clean, the expiry and `remove_signatures`, which sweep it (never home, pinned
+  or rally, and never the system the removed signatures were in).
+
+Signatures belong to a connection by its id, not by the systems it joins, so of two holes
+between the same pair of systems, removing one leaves the other's scans alone. Everything is
+snapshotted first, so one undo brings all of it back, and each system whose signatures
+changed gets a `SignatureChanged`.
+
 ### `remove_system(actor, map_id, map_solar_system_id)`
 
 - **Auth:** `Member`.
@@ -333,8 +352,8 @@ Mark a connection's wormhole life-cycle state — works whether or not a signatu
 ### `remove_connection(actor, map_id, connection_id)`
 
 - **Auth:** `Member`.
-- **Effect:** delete the `map_connections` row. Linked signatures survive with their
-  `connection_id` cleared (DB `on delete set null`).
+- **Effect:** delete the `map_connections` row, the signatures linked to it at both ends,
+  and the ghost it led to (see [What a removal takes with it](#what-a-removal-takes-with-it)).
 - **Invariant:** a connection id not on this map → `NotFound`.
 
 ### `add_eve_scout_connections(actor, map_id, hub_solar_system_id, at?) -> count`
@@ -415,8 +434,8 @@ when nothing matched.
 ### `remove_signature(actor, map_id, signature_pk)`
 
 - **Auth:** `Member`. **Effect:** delete the row. Legacy cascade: if it was the last
-  signature on its side of a linked connection, the connection is deleted too (the other
-  end's signature is unlinked by the FK). Unknown id → `NotFound`.
+  signature on its side of a linked connection, the connection is deleted too, and the
+  other end's signature with it. Unknown id → `NotFound`.
 
 ### `remove_signatures(actor, map_id, signature_pks)`
 

@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id as \"id!\" from map_connections\n               where map_id = $1 and (from_system = any($2) or to_system = any($2))\n               union\n               select s.connection_id as \"id!\" from signatures s\n               where s.map_id = $1 and s.id = any($3) and s.connection_id is not null\n                 and not exists (\n                     select 1 from signatures o\n                     where o.map_id = $1\n                       and o.connection_id = s.connection_id\n                       and o.solar_system_id = s.solar_system_id\n                       and not (o.id = any($3))\n                 )",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8Array",
+        "Int8Array"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "3b41454b1f36f7c6a8ae856605fb8a26b9ce02fce93e5a585b263f08e129312d"
+}
