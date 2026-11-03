@@ -70,16 +70,19 @@ describe('lifetimeDeadline', () => {
 });
 
 describe('formatRemaining', () => {
-	it('rounds up to the minute and never goes negative', () => {
-		expect(formatRemaining(T0 + 2 * HOUR + 13 * 60_000 + 1, T0)).toBe('2h 14m');
+	it('shows only the largest unit, rounded down, and never goes negative', () => {
+		expect(formatRemaining(T0 + HOUR + 30 * 60_000, T0)).toBe('1h');
+		expect(formatRemaining(T0 + 2 * HOUR + 59 * 60_000, T0)).toBe('2h');
+		expect(formatRemaining(T0 + 47 * HOUR, T0)).toBe('47h');
 		expect(formatRemaining(T0 + 45 * 60_000, T0)).toBe('45m');
+		expect(formatRemaining(T0 + 30_000, T0)).toBe('<1m');
 		expect(formatRemaining(T0 - HOUR, T0)).toBe('0m');
 	});
 });
 
 describe('describeRemaining', () => {
 	it('reads like formatRemaining until the deadline passes', () => {
-		expect(describeRemaining(T0 + 18 * HOUR, T0)).toBe('18h 0m');
+		expect(describeRemaining(T0 + 18 * HOUR, T0)).toBe('18h');
 		expect(describeRemaining(T0, T0)).toBe('any moment now');
 		expect(describeRemaining(T0 - HOUR, T0)).toBe('any moment now');
 	});

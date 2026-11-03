@@ -48,12 +48,17 @@ export function lifetimeDeadline(
 	return { at: Date.parse(c.created_at) + hours * HOUR_MS, estimated: true };
 }
 
-/** "2h 13m", "45m", and "0m" once it has run out. */
+/**
+ * Only the largest unit, rounded down: "2h", "45m", "<1m", and "0m" once it has run out. A
+ * label read at a glance says as much with "1h" as with "1h 32m". Hours at most, since a
+ * hole's life is counted in hours even when it has two days of it.
+ */
 export function formatRemaining(deadlineMs: number, nowMs: number): string {
-	const minutes = Math.max(0, Math.ceil((deadlineMs - nowMs) / 60_000));
-	const hours = Math.floor(minutes / 60);
-	const rest = minutes % 60;
-	return hours === 0 ? `${rest}m` : `${hours}h ${rest}m`;
+	const left = deadlineMs - nowMs;
+	if (left <= 0) return '0m';
+	const minutes = Math.floor(left / 60_000);
+	if (minutes < 1) return '<1m';
+	return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h`;
 }
 
 /**
