@@ -254,6 +254,25 @@ export async function seedThreat(threat: {
 	);
 }
 
+/**
+ * Gives every empire system without a holder its faction, the way ESI's sovereignty map
+ * would. The API fetches that map live, so without this a test reading holders fails
+ * whenever ESI is down.
+ */
+export async function seedFactionSovereignty() {
+	await withDb((db) =>
+		db.query(
+			`insert into system_sovereignty (solar_system_id, faction_id)
+			 select s.id, coalesce(s.faction_id, c.faction_id, r.faction_id)
+			 from solar_systems s
+			 join constellations c on c.id = s.constellation_id
+			 join regions r on r.id = s.region_id
+			 where coalesce(s.faction_id, c.faction_id, r.faction_id) is not null
+			 on conflict (solar_system_id) do nothing`,
+		),
+	);
+}
+
 export async function clearThreats(entityIds: number[]) {
 	await withDb((db) =>
 		db.query('delete from wormhole_system_threats where entity_id = any($1)', [entityIds]),

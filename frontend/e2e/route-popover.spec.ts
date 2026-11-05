@@ -1,6 +1,6 @@
 import { createdId, expect, gotoApp, test } from './fixtures';
 import { staysHidden } from './arrange';
-import { setCharacterPresence } from './db';
+import { seedFactionSovereignty, setCharacterPresence } from './db';
 
 const JITA = 30000142;
 const AMARR = 30002187;
@@ -52,6 +52,7 @@ test('opening it pops no tooltip', async ({ page, api }) => {
 });
 
 test('a hop names the holder of the system on hover', async ({ page, api }) => {
+	await seedFactionSovereignty();
 	await openRoute(page, api);
 	const badge = page.getByTestId('sovereignty-badge').first();
 	await badge.scrollIntoViewIfNeeded();
