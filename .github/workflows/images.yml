@@ -56,8 +56,14 @@ jobs:
           context: ${{ matrix.context }}
           platforms: linux/${{ matrix.arch }}
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
-          # Names the build in error reports.
-          build-args: GIT_SHA=${{ github.sha }}
+          # Names the build in error reports. The web build also uploads its source maps to
+          # the error tracker; the API ignores these.
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            SENTRY_URL=${{ vars.SENTRY_URL }}
+            SENTRY_ORG=${{ vars.SENTRY_ORG }}
+            SENTRY_PROJECT=${{ vars.SENTRY_PROJECT }}
+          secrets: sentry_auth_token=${{ secrets.SENTRY_AUTH_TOKEN }}
           outputs: type=image,name=${{ env.PREFIX }}-${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
           # The dependency layers are most of the API's build time; this keeps them.
           cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
