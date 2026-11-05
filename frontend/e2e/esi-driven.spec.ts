@@ -395,6 +395,9 @@ test('the poller drives the whole jump, from ESI to the prompt', async ({
 	browser,
 	playwright,
 }) => {
+	// Also pins Tranquility up: the poller stops while the real one is down.
+	test.skip(!(await stubIsWired(api, playwright)), SKIP_REASON);
+
 	const mapId = await createMap(api, 'E2E TrackingLive');
 	await addSystem(api, mapId, J122515);
 
