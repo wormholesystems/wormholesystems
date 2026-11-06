@@ -30,7 +30,7 @@ impl Tray {
         if !host_available() {
             return None;
         }
-        let open = MenuItem::new("Open WormholeSystems", true, None);
+        let open = MenuItem::new(format!("Open {}", crate::APP_NAME), true, None);
         let overlay = MenuItem::new("Show or hide the overlay", true, None);
         let quit = MenuItem::new("Quit", true, None);
         let menu = Menu::new();
@@ -38,7 +38,7 @@ impl Tray {
             .ok()?;
         let builder = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
-            .with_tooltip("WormholeSystems");
+            .with_tooltip(crate::APP_NAME);
         // The menu bar tints a template icon to fit, light or dark.
         #[cfg(target_os = "macos")]
         let builder = builder.with_icon_templated(icon(ThemeMode::Light)?);
@@ -59,8 +59,7 @@ impl Tray {
         })
     }
 
-    /// Draw the logo white for a dark theme, black for a light one. The menu bar tints its
-    /// template itself.
+    /// Switch to the icon for the theme. The menu bar tints its template itself.
     pub(crate) fn set_mode(&mut self, mode: ThemeMode) {
         if mode == self.mode || cfg!(target_os = "macos") {
             return;
@@ -99,20 +98,23 @@ impl Tray {
     }
 }
 
-/// The logo alone, white or black.
+/// The app icon, its tile light or dark with the theme. The menu bar wants a template, the
+/// logo alone in black, which it tints to fit.
 fn icon(mode: ThemeMode) -> Option<Icon> {
     use resvg::tiny_skia::{Pixmap, Transform};
     use resvg::usvg::{Options, Tree};
 
     const SIZE: u16 = 64;
-    let fill = match mode {
-        ThemeMode::Dark => "white",
-        ThemeMode::Light => "black",
+    let svg: &[u8] = if cfg!(target_os = "macos") {
+        include_bytes!("../assets/logo.svg")
+    } else {
+        match mode {
+            ThemeMode::Dark => include_bytes!("../assets/icon-dark.svg"),
+            ThemeMode::Light => include_bytes!("../assets/icon.svg"),
+        }
     };
-    let svg = std::str::from_utf8(include_bytes!("../assets/logo.svg"))
-        .ok()?
-        .replace("fill=\"black\"", &format!("fill=\"{fill}\""));
-    let tree = Tree::from_str(&svg, &Options::default()).ok()?;
+    let svg = std::str::from_utf8(svg).ok()?;
+    let tree = Tree::from_str(svg, &Options::default()).ok()?;
     let (w, h) = (tree.size().width(), tree.size().height());
     let side = f32::from(SIZE);
     let scale = side / w.max(h);

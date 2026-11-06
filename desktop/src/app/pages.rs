@@ -1096,7 +1096,7 @@ impl DesktopApp {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(format!("WormholeSystems {}", crate::update::VERSION))
+                        .child(format!("{} {}", crate::APP_NAME, crate::update::VERSION))
                         .when(!status.is_empty(), |d| d.child(muted(status, theme))),
                 )
                 .child(

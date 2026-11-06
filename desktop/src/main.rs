@@ -33,6 +33,9 @@ use gpui_kit::{
 
 use tray::{Tray, TrayEvent};
 
+/// What the app calls itself: window title, tray, launcher.
+pub(crate) const APP_NAME: &str = "WormholeSystems Desktop";
+
 /// A line on stderr, the app's only log.
 #[expect(clippy::print_stderr, reason = "stderr is the desktop app's only log")]
 pub(crate) fn log(line: std::fmt::Arguments<'_>) {
@@ -130,7 +133,7 @@ fn open_main(cx: &mut App) {
             cx,
         ))),
         titlebar: Some(TitlebarOptions {
-            title: Some("WormholeSystems".into()),
+            title: Some(APP_NAME.into()),
             ..Default::default()
         }),
         ..Default::default()
