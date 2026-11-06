@@ -1,3 +1,4 @@
+import { sentrySvelteKit } from '@sentry/sveltekit/vite';
 import adapter from '@sveltejs/adapter-node';
 import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
@@ -8,8 +9,27 @@ import { defineConfig } from 'vitest/config';
 // origin.
 const backend = 'http://127.0.0.1:3000';
 
+// Every build ships its source maps; the code is public anyway. With SENTRY_AUTH_TOKEN set
+// (the published images), the bundles also get debug IDs and the maps go up to the error
+// tracker, so reports point at the source. Nothing else of the Sentry plugin runs.
+const sentry = process.env.SENTRY_AUTH_TOKEN
+	? sentrySvelteKit({
+			sentryUrl: process.env.SENTRY_URL,
+			org: process.env.SENTRY_ORG,
+			project: process.env.SENTRY_PROJECT,
+			authToken: process.env.SENTRY_AUTH_TOKEN,
+			release: { name: process.env.PUBLIC_SENTRY_RELEASE || undefined },
+			sourcemaps: { filesToDeleteAfterUpload: [] },
+			autoInstrument: false,
+			buildTimeInstrumentation: false,
+			telemetry: false,
+		})
+	: [];
+
 export default defineConfig({
+	build: { sourcemap: true },
 	plugins: [
+		sentry,
 		tailwindcss(),
 		sveltekit({
 			compilerOptions: {

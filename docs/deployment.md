@@ -238,6 +238,11 @@ PUBLIC_SENTRY_DSN=<the same, or a project of its own>
 SENTRY_ENVIRONMENT=production
 ```
 
+The frontend ships its source maps. A build with `SENTRY_AUTH_TOKEN` set also uploads them,
+to `SENTRY_URL`'s `SENTRY_ORG`/`SENTRY_PROJECT`, so browser reports point at the source; for
+an image of your own, pass those three as build args and the token as the
+`sentry_auth_token` build secret.
+
 Metrics. The port is not published, so a Prometheus on the compose network scrapes the
 service by name; for one elsewhere, publish it on the loopback in `compose.override.yml`
 (`ports: ["127.0.0.1:9100:9100"]` under `api`).

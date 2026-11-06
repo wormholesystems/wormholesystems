@@ -185,3 +185,7 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = false
+
+# Release builds keep line tables too, so error reports name the file and line.
+[profile.release]
+debug = "line-tables-only"
