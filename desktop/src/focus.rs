@@ -36,7 +36,7 @@ impl Focus {
         )
     )]
     pub(crate) fn of(class: &str, title: &str) -> Focus {
-        if title == "WormholeSystems" || class.starts_with("wormholesystems") {
+        if title == crate::APP_NAME || class.starts_with("wormholesystems") {
             return Focus::Us;
         }
         if let Some(name) = title.strip_prefix("EVE - ") {
@@ -183,7 +183,7 @@ mod tests {
             Focus::of("", "EVE - Nicolas Kion"),
             Focus::Eve(Some("Nicolas Kion".into()))
         );
-        assert_eq!(Focus::of("", "WormholeSystems"), Focus::Us);
+        assert_eq!(Focus::of("", "WormholeSystems Desktop"), Focus::Us);
         assert_eq!(Focus::of("vesktop", "Discord"), Focus::Other);
     }
 }

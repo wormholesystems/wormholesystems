@@ -64,6 +64,11 @@ icons = [
     "assets/icon.ico",
 ]
 
+# The AppImage takes its launcher entry from here too: the display name, with the product
+# name (and so install paths and update bundles) left as they were.
+[package.metadata.packager.deb]
+desktop-template = "assets/wormholesystems.desktop"
+
 # Ad-hoc: Apple silicon will not run unsigned code at all.
 [package.metadata.packager.macos]
 signing-identity = "-"
