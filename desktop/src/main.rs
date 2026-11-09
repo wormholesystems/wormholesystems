@@ -5,6 +5,7 @@ mod alias;
 mod api;
 mod app;
 mod card;
+mod chain;
 mod chatlog;
 mod classes;
 mod config;
@@ -14,8 +15,10 @@ mod hotkeys;
 mod jump;
 #[cfg(not(target_os = "linux"))]
 mod native;
+mod nav;
 mod overlay;
 mod plan;
+mod route;
 mod scan;
 mod sigs;
 mod snap;

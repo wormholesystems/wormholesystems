@@ -9,6 +9,7 @@ use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::hotkeys::Action;
+use crate::overlay::Floating;
 use crate::theme::Appearance;
 
 pub(crate) const DEFAULT_SERVER: &str = "https://wormhole.systems";
@@ -27,6 +28,7 @@ pub(crate) struct Config {
     pub tracked: Option<String>,
     /// Action to the shortcut that triggers it, in `global-hotkey`'s notation
     /// (`control+alt+KeyR`).
+    #[serde(deserialize_with = "known_actions")]
     pub hotkeys: BTreeMap<Action, String>,
     /// What the digits that pick a jump's signature are held with, as in
     /// [`crate::hotkeys::PICK_MODIFIERS`]; empty for bare digits.
@@ -35,9 +37,9 @@ pub(crate) struct Config {
     /// The main window's text size in percent.
     pub text_size: u8,
     pub overlay: Overlay,
-    /// The card on the system you are in, floating like the overlay. Only where it sits, its
-    /// size and whether it is open are its own; it looks and hides like the overlay.
-    pub card: Overlay,
+    /// The cards that float beside the signatures. Only where each sits, its size and whether
+    /// it is open are its own; they look and hide like the overlay.
+    pub cards: BTreeMap<Floating, Overlay>,
     /// How the signature list is filtered and sorted, shared by the window and the overlay.
     pub list: ListView,
 }
@@ -134,20 +136,6 @@ impl Overlay {
     }
 }
 
-impl Overlay {
-    /// The system card where it starts: narrow and tall, top left.
-    pub(crate) fn card() -> Overlay {
-        Overlay {
-            corner: Corner::TopLeft,
-            width: Some(320.0),
-            height: Some(400.0),
-            show_on_paste: false,
-            show_on_jump: false,
-            ..Overlay::default()
-        }
-    }
-}
-
 impl Default for Overlay {
     fn default() -> Self {
         Overlay {
@@ -209,11 +197,32 @@ impl Default for Config {
             appearance: Appearance::System,
             text_size: 100,
             overlay: Overlay::default(),
-            card: Overlay::card(),
+            cards: Floating::CARDS
+                .into_iter()
+                .map(|c| (c, c.default_place()))
+                .collect(),
             list: ListView::default(),
             tracked: None,
         }
     }
+}
+
+/// The shortcuts, leaving out actions this version no longer has rather than refusing the
+/// whole file over one.
+fn known_actions<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<Action, String>, D::Error> {
+    use serde::de::IntoDeserializer as _;
+    let raw = BTreeMap::<String, String>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|(action, key)| {
+            let action = Action::deserialize(action.into_deserializer())
+                .map_err(|_: serde::de::value::Error| ())
+                .ok()?;
+            Some((action, key))
+        })
+        .collect())
 }
 
 pub(crate) fn path() -> Option<PathBuf> {
@@ -237,6 +246,13 @@ impl Config {
                 // user cleared is saved as empty, so it stays cleared.
                 for (action, key) in Action::defaults() {
                     config.hotkeys.entry(action).or_insert(key);
+                }
+                // So do cards added since.
+                for card in Floating::CARDS {
+                    config
+                        .cards
+                        .entry(card)
+                        .or_insert_with(|| card.default_place());
                 }
                 (config, None)
             }
@@ -289,6 +305,16 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_action_since_removed_does_not_lose_the_settings() {
+        let config: Config = toml::from_str(
+            "token = \"wst_kept\"\n[hotkeys]\npaste_scan = \"control+alt+KeyV\"\ngone = \"control+alt+KeyI\"\n",
+        )
+        .unwrap();
+        assert_eq!(config.token, "wst_kept");
+        assert_eq!(config.hotkeys.len(), 1);
+    }
 
     #[test]
     fn a_saved_config_is_private_and_leaves_no_temp_file() {

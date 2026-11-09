@@ -6,8 +6,9 @@ overlay above the game shows that system's signatures and what the paste changed
 deletes what the scan no longer sees with one click or key. When you jump out of the
 chain, the overlay numbers the signatures it could have been; press the number and the
 jump is mapped, with the bookmark for the way back on your clipboard. Keys mark the hole
-you just flew and name the system you are in. A second floating card shows the system
-you are in at a glance: statics, effect, who is there and the latest kills.
+you just flew and name the system you are in. More cards can float beside it: the
+system you are in at a glance, jumps to the watch list and the map's pilots, and the chain
+around you.
 
 ## How it works
 
@@ -47,7 +48,7 @@ you are in at a glance: statics, effect, who is there and the latest kills.
   shell and gets a pop-up window); elsewhere it is a pop-up window.
 
 Default keys: Ctrl+Alt+V pastes the scan, Ctrl+Alt+D deletes what it no longer sees,
-Ctrl+Alt+O shows or hides the overlay, Ctrl+Alt+I the system card, Ctrl+Alt+A names the system, Ctrl+Alt+B copies the
+Ctrl+Alt+O shows or hides the overlay, Ctrl+Alt+A names the system, Ctrl+Alt+B copies the
 bookmark again, and Ctrl+Alt+R, C and E mark the hole reduced, critical or end of life.
 The hole keys wait until a jump's signature is picked.
 

@@ -14,6 +14,7 @@ use super::{DesktopApp, Level, Page, Updater};
 use crate::config::{Corner, Overlay, OverlaySize};
 use crate::focus::{self, Focus};
 use crate::hotkeys::{self, Action, PICK_MODIFIERS};
+use crate::overlay::Floating;
 use crate::sigs;
 use crate::theme::{self, Appearance, HEADING};
 use crate::ui::{self, ButtonState, Kind, rpx};
@@ -371,7 +372,6 @@ impl DesktopApp {
 
     fn tools(&self, theme: &Theme, cx: &mut Context<'_, Self>) -> Div {
         let overlay_open = self.overlay.is_some();
-        let card_open = self.card.is_some();
         let appearance = self.config.appearance;
         let tool = |id: &'static str, path: &'static str, label: &'static str, on: bool| {
             let color = if on {
@@ -412,11 +412,6 @@ impl DesktopApp {
                         this.open_overlay(cx);
                     }
                 })),
-            )
-            .child(div().w(px(1.0)).bg(theme.sidebar_border))
-            .child(
-                tool("toggle-card", "icons/info.svg", "Card", card_open)
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_card(cx))),
             )
             .child(div().w(px(1.0)).bg(theme.sidebar_border))
             .child(
@@ -976,30 +971,50 @@ impl DesktopApp {
     }
 
     fn card_panel(&self, theme: &Theme, cx: &mut Context<'_, Self>) -> Div {
-        panel("System card", theme)
-            .child(muted(
-                "The system you are in at a glance: statics, effect, who is there and the latest kills. It floats like the overlay and looks and hides the way the overlay's settings say.",
+        let mut cards = panel("Cards", theme).child(muted(
+            "More panels that float beside the signatures. Each sits and sizes on its own; they look and hide the way the overlay's settings say.",
+            theme,
+        ));
+        for card in Floating::CARDS {
+            cards = cards.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .text_sm()
+                            .child(card.name())
+                            .child(muted(card.blurb(), theme).text_xs()),
+                    )
+                    .child(
+                        Switch::new(ElementId::from(format!("card-{card:?}")))
+                            .checked(self.card_open(card))
+                            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                                if *checked {
+                                    this.open_card(card, cx);
+                                } else {
+                                    this.close_card(card, cx);
+                                }
+                            })),
+                    ),
+            );
+        }
+        cards.child(setting_row(
+            "Positions and sizes",
+            ui::button(
+                "cards-reset",
+                "Reset",
+                Kind::Normal,
+                ButtonState::Enabled,
                 theme,
-            ))
-            .child(setting_row(
-                "Show the system card",
-                Switch::new("card-open")
-                    .checked(self.card.is_some())
-                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                        if *checked {
-                            this.open_card(cx);
-                        } else {
-                            this.close_card(cx);
-                        }
-                    }))
-                    .into_any_element(),
-            ))
-            .child(setting_row(
-                "Position and size",
-                ui::button("card-reset", "Reset", Kind::Normal, ButtonState::Enabled, theme)
-                    .on_click(cx.listener(|this, _, _, cx| this.reset_card(cx)))
-                    .into_any_element(),
-            ))
+            )
+            .on_click(cx.listener(|this, _, _, cx| this.reset_cards(cx)))
+            .into_any_element(),
+        ))
     }
 
     /// Which characters' clients the overlay shows for, added to its `panel`.

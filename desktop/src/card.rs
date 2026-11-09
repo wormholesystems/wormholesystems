@@ -9,11 +9,12 @@ use chrono::{DateTime, Utc};
 use gpui_kit::component::{ActiveTheme as _, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, Div, Entity, FontWeight, Hsla, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, StatefulInteractiveElement, Styled, div, px, svg,
+    AnyElement, App, Div, ElementId, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
+    MouseButton, ParentElement, Stateful, StatefulInteractiveElement, Styled, div, px, svg,
 };
 
 use crate::api::{EffectModifier, Kill, MapSnapshot, Pilot, PlacedSystem, TimeStatus};
+use crate::overlay::Floating;
 use crate::sigs::{Command, Grab, Sigs};
 use crate::theme::{self, HEADING};
 use crate::ui::rpx;
@@ -44,58 +45,7 @@ pub(crate) fn panel(entity: &Entity<Sigs>, grab: Option<Grab>, cx: &App) -> AnyE
     });
 
     let (title, sub) = title(sigs, &theme);
-    let header = div()
-        .flex_none()
-        .flex()
-        .items_start()
-        .gap_2()
-        .px(pad)
-        .py_2()
-        .border_b_1()
-        .border_color(theme.border)
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap(rpx(2.0))
-                .when_some(grab, |d, grab| {
-                    d.cursor_move()
-                        .on_mouse_down(MouseButton::Left, move |e, w, cx| grab(e, w, cx))
-                })
-                .child(
-                    title
-                        .font_family(HEADING)
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_size(rpx(13.0)),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .truncate()
-                        .text_color(theme.muted_foreground)
-                        .child(sub),
-                ),
-        )
-        .child(
-            div()
-                .id("card-hide")
-                .flex_none()
-                .p_1()
-                .cursor_pointer()
-                .hover(|s| s.bg(theme.muted))
-                .on_click({
-                    let entity = entity.clone();
-                    move |_, _, cx| entity.update(cx, |_, cx| cx.emit(Command::HideCard))
-                })
-                .child(
-                    svg()
-                        .path("icons/x.svg")
-                        .size(rpx(12.0))
-                        .text_color(theme.muted_foreground),
-                ),
-        );
+    let header = header(entity, Floating::System, title, sub, grab, &theme);
 
     let mut body = div().flex().flex_col().gap_3().px(pad).py_2();
     if let (Some(system), Some(snapshot)) = (sigs.system(), sigs.snapshot.as_ref()) {
@@ -135,6 +85,70 @@ pub(crate) fn panel(entity: &Entity<Sigs>, grab: Option<Grab>, cx: &App) -> AnyE
                 .child(body),
         )
         .into_any_element()
+}
+
+/// A card's header: its title over a line about it, dragged by both, and its close button.
+pub(crate) fn header(
+    entity: &Entity<Sigs>,
+    card: Floating,
+    title: Div,
+    sub: String,
+    grab: Option<Grab>,
+    theme: &Theme,
+) -> Div {
+    div()
+        .flex_none()
+        .flex()
+        .items_start()
+        .gap_2()
+        .px(rpx(8.0))
+        .py_2()
+        .border_b_1()
+        .border_color(theme.border)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(rpx(2.0))
+                .when_some(grab, |d, grab| {
+                    d.cursor_move()
+                        .on_mouse_down(MouseButton::Left, move |e, w, cx| grab(e, w, cx))
+                })
+                .child(
+                    title
+                        .font_family(HEADING)
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_size(rpx(13.0)),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .truncate()
+                        .text_color(theme.muted_foreground)
+                        .child(sub),
+                ),
+        )
+        .child(close(entity, card, theme))
+}
+
+/// The close button in a card's header.
+fn close(entity: &Entity<Sigs>, card: Floating, theme: &Theme) -> Stateful<Div> {
+    let entity = entity.clone();
+    div()
+        .id(ElementId::from(format!("hide-{card:?}")))
+        .flex_none()
+        .p_1()
+        .cursor_pointer()
+        .hover(|s| s.bg(theme.muted))
+        .on_click(move |_, _, cx| entity.update(cx, |_, cx| cx.emit(Command::HideCard(card))))
+        .child(
+            svg()
+                .path("icons/x.svg")
+                .size(rpx(12.0))
+                .text_color(theme.muted_foreground),
+        )
 }
 
 /// The class, name and alias, and under it where the system is.

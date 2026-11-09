@@ -394,6 +394,28 @@ pub(crate) struct UserSettings {
     /// List a system's statics first when picking a wormhole's type.
     #[serde(default)]
     pub show_statics_first: bool,
+    #[serde(flatten)]
+    pub route: crate::route::Settings,
+}
+
+/// A system on a watch list.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct WatchEntry {
+    pub solar_system_id: i64,
+    #[serde(default)]
+    pub is_pinned: bool,
+}
+
+/// A solar system by id: enough to name it in a row.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct NamedSystem {
+    pub id: i64,
+    pub name: String,
+    #[serde(default)]
+    pub security: f64,
+    #[serde(default)]
+    pub region: String,
+    pub wormhole_class_id: Option<i64>,
 }
 
 /// One change to a signature, as the website's row makes it.
@@ -454,6 +476,8 @@ pub(crate) struct ResolveGhost {
 #[derive(Deserialize)]
 struct RoutingGraph {
     adjacency: std::collections::HashMap<String, Vec<i64>>,
+    #[serde(default)]
+    security: std::collections::HashMap<String, f64>,
 }
 
 #[derive(Deserialize)]
@@ -655,13 +679,23 @@ impl Client {
 
     /// Which systems each system has a stargate to. A jump along one is travel, never a
     /// new hole.
-    pub(crate) fn stargates(&self) -> Result<std::collections::HashMap<i64, Vec<i64>>> {
+    pub(crate) fn gates(&self) -> Result<crate::route::Gates> {
         let graph: RoutingGraph = self.get("/api/routing-graph")?;
-        Ok(graph
-            .adjacency
-            .into_iter()
-            .filter_map(|(k, v)| Some((k.parse().ok()?, v)))
-            .collect())
+        let parse = |k: String| k.parse::<i64>().ok();
+        Ok(crate::route::Gates {
+            adjacency: std::sync::Arc::new(
+                graph
+                    .adjacency
+                    .into_iter()
+                    .filter_map(|(k, v)| Some((parse(k)?, v)))
+                    .collect(),
+            ),
+            security: graph
+                .security
+                .into_iter()
+                .filter_map(|(k, v)| Some((parse(k)?, v)))
+                .collect(),
+        })
     }
 
     pub(crate) fn user_settings(&self, map_id: i64) -> Result<UserSettings> {
@@ -698,6 +732,54 @@ impl Client {
             .call()
             .with_context(|| format!("could not reach {}", self.base))
             .and_then(|r| Self::read("/api/effects", r))
+    }
+
+    /// The map's watch list and your own on it, pinned ones flagged.
+    pub(crate) fn watchlist(&self, map_id: i64) -> Result<Vec<WatchEntry>> {
+        let mut entries: Vec<WatchEntry> = self.get(&format!("/api/maps/{map_id}/watchlist"))?;
+        let personal: Vec<WatchEntry> = self
+            .get(&format!("/api/maps/{map_id}/watchlist/personal"))
+            .unwrap_or_default();
+        for p in personal {
+            match entries
+                .iter_mut()
+                .find(|e| e.solar_system_id == p.solar_system_id)
+            {
+                Some(e) => e.is_pinned |= p.is_pinned,
+                None => entries.push(p),
+            }
+        }
+        Ok(entries)
+    }
+
+    /// Name systems by id, at most 200 at a time.
+    pub(crate) fn resolve(&self, ids: &[i64]) -> Result<Vec<NamedSystem>> {
+        let mut out = Vec::new();
+        for chunk in ids.chunks(200) {
+            let ids: Vec<String> = chunk.iter().map(ToString::to_string).collect();
+            let mut part: Vec<NamedSystem> =
+                self.get(&format!("/api/systems/resolve?ids={}", ids.join(",")))?;
+            out.append(&mut part);
+        }
+        Ok(out)
+    }
+
+    /// EVE Scout's public holes out of Thera and Turnur.
+    pub(crate) fn evescout(&self) -> Result<Vec<crate::route::ScoutHole>> {
+        self.get("/api/evescout")
+    }
+
+    /// Set a character's autopilot destination, clearing the waypoints it had.
+    pub(crate) fn set_destination(&self, character_id: i64, destination_id: i64) -> Result<()> {
+        let _: Option<()> = self.post(
+            "/api/waypoints",
+            &serde_json::json!({
+                "character_id": character_id,
+                "destination_id": destination_id,
+                "clear_other_waypoints": true,
+            }),
+        )?;
+        Ok(())
     }
 
     /// The map's pilots who are online and tracked.

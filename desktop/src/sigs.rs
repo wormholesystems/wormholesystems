@@ -37,7 +37,9 @@ pub(crate) enum Command {
     Delete(i64),
     ClearReview,
     HideOverlay,
-    HideCard,
+    HideCard(Floating),
+    /// Set the autopilot's destination for the character you follow.
+    SetDestination(i64),
     /// The list's filter or sort changed, to keep.
     SaveList,
     /// Change a signature: its category, type, or the connection it is.
@@ -165,8 +167,12 @@ pub(crate) struct Sigs {
     /// The outcome of the last thing done here, shown in the header for a moment.
     pub notice: Option<Notice>,
     pub overlay: Overlay,
-    /// Where the system card sits; it looks like the overlay.
-    pub card: Overlay,
+    /// Where the cards beside the signatures sit; they look like the overlay.
+    pub cards: std::collections::BTreeMap<Floating, Overlay>,
+    /// What the navigation and chain cards know beyond the map.
+    pub nav: Option<crate::nav::Nav>,
+    /// Routes from where you are, worked out again whenever the chain or the place changes.
+    pub routes: Option<Arc<crate::route::Search>>,
     /// What the system card knows beyond the map: kills, notes, the effect, who is there.
     pub intel: Option<Intel>,
     pub list: ListView,
