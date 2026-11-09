@@ -9,6 +9,7 @@ mod pages;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -559,7 +560,11 @@ impl DesktopApp {
                 Ok(settings) => {
                     this.suggest_alias = settings.suggest_alias;
                     this.cards.route_settings = settings.route.clone();
-                    this.sigs.update(cx, |sigs, _| sigs.routes = None);
+                    let preference = settings.route.preference;
+                    this.sigs.update(cx, |sigs, _| {
+                        sigs.routes = None;
+                        sigs.route_preference = preference;
+                    });
                     this.fetch_nav(cx);
                     this.sigs.update(cx, |sigs, cx| {
                         sigs.statics_first = settings.show_statics_first;
@@ -1146,6 +1151,7 @@ impl DesktopApp {
                     .timer(Duration::from_millis(50))
                     .await;
                 let alive = this.update(cx, |this, cx| {
+                    this.load_images(cx);
                     for press in this.hotkeys.pressed() {
                         match press {
                             Press::Action(action) => this.run(action, cx),
@@ -1929,6 +1935,42 @@ impl DesktopApp {
             }
         }
         cx.notify();
+    }
+
+    /// Fetch the pictures the cards asked for since last time.
+    fn load_images(&mut self, cx: &mut Context<'_, Self>) {
+        let wanted = self.sigs.read(cx).images.take_wanted();
+        if wanted.is_empty() {
+            return;
+        }
+        let agent = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(15)))
+            .build()
+            .new_agent();
+        for url in wanted {
+            let agent = agent.clone();
+            let fetch = cx.background_spawn({
+                let url = url.clone();
+                async move {
+                    let bytes = agent.get(&url).call().ok()?.body_mut().read_to_vec().ok()?;
+                    let format = if bytes.starts_with(b"\x89PNG") {
+                        ImageFormat::Png
+                    } else {
+                        ImageFormat::Jpeg
+                    };
+                    Some(Arc::new(Image::from_bytes(format, bytes)))
+                }
+            });
+            let images = Rc::clone(&self.sigs.read(cx).images);
+            let sigs = self.sigs.downgrade();
+            cx.spawn(async move |_, cx| {
+                if let Some(image) = fetch.await {
+                    images.arrived(url, image);
+                    sigs.update(cx, |_, cx| cx.notify()).ok();
+                }
+            })
+            .detach();
+        }
     }
 
     /// Fetch what the navigation and chain cards show beyond the map, now and again, and

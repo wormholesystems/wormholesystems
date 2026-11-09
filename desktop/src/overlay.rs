@@ -403,7 +403,9 @@ impl OverlayView {
             .w(px(r.w))
             .h(px(r.h))
             .when(self.drag.is_some(), |d| d.border_color(theme.primary))
-            .child(crate::ui::top_line(theme))
+            .when(self.which == Floating::Signatures, |d| {
+                d.child(crate::ui::top_line(theme))
+            })
             .child(self.content(Some(grab), cx))
             .child(
                 canvas(
@@ -456,8 +458,15 @@ impl Render for OverlayView {
         let opacity = f32::from(settings.opacity) / 100.0;
         // Its own window, outside the kit's root, so the text size is set here.
         window.set_rem_size(px(crate::ui::scaled_font(settings.text_size)));
+        // The cards are the website's panels, on its card color.
+        let card = self.which != Floating::Signatures;
+        let base = if card {
+            crate::look::card(&theme)
+        } else {
+            theme.background
+        };
         let chrome = |d: Div| {
-            d.bg(theme.background.opacity(opacity))
+            d.bg(base.opacity(opacity))
                 .border_1()
                 .border_color(theme.border)
                 .text_color(theme.foreground)

@@ -13,6 +13,7 @@ mod focus;
 mod fresh;
 mod hotkeys;
 mod jump;
+mod look;
 #[cfg(not(target_os = "linux"))]
 mod native;
 mod nav;

@@ -234,18 +234,6 @@ impl Search {
     }
 }
 
-/// How a jump count reads: green close by, amber further, red far. The website's
-/// `jumpTone`.
-pub(crate) fn tone(jumps: usize) -> gpui_kit::Hsla {
-    if jumps < 8 {
-        crate::theme::healthy()
-    } else if jumps < 15 {
-        crate::theme::reduced()
-    } else {
-        crate::theme::critical()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

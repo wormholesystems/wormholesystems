@@ -1,6 +1,6 @@
-//! The card on the system you are in: what it is, what it leads to, what it does to ships,
-//! who is there, and what died there lately. It floats over the game like the signatures
-//! overlay and changes with every jump.
+//! The card on the system you are in, the website's System card with its Pilots, Killmails
+//! and Notes beneath: what it is, what it leads to, what it does to ships, who is there,
+//! and what died there lately. It floats over the game and changes with every jump.
 
 use std::fmt::Write as _;
 use std::time::Instant;
@@ -10,17 +10,14 @@ use gpui_kit::component::{ActiveTheme as _, Theme};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, Div, ElementId, Entity, FontWeight, Hsla, InteractiveElement, IntoElement,
-    MouseButton, ParentElement, Stateful, StatefulInteractiveElement, Styled, div, px, svg,
+    ParentElement, StatefulInteractiveElement, Styled, div, px,
 };
 
-use crate::api::{EffectModifier, Kill, MapSnapshot, Pilot, PlacedSystem, TimeStatus};
+use crate::api::{EffectModifier, Kill, MapSnapshot, Pilot, PlacedSystem};
+use crate::look::{self, Images, MONO};
 use crate::overlay::Floating;
-use crate::sigs::{Command, Grab, Sigs};
-use crate::theme::{self, HEADING};
+use crate::sigs::{Grab, Sigs};
 use crate::ui::rpx;
-
-/// How many kills the card lists.
-const KILLS: usize = 5;
 
 /// What the card shows beyond the map, fetched for one system.
 #[derive(Debug, Clone)]
@@ -38,43 +35,45 @@ pub(crate) struct Intel {
 pub(crate) fn panel(entity: &Entity<Sigs>, grab: Option<Grab>, cx: &App) -> AnyElement {
     let theme = cx.theme().clone();
     let sigs = entity.read(cx);
-    let pad = rpx(8.0);
     let intel = sigs.intel.as_ref().filter(|i| {
         sigs.system()
             .is_some_and(|s| s.solar_system_id == i.solar_system_id)
     });
+    let header = look::header(entity, Floating::System, "SYSTEM", None, grab, &theme);
+    // How wide the card is, at the text size it is drawn in, for what fits in a kill's row.
+    let place = Floating::System.place(sigs);
+    let width = place.dimensions().0 * 100.0 / f32::from(sigs.overlay.text_size.max(1));
 
-    let (title, sub) = title(sigs, &theme);
-    let header = header(entity, Floating::System, title, sub, grab, &theme);
-
-    let mut body = div().flex().flex_col().gap_3().px(pad).py_2();
+    let mut body = div().flex().flex_col();
     if let (Some(system), Some(snapshot)) = (sigs.system(), sigs.snapshot.as_ref()) {
+        let here: Vec<&Pilot> = intel
+            .map(|i| i.pilots.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .filter(|p| p.solar_system_id == Some(system.solar_system_id))
+            .collect();
         body = body
-            .children(tags(system, &theme))
+            .child(summary(system, snapshot, &theme))
             .children(statics(system, &theme))
-            .children(effect(system, intel, &theme))
-            .child(scanning(system, snapshot, &theme))
-            .children(intel.and_then(|i| pilots(system, &i.pilots, &theme)))
-            .children(intel.and_then(|i| notes(i, &theme)))
-            .child(kills(intel, &theme));
+            .children(effect(intel, &theme))
+            .children(sovereignty(system, &sigs.images, &theme))
+            .child(pilots(&here, &sigs.images, &theme))
+            .child(kills(intel, &sigs.images, width, &theme))
+            .children(intel.and_then(|i| notes(i, &theme)));
     } else {
         let text = if sigs.here.is_none() {
             "Log in a character; the chat logs say where you are."
         } else {
             "Not on the map, so there is nothing to show yet."
         };
-        body = body.child(
-            div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(text),
-        );
+        body = body.child(empty(text, &theme));
     }
 
     div()
         .size_full()
         .flex()
         .flex_col()
+        .font_family(look::SANS)
         .child(header)
         .child(
             div()
@@ -87,234 +86,134 @@ pub(crate) fn panel(entity: &Entity<Sigs>, grab: Option<Grab>, cx: &App) -> AnyE
         .into_any_element()
 }
 
-/// A card's header: its title over a line about it, dragged by both, and its close button.
-pub(crate) fn header(
-    entity: &Entity<Sigs>,
-    card: Floating,
-    title: Div,
-    sub: String,
-    grab: Option<Grab>,
-    theme: &Theme,
-) -> Div {
+fn empty(text: &'static str, theme: &Theme) -> Div {
     div()
-        .flex_none()
-        .flex()
-        .items_start()
-        .gap_2()
-        .px(rpx(8.0))
-        .py_2()
-        .border_b_1()
-        .border_color(theme.border)
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap(rpx(2.0))
-                .when_some(grab, |d, grab| {
-                    d.cursor_move()
-                        .on_mouse_down(MouseButton::Left, move |e, w, cx| grab(e, w, cx))
-                })
-                .child(
-                    title
-                        .font_family(HEADING)
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_size(rpx(13.0)),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .truncate()
-                        .text_color(theme.muted_foreground)
-                        .child(sub),
-                ),
-        )
-        .child(close(entity, card, theme))
-}
-
-/// The close button in a card's header.
-fn close(entity: &Entity<Sigs>, card: Floating, theme: &Theme) -> Stateful<Div> {
-    let entity = entity.clone();
-    div()
-        .id(ElementId::from(format!("hide-{card:?}")))
-        .flex_none()
-        .p_1()
-        .cursor_pointer()
-        .hover(|s| s.bg(theme.muted))
-        .on_click(move |_, _, cx| entity.update(cx, |_, cx| cx.emit(Command::HideCard(card))))
-        .child(
-            svg()
-                .path("icons/x.svg")
-                .size(rpx(12.0))
-                .text_color(theme.muted_foreground),
-        )
-}
-
-/// The class, name and alias, and under it where the system is.
-fn title(sigs: &Sigs, theme: &Theme) -> (Div, String) {
-    let row = div().flex().items_center().gap_2().min_w_0();
-    let Some(here) = &sigs.here else {
-        return (
-            row.child(
-                div()
-                    .text_color(theme.muted_foreground)
-                    .child("No location"),
-            ),
-            String::new(),
-        );
-    };
-    let Some(system) = sigs.system() else {
-        return (row.child(here.system.clone()), here.character.clone());
-    };
-    let (class, color) = theme::class_meta(system.wormhole_class_id, Some(system.security_status));
-    let row = row
-        .child(div().flex_none().text_color(color).child(class))
-        .when_some(
-            system.alias.clone().filter(|a| !a.trim().is_empty()),
-            |d, alias| d.child(div().flex_none().child(alias)),
-        )
-        .child(
-            div()
-                .truncate()
-                .text_color(theme.muted_foreground)
-                .child(system.name.clone()),
-        );
-    let mut sub = vec![system.region.clone()];
-    if !system.constellation.is_empty() {
-        sub.push(system.constellation.clone());
-    }
-    // Known space and Pochven: the security status matters there.
-    if matches!(system.wormhole_class_id, None | Some(7..=9 | 25)) {
-        sub.push(format!(
-            "{:.1}",
-            crate::classes::ccp_round_security(system.security_status)
-        ));
-    }
-    (row, sub.join(" · "))
-}
-
-/// A small heading over a group of lines.
-fn heading(text: &'static str, theme: &Theme) -> Div {
-    div()
-        .text_xs()
+        .px(rpx(12.0))
+        .py(rpx(16.0))
+        .text_size(rpx(12.0))
         .text_color(theme.muted_foreground)
-        .font_weight(FontWeight::SEMIBOLD)
         .child(text)
 }
 
-fn group(text: &'static str, theme: &Theme) -> Div {
+/// A block of the card with the hairline under it.
+fn block(theme: &Theme) -> Div {
     div()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .text_xs()
-        .child(heading(text, theme))
+        .px(rpx(12.0))
+        .py(rpx(8.0))
+        .border_b_1()
+        .border_color(theme.border.opacity(0.5))
 }
 
-/// A word in a frame: the map's intel at a glance.
-fn tag(text: String, color: Hsla) -> Div {
-    div()
-        .px_1()
-        .border_1()
-        .border_color(color.opacity(0.5))
-        .bg(color.opacity(0.12))
-        .text_color(color)
-        .child(text)
+/// Links out for a system: zKillboard, Dotlan, and Anoikis for a wormhole.
+fn links(system: &PlacedSystem) -> Vec<(&'static str, String)> {
+    let wormhole = system
+        .wormhole_class_id
+        .is_some_and(|c| !matches!(c, 7..=9 | 25));
+    let under = |s: &str| s.replace(' ', "_");
+    let dotlan = if wormhole {
+        format!("https://evemaps.dotlan.net/system/{}", under(&system.name))
+    } else {
+        format!(
+            "https://evemaps.dotlan.net/map/{}/{}",
+            under(&system.region),
+            under(&system.name)
+        )
+    };
+    let mut links = vec![
+        (
+            "zKill",
+            format!("https://zkillboard.com/system/{}/", system.solar_system_id),
+        ),
+        ("Dotlan", dotlan),
+    ];
+    if wormhole {
+        links.push(("Anoik", format!("https://anoik.is/systems/{}", system.name)));
+    }
+    links
 }
 
-/// Home, what the map says about it, its threat, who lives there and who holds it.
-fn tags(system: &PlacedSystem, theme: &Theme) -> Option<Div> {
-    let mut tags = Vec::new();
-    if system.is_home {
-        tags.push(tag("Home".into(), theme.primary));
-    }
-    match system.status.as_deref() {
-        Some("friendly") => tags.push(tag("Friendly".into(), theme::healthy())),
-        Some("hostile") => tags.push(tag("Hostile".into(), theme::critical())),
-        Some("active") => tags.push(tag("Active".into(), theme::reduced())),
-        Some("empty") => tags.push(tag("Empty".into(), theme.muted_foreground)),
-        _ => {}
-    }
-    match system.threat_level.as_deref() {
-        Some("critical") => tags.push(tag("Critical threat".into(), theme::critical())),
-        Some("high") => tags.push(tag("High threat".into(), theme::reduced())),
-        _ => {}
-    }
-    if system.is_shattered {
-        tags.push(tag("Shattered".into(), theme.muted_foreground));
-    }
-    if let Some(group) = system.occupying_group.clone().filter(|g| !g.is_empty()) {
-        tags.push(tag(group, theme.foreground));
-    }
-    if let Some(sov) = &system.sovereignty {
-        let text = match &sov.ticker {
-            Some(ticker) => format!("[{ticker}] {}", sov.name),
-            None => sov.name.clone(),
-        };
-        tags.push(tag(text, theme.foreground));
-    }
-    (!tags.is_empty()).then(|| div().flex().flex_wrap().gap_1().text_xs().children(tags))
-}
-
-/// Each static, where it leads, and how long and how much it lasts.
-fn statics(system: &PlacedSystem, theme: &Theme) -> Option<Div> {
-    if system.statics.is_empty() {
-        return None;
-    }
-    let rows = system.statics.iter().map(|s| {
-        let (dest, color) = theme::dest_class_meta(s.dest_class);
-        let mut facts = Vec::new();
-        if let Some(h) = s.lifetime_hours {
-            facts.push(format!("{h}h"));
-        }
-        if let Some(kg) = s.total_mass {
-            facts.push(format!("{} kt", kilotons(kg)));
-        }
-        if let Some(kg) = s.max_jump_mass {
-            facts.push(format!("{} kt a jump", kilotons(kg)));
-        }
+/// Class and name, the effect, who lives there, where it is and where to read more; then
+/// how far the scanning got.
+fn summary(system: &PlacedSystem, snapshot: &MapSnapshot, theme: &Theme) -> Div {
+    let name = match system.alias.clone().filter(|a| !a.trim().is_empty()) {
+        Some(alias) => look::strong(alias).child(
+            div()
+                .text_color(theme.muted_foreground)
+                .child(format!(" ({})", system.name)),
+        ),
+        None => look::strong(system.name.clone()),
+    };
+    let small = || {
         div()
-            .flex()
-            .gap_2()
-            .child(div().w(rpx(40.0)).child(s.code.clone()))
-            .child(div().w(rpx(32.0)).text_color(color).child(dest))
-            .child(
-                div()
-                    .truncate()
-                    .text_color(theme.muted_foreground)
-                    .child(facts.join(" · ")),
-            )
-    });
-    Some(group("Statics", theme).children(rows))
-}
-
-/// The effect and what it changes.
-fn effect(system: &PlacedSystem, intel: Option<&Intel>, theme: &Theme) -> Option<Div> {
-    let name = system.effect_name.clone()?;
-    let rows = intel
-        .map(|i| i.effect.as_slice())
-        .unwrap_or_default()
-        .iter()
-        .map(|m| {
+            .text_size(rpx(11.0))
+            .text_color(theme.muted_foreground)
+    };
+    let side = |text: String, color: Hsla| {
+        div()
+            .flex_none()
+            .text_size(rpx(10.0))
+            .text_color(color)
+            .child(text)
+    };
+    block(theme)
+        .py(rpx(12.0))
+        .child(
             div()
                 .flex()
+                .items_center()
                 .gap_2()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(theme.muted_foreground)
-                        .child(m.stat.clone()),
+                .min_w_0()
+                .child(look::class_badge(
+                    system.wormhole_class_id,
+                    Some(system.security_status),
+                ))
+                .child(name.flex().min_w_0().truncate())
+                .when_some(system.effect_name.clone(), |d, effect| {
+                    let color = look::effect_color(&effect, theme);
+                    d.child(side(effect, color))
+                })
+                .when(system.is_shattered, |d| {
+                    d.child(side("Shattered".into(), look::amber_500()))
+                }),
+        )
+        .when_some(
+            system.occupying_group.clone().filter(|g| !g.is_empty()),
+            |d, group| {
+                d.child(
+                    small().mt_1().flex().gap_1().child("Occupied by").child(
+                        div()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.foreground)
+                            .child(group),
+                    ),
                 )
-                .child(div().flex_none().child(m.value.clone()))
-        });
-    Some(group("Effect", theme).child(name).children(rows))
+            },
+        )
+        .child(
+            small()
+                .mt_1()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(system.region.clone())
+                .when(!system.constellation.is_empty(), |d| {
+                    d.child(format!("· {}", system.constellation))
+                })
+                .child(div().text_color(theme.border).child("·"))
+                .children(links(system).into_iter().map(|(text, url)| {
+                    div()
+                        .id(ElementId::from(text))
+                        .cursor_pointer()
+                        .hover(|s| s.text_color(theme.foreground))
+                        .on_click(move |_, _, cx| cx.open_url(&url))
+                        .child(text)
+                })),
+        )
+        .child(small().mt_1().child(scanning(system, snapshot)))
 }
 
-/// How far the scanning got, and the holes out of here.
-fn scanning(system: &PlacedSystem, snapshot: &MapSnapshot, theme: &Theme) -> Div {
+/// Signatures and connections in a line.
+fn scanning(system: &PlacedSystem, snapshot: &MapSnapshot) -> String {
     let sigs: Vec<_> = snapshot
         .signatures
         .iter()
@@ -324,150 +223,369 @@ fn scanning(system: &PlacedSystem, snapshot: &MapSnapshot, theme: &Theme) -> Div
         .iter()
         .filter(|s| s.group.is_empty() || s.group == "unknown")
         .count();
+    let holes = snapshot
+        .connections
+        .iter()
+        .filter(|c| c.from_system == system.id || c.to_system == system.id)
+        .count();
     let mut line = match sigs.len() {
-        0 => "No signatures".to_string(),
         1 => "1 signature".to_string(),
         n => format!("{n} signatures"),
     };
     if unknown > 0 {
         let _ = write!(line, ", {unknown} unknown");
     }
+    if holes == 1 {
+        line.push_str(" · 1 connection");
+    } else {
+        let _ = write!(line, " · {holes} connections");
+    }
     if let Some(at) = system.signatures_pasted_at {
-        let _ = write!(line, " · pasted {}", ago(at, Utc::now()));
+        let _ = write!(line, " · pasted {} ago", ago(at, Utc::now()));
     }
-    let holes: Vec<_> = snapshot
-        .connections
-        .iter()
-        .filter(|c| c.from_system == system.id || c.to_system == system.id)
-        .collect();
-    let eol = holes
-        .iter()
-        .filter(|c| matches!(c.time_status, Some(TimeStatus::Eol | TimeStatus::Critical)))
-        .count();
-    let crit = holes
-        .iter()
-        .filter(|c| c.mass_status == Some(crate::api::MassStatus::Critical))
-        .count();
-    let mut holes_line = match holes.len() {
-        0 => "No connections".to_string(),
-        1 => "1 connection".to_string(),
-        n => format!("{n} connections"),
-    };
-    if eol > 0 {
-        let _ = write!(holes_line, ", {eol} end of life");
-    }
-    if crit > 0 {
-        let _ = write!(holes_line, ", {crit} critical");
-    }
-    group("Scanning", theme)
-        .child(line)
-        .child(div().text_color(theme.muted_foreground).child(holes_line))
+    line
 }
 
-/// The map's pilots in this system.
-fn pilots(system: &PlacedSystem, pilots: &[Pilot], theme: &Theme) -> Option<Div> {
-    let here: Vec<_> = pilots
-        .iter()
-        .filter(|p| p.solar_system_id == Some(system.solar_system_id))
-        .collect();
-    if here.is_empty() {
+/// Each static's code in its destination's color, the destination after it.
+fn statics(system: &PlacedSystem, theme: &Theme) -> Option<Div> {
+    if system.statics.is_empty() {
         return None;
     }
-    let rows = here.into_iter().map(|p| {
-        let ship = match (&p.ship_type, p.is_docked) {
-            (Some(ship), true) => format!("{ship}, docked"),
-            (Some(ship), false) => ship.clone(),
-            (None, true) => "docked".into(),
-            (None, false) => String::new(),
-        };
+    let codes = system.statics.iter().map(|s| {
+        let (dest, color) = crate::theme::dest_class_meta(s.dest_class);
         div()
             .flex()
-            .gap_2()
-            .child(
-                div()
-                    .flex_none()
-                    .when(p.is_mine, |d| d.text_color(theme.primary))
-                    .child(p.name.clone()),
-            )
-            .when(!p.corporation_ticker.is_empty(), |d| {
-                d.child(
+            .gap_1()
+            .font_family(MONO)
+            .text_size(rpx(12.0))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(color)
+            .child(s.code.clone())
+            .child(div().opacity(0.6).child(dest.to_uppercase()))
+    });
+    Some(
+        block(theme).child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(look::label("Statics", theme))
+                .child(div().flex().gap(rpx(6.0)).children(codes)),
+        ),
+    )
+}
+
+/// One group of an effect's modifiers, two to a line.
+fn modifiers(label: &'static str, rows: &[&EffectModifier], color: Hsla, theme: &Theme) -> Div {
+    let mut grid = div().flex().flex_wrap().gap_y(rpx(2.0));
+    for m in rows {
+        grid = grid.child(
+            div()
+                .w(gpui_kit::relative(0.5))
+                .pr(rpx(8.0))
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_size(rpx(11.0))
+                .child(div().flex_1().min_w_0().truncate().child(m.stat.clone()))
+                .child(
                     div()
                         .flex_none()
-                        .text_color(theme.muted_foreground)
-                        .child(format!("[{}]", p.corporation_ticker)),
-                )
-            })
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(color)
+                        .child(m.value.clone()),
+                ),
+        );
+    }
+    div()
+        .flex()
+        .flex_col()
+        .gap(rpx(2.0))
+        .child(look::label(label, theme))
+        .child(grid)
+}
+
+/// The effect's buffs and debuffs.
+fn effect(intel: Option<&Intel>, theme: &Theme) -> Option<Div> {
+    let mods = &intel?.effect;
+    if mods.is_empty() {
+        return None;
+    }
+    let buffs: Vec<_> = mods.iter().filter(|m| m.kind == "buff").collect();
+    let debuffs: Vec<_> = mods.iter().filter(|m| m.kind != "buff").collect();
+    Some(
+        block(theme).child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(look::label("Effect", theme))
+                .when(!buffs.is_empty(), |d| {
+                    d.child(modifiers("Buffs", &buffs, look::green_500(), theme))
+                })
+                .when(!debuffs.is_empty(), |d| {
+                    d.child(modifiers("Debuffs", &debuffs, look::red_500(), theme))
+                }),
+        ),
+    )
+}
+
+fn sovereignty(system: &PlacedSystem, images: &Images, theme: &Theme) -> Option<Div> {
+    let sov = system.sovereignty.as_ref()?;
+    let logo = (!sov.kind.is_empty() && sov.id > 0)
+        .then(|| look::picture(images, look::logo(&sov.kind, sov.id), 20.0, theme));
+    Some(
+        block(theme).child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(rpx(6.0))
+                .child(look::label("Sovereignty", theme))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_size(rpx(12.0))
+                        .children(logo)
+                        .when_some(sov.ticker.clone(), |d, t| {
+                            d.child(
+                                div()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child(format!("[{t}]")),
+                            )
+                        })
+                        .child(sov.name.clone()),
+                ),
+        ),
+    )
+}
+
+/// A pilot's row, as the website's Pilots card has it, without where: that is here.
+fn pilot(p: &Pilot, images: &Images, theme: &Theme) -> impl IntoElement {
+    look::row(
+        ElementId::from(("pilot", u64::try_from(p.character_id).unwrap_or(0))),
+        theme,
+    )
+    .child(look::picture(
+        images,
+        look::portrait(p.character_id),
+        20.0,
+        theme,
+    ))
+    .child(
+        div()
+            .flex_none()
+            .w(rpx(112.0))
+            .flex()
+            .items_center()
+            .gap_1()
             .child(
                 div()
                     .truncate()
-                    .text_color(theme.muted_foreground)
-                    .child(ship),
+                    .when(p.is_mine, |d| {
+                        d.font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.foreground)
+                    })
+                    .child(p.name.clone()),
             )
-    });
-    Some(group("Pilots here", theme).children(rows))
+            .when(p.is_docked, |d| {
+                d.child(
+                    div()
+                        .flex_none()
+                        .text_size(rpx(10.0))
+                        .text_color(theme.muted_foreground)
+                        .child("(D)"),
+                )
+            }),
+    )
+    .child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(rpx(6.0))
+            .when_some(p.ship_type_id, |d, id| {
+                d.child(look::picture(images, look::ship(id), 16.0, theme))
+            })
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(MONO)
+                    .text_size(rpx(10.0))
+                    .text_color(theme.muted_foreground)
+                    .child(p.ship_type.clone().unwrap_or_else(|| "Unknown ship".into())),
+            ),
+    )
+}
+
+/// The map's pilots here.
+fn pilots(here: &[&Pilot], images: &Images, theme: &Theme) -> Div {
+    let title = div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(div().size(px(6.0)).rounded_full().bg(look::green_500()))
+        .child("PILOTS HERE")
+        .child(look::count(here.len()));
+    let list = div().flex().flex_col().child(look::band(title, theme));
+    if here.is_empty() {
+        return list.child(empty("Nobody from the map is here.", theme));
+    }
+    list.children(here.iter().map(|p| pilot(p, images, theme)))
+}
+
+/// A kill's row, as the website's Killmails card has it. The value and the time only where
+/// the card is wide enough, as there.
+fn kill(k: &Kill, images: &Images, width: f32, theme: &Theme) -> impl IntoElement {
+    let mono = |d: Div| d.font_family(MONO).text_size(rpx(10.0));
+    let v = &k.victim;
+    let ticker = v
+        .alliance_ticker
+        .clone()
+        .or_else(|| v.corporation_ticker.clone());
+    let crowd = if k.is_npc {
+        theme.muted_foreground.opacity(0.5)
+    } else if k.is_solo {
+        look::amber_400()
+    } else {
+        theme.muted_foreground
+    };
+    let (value, tone, weight) = isk_tone(k.total_value, theme);
+    let url = format!("https://zkillboard.com/kill/{}/", k.id);
+    look::row(
+        ElementId::from(("kill", u64::try_from(k.id).unwrap_or(0))),
+        theme,
+    )
+    .cursor_pointer()
+    .on_click(move |_, _, cx| cx.open_url(&url))
+    .child(
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_1()
+            .when_some(v.ship_type_id, |d, id| {
+                d.child(look::picture(images, look::ship(id), 20.0, theme))
+            })
+            .when_some(v.character_id, |d, id| {
+                d.child(look::picture(images, look::portrait(id), 20.0, theme))
+            }),
+    )
+    .child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(
+                div()
+                    .truncate()
+                    .child(v.ship_name.clone().unwrap_or_else(|| "Unknown ship".into())),
+            )
+            .when_some(ticker, |d, t| {
+                d.child(
+                    mono(div())
+                        .flex_none()
+                        .text_color(theme.muted_foreground)
+                        .child(format!("[{t}]")),
+                )
+            }),
+    )
+    .child(
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(rpx(6.0))
+            .when_some(k.final_blow.ship_type_id, |d, id| {
+                d.child(look::picture(images, look::ship(id), 16.0, theme))
+            })
+            .child(
+                mono(div())
+                    .text_color(crowd)
+                    .child(k.attacker_count.to_string()),
+            ),
+    )
+    .when(width >= 380.0, |d| {
+        d.child(
+            mono(div())
+                .flex_none()
+                .w(rpx(56.0))
+                .flex()
+                .justify_end()
+                .text_color(tone)
+                .font_weight(weight)
+                .child(value),
+        )
+    })
+    .when(width >= 480.0, |d| {
+        d.child(
+            mono(div())
+                .flex_none()
+                .w(rpx(56.0))
+                .flex()
+                .justify_end()
+                .text_color(theme.muted_foreground.opacity(0.6))
+                .child(format!("{} ago", ago(k.time, Utc::now()))),
+        )
+    })
+}
+
+/// The killmails here in the last week.
+fn kills(intel: Option<&Intel>, images: &Images, width: f32, theme: &Theme) -> Div {
+    let n = intel.map_or(0, |i| i.kills.len());
+    let title = div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .child("KILLMAILS")
+        .when(n > 0, |d| d.child(look::count(n)));
+    let list = div().flex().flex_col().child(look::band(title, theme));
+    let Some(intel) = intel else {
+        return list.child(empty("Loading…", theme));
+    };
+    if intel.kills.is_empty() {
+        return list.child(empty(
+            "Nothing has died in this system in the last week.",
+            theme,
+        ));
+    }
+    list.children(intel.kills.iter().map(|k| kill(k, images, width, theme)))
+}
+
+/// How loudly a loss reads: routine, a good ship, a capital.
+fn isk_tone(value: Option<f64>, theme: &Theme) -> (String, Hsla, FontWeight) {
+    match value {
+        None => (
+            "--".into(),
+            theme.muted_foreground.opacity(0.6),
+            FontWeight::NORMAL,
+        ),
+        Some(v) if v >= 10e9 => (isk(v), look::red_400(), FontWeight::SEMIBOLD),
+        Some(v) if v >= 1e9 => (isk(v), look::amber_400(), FontWeight::SEMIBOLD),
+        Some(v) => (isk(v), theme.muted_foreground, FontWeight::NORMAL),
+    }
 }
 
 fn notes(intel: &Intel, theme: &Theme) -> Option<Div> {
     let notes = intel.notes.clone()?;
-    Some(group("Notes", theme).child(div().text_color(theme.foreground).child(notes)))
-}
-
-/// The latest kills, or that there were none.
-fn kills(intel: Option<&Intel>, theme: &Theme) -> Div {
-    let group = group("Recent kills", theme);
-    let Some(intel) = intel else {
-        return group.child(div().text_color(theme.muted_foreground).child("Loading…"));
-    };
-    if intel.kills.is_empty() {
-        return group.child(
-            div()
-                .text_color(theme.muted_foreground)
-                .child("None lately"),
-        );
-    }
-    let now = Utc::now();
-    let rows = intel.kills.iter().take(KILLS).map(|k| {
-        let who = victim(k);
-        let value = k.total_value.map(isk).unwrap_or_default();
+    Some(
         div()
             .flex()
-            .gap_2()
-            .when(k.is_npc, |d| d.opacity(0.6))
+            .flex_col()
+            .child(look::band("NOTES", theme))
             .child(
                 div()
-                    .flex_none()
-                    .w(rpx(28.0))
-                    .text_color(theme.muted_foreground)
-                    .child(ago(k.time, now)),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .child(k.victim.ship_name.clone().unwrap_or_else(|| "?".into())),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(theme.muted_foreground)
-                    .child(who),
-            )
-            .child(div().flex_none().w(px(36.0)).child(value))
-    });
-    group.children(rows)
-}
-
-/// Who died: the pilot and their ticker, else the corporation or alliance.
-fn victim(kill: &Kill) -> String {
-    let v = &kill.victim;
-    let ticker = v.alliance_ticker.as_ref().or(v.corporation_ticker.as_ref());
-    match (&v.character_name, ticker) {
-        (Some(name), Some(t)) => format!("{name} [{t}]"),
-        (Some(name), None) => name.clone(),
-        (None, Some(t)) => format!("[{t}]"),
-        (None, None) => String::new(),
-    }
+                    .px(rpx(12.0))
+                    .py(rpx(8.0))
+                    .text_size(rpx(12.0))
+                    .child(notes),
+            ),
+    )
 }
 
 /// How long ago, at column width: `now`, `47m`, `3h`, `2d`.
@@ -477,26 +595,6 @@ pub(crate) fn ago(when: DateTime<Utc>, now: DateTime<Utc>) -> String {
         m if m < 60 => format!("{m}m"),
         m if m < 24 * 60 => format!("{}h", m / 60),
         m => format!("{}d", m / (24 * 60)),
-    }
-}
-
-/// Kilograms as kilotons, grouped, one decimal at most: `2,000`, `62.5`.
-fn kilotons(kg: f64) -> String {
-    let kt = (kg / 100_000.0).round() / 10.0;
-    let whole = kt.trunc();
-    let tenth = ((kt - whole) * 10.0).round();
-    let digits = format!("{whole:.0}");
-    let mut grouped = String::new();
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            grouped.push(',');
-        }
-        grouped.push(c);
-    }
-    if tenth > 0.0 {
-        format!("{grouped}.{tenth}")
-    } else {
-        grouped
     }
 }
 
@@ -522,10 +620,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn writes_masses_and_isk_like_the_website() {
-        assert_eq!(kilotons(2_000_000_000.0), "2,000");
-        assert_eq!(kilotons(62_500_000.0), "62.5");
-        assert_eq!(kilotons(375_000_000.0), "375");
+    fn writes_isk_like_the_website() {
         assert_eq!(isk(2_400_000.0), "2.4M");
         assert_eq!(isk(340_000_000.0), "340M");
         assert_eq!(isk(1_250_000_000.0), "1.3B");

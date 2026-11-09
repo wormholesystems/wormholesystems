@@ -121,8 +121,6 @@ pub(crate) struct PlacedSystem {
     pub is_shattered: bool,
     #[serde(default)]
     pub is_home: bool,
-    /// `unknown`, `high` or `critical`, from the daily kill analysis; wormholes only.
-    pub threat_level: Option<String>,
     /// Whoever lives there, by the map's intel.
     pub occupying_group: Option<String>,
     /// What the map says about it: `friendly`, `hostile`, `empty`, ...
@@ -140,18 +138,16 @@ pub(crate) struct Static {
     /// Where it leads, as a class id; `None` for the few with no fixed destination.
     #[serde(default)]
     pub dest_class: Option<i64>,
-    #[serde(default)]
-    pub lifetime_hours: Option<f64>,
-    /// Kilograms, all told and per jump.
-    #[serde(default)]
-    pub total_mass: Option<f64>,
-    #[serde(default)]
-    pub max_jump_mass: Option<f64>,
 }
 
 /// Who holds a system: an alliance, a corporation (both with a ticker), or an NPC faction.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct Sovereignty {
+    /// `alliance`, `corporation` or `faction`: which image server path has its logo.
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub id: i64,
     pub name: String,
     #[serde(default)]
     pub ticker: Option<String>,
@@ -160,8 +156,15 @@ pub(crate) struct Sovereignty {
 /// A recent kill, as the map's kill card lists it.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct Kill {
+    pub id: i64,
     pub time: chrono::DateTime<chrono::Utc>,
     pub victim: KillParty,
+    #[serde(default)]
+    pub final_blow: KillParty,
+    #[serde(default)]
+    pub attacker_count: i64,
+    #[serde(default)]
+    pub is_solo: bool,
     #[serde(default)]
     pub total_value: Option<f64>,
     #[serde(default)]
@@ -170,7 +173,8 @@ pub(crate) struct Kill {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct KillParty {
-    pub character_name: Option<String>,
+    pub character_id: Option<i64>,
+    pub ship_type_id: Option<i64>,
     pub corporation_ticker: Option<String>,
     pub alliance_ticker: Option<String>,
     pub ship_name: Option<String>,
@@ -179,6 +183,9 @@ pub(crate) struct KillParty {
 /// A buff or debuff a wormhole effect applies at the system's class.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct EffectModifier {
+    /// `buff` or `debuff`.
+    #[serde(default)]
+    pub kind: String,
     pub stat: String,
     pub value: String,
 }
@@ -186,9 +193,9 @@ pub(crate) struct EffectModifier {
 /// A pilot on the map: online, tracked, and where.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct Pilot {
+    pub character_id: i64,
+    pub ship_type_id: Option<i64>,
     pub name: String,
-    #[serde(default)]
-    pub corporation_ticker: String,
     pub solar_system_id: Option<i64>,
     pub ship_type: Option<String>,
     #[serde(default)]
@@ -226,6 +233,9 @@ pub(crate) struct Connection {
     pub preserve_mass: bool,
     #[serde(default)]
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// The biggest ship it takes, once somebody has said.
+    #[serde(default)]
+    pub size: Option<WormholeSize>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -416,6 +426,8 @@ pub(crate) struct NamedSystem {
     #[serde(default)]
     pub region: String,
     pub wormhole_class_id: Option<i64>,
+    #[serde(default)]
+    pub statics: Vec<Static>,
 }
 
 /// One change to a signature, as the website's row makes it.

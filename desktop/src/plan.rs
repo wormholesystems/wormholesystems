@@ -403,6 +403,7 @@ mod tests {
             time_status: None,
             preserve_mass: false,
             created_at: None,
+            size: None,
         }
     }
 

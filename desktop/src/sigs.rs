@@ -171,6 +171,12 @@ pub(crate) struct Sigs {
     pub cards: std::collections::BTreeMap<Floating, Overlay>,
     /// What the navigation and chain cards know beyond the map.
     pub nav: Option<crate::nav::Nav>,
+    /// The chain card's drawing area at its last paint, in pixels, which its next layout uses.
+    pub chain_area: Rc<std::cell::Cell<Option<(f32, f32)>>>,
+    /// Pictures from EVE's image server the cards show.
+    pub images: Rc<crate::look::Images>,
+    /// How your routes are worked out, for the navigation card's title.
+    pub route_preference: crate::route::Preference,
     /// Routes from where you are, worked out again whenever the chain or the place changes.
     pub routes: Option<Arc<crate::route::Search>>,
     /// What the system card knows beyond the map: kills, notes, the effect, who is there.
