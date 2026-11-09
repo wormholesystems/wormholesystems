@@ -4,6 +4,7 @@
 mod alias;
 mod api;
 mod app;
+mod card;
 mod chatlog;
 mod classes;
 mod config;

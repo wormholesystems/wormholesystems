@@ -371,6 +371,7 @@ impl DesktopApp {
 
     fn tools(&self, theme: &Theme, cx: &mut Context<'_, Self>) -> Div {
         let overlay_open = self.overlay.is_some();
+        let card_open = self.card.is_some();
         let appearance = self.config.appearance;
         let tool = |id: &'static str, path: &'static str, label: &'static str, on: bool| {
             let color = if on {
@@ -411,6 +412,11 @@ impl DesktopApp {
                         this.open_overlay(cx);
                     }
                 })),
+            )
+            .child(div().w(px(1.0)).bg(theme.sidebar_border))
+            .child(
+                tool("toggle-card", "icons/info.svg", "Card", card_open)
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_card(cx))),
             )
             .child(div().w(px(1.0)).bg(theme.sidebar_border))
             .child(
@@ -667,6 +673,7 @@ impl DesktopApp {
         let maps = self.maps_panel(&theme, cx);
         let logs = self.logs_panel(&theme, cx);
         let overlay = self.overlay_panel(&theme, cx);
+        let card = self.card_panel(&theme, cx);
         let looks = self.looks_panel(&theme, cx);
         let about = self.about_panel(&theme, cx);
 
@@ -680,6 +687,7 @@ impl DesktopApp {
             .children(maps)
             .child(logs)
             .child(overlay)
+            .child(card)
             .child(looks)
             .child(about)
             .into_any_element()
@@ -965,6 +973,33 @@ impl DesktopApp {
             overlay = self.overlay_characters(overlay, &o, theme, cx);
         }
         overlay
+    }
+
+    fn card_panel(&self, theme: &Theme, cx: &mut Context<'_, Self>) -> Div {
+        panel("System card", theme)
+            .child(muted(
+                "The system you are in at a glance: statics, effect, who is there and the latest kills. It floats like the overlay and looks and hides the way the overlay's settings say.",
+                theme,
+            ))
+            .child(setting_row(
+                "Show the system card",
+                Switch::new("card-open")
+                    .checked(self.card.is_some())
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        if *checked {
+                            this.open_card(cx);
+                        } else {
+                            this.close_card(cx);
+                        }
+                    }))
+                    .into_any_element(),
+            ))
+            .child(setting_row(
+                "Position and size",
+                ui::button("card-reset", "Reset", Kind::Normal, ButtonState::Enabled, theme)
+                    .on_click(cx.listener(|this, _, _, cx| this.reset_card(cx)))
+                    .into_any_element(),
+            ))
     }
 
     /// Which characters' clients the overlay shows for, added to its `panel`.

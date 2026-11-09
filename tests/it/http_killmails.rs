@@ -88,3 +88,34 @@ async fn the_selected_system_filter_shows_only_that_system() {
         "a system off the map has nothing to show here"
     );
 }
+
+/// Asking for one system's kills gets just those, whatever the card is set to.
+#[tokio::test]
+async fn only_system_ignores_the_setting() {
+    let (pool, _db) = common::db::fresh().await;
+    let w = world(&pool).await;
+    for system in [SYS_A, SYS_B] {
+        add_system(
+            &pool,
+            w.owner,
+            AddSystem {
+                map_id: w.map_id,
+                solar_system_id: system,
+                x: 0.0,
+                y: 0.0,
+                alias: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    kills(&pool, &[1, 2], SYS_A).await;
+    kills(&pool, &[3], SYS_B).await;
+
+    let cookie = session_cookie(&pool, w.owner).await;
+    let path = format!(
+        "/api/maps/{}/killmails?solar_system_id={SYS_B}&only_system=true",
+        w.map_id
+    );
+    assert_eq!(listed(&pool, &cookie, &path).await, vec![3]);
+}

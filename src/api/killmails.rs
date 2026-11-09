@@ -22,6 +22,10 @@ pub struct KillmailsQuery {
     /// selection; the server keeps no idea of what a viewer has selected.
     #[serde(default)]
     pub solar_system_id: Option<i64>,
+    /// Only that system's kills, whatever the card is set to. The desktop app's system card
+    /// asks this way for where the pilot is.
+    #[serde(default)]
+    pub only_system: bool,
 }
 
 /// `GET /api/maps/{id}/killmails`, recent kills in this map's systems, newest first.
@@ -44,6 +48,7 @@ pub async fn map_killmails(
     let reader = read_map_as(&state, &creds, map_id, &share).await?;
     // Which kills to show is a per-user preference, and a watcher has nowhere to keep one.
     let scope = match reader.actor {
+        _ if query.only_system => crate::maps::KillmailScope::SelectedSystem,
         Some(actor) => sqlx::query_scalar!(
             "select killmail_filter from map_user_settings where map_id = $1 and user_id = $2",
             map_id,

@@ -35,6 +35,9 @@ pub(crate) struct Config {
     /// The main window's text size in percent.
     pub text_size: u8,
     pub overlay: Overlay,
+    /// The card on the system you are in, floating like the overlay. Only where it sits, its
+    /// size and whether it is open are its own; it looks and hides like the overlay.
+    pub card: Overlay,
     /// How the signature list is filtered and sorted, shared by the window and the overlay.
     pub list: ListView,
 }
@@ -131,6 +134,20 @@ impl Overlay {
     }
 }
 
+impl Overlay {
+    /// The system card where it starts: narrow and tall, top left.
+    pub(crate) fn card() -> Overlay {
+        Overlay {
+            corner: Corner::TopLeft,
+            width: Some(320.0),
+            height: Some(400.0),
+            show_on_paste: false,
+            show_on_jump: false,
+            ..Overlay::default()
+        }
+    }
+}
+
 impl Default for Overlay {
     fn default() -> Self {
         Overlay {
@@ -192,6 +209,7 @@ impl Default for Config {
             appearance: Appearance::System,
             text_size: 100,
             overlay: Overlay::default(),
+            card: Overlay::card(),
             list: ListView::default(),
             tracked: None,
         }

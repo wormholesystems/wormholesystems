@@ -95,7 +95,7 @@ pub(crate) struct MapInfo {
 
 /// A placed system. Ghosts (holes nobody has flown yet) are kept apart as [`Ghost`]s:
 /// nothing can be jumped into one, but a jump can say which system it was.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct PlacedSystem {
     pub id: i64,
     pub solar_system_id: i64,
@@ -114,12 +114,92 @@ pub(crate) struct PlacedSystem {
     pub position_y: f64,
     #[serde(default)]
     pub statics: Vec<Static>,
+    #[serde(default)]
+    pub constellation: String,
+    pub effect_name: Option<String>,
+    #[serde(default)]
+    pub is_shattered: bool,
+    #[serde(default)]
+    pub is_home: bool,
+    /// `unknown`, `high` or `critical`, from the daily kill analysis; wormholes only.
+    pub threat_level: Option<String>,
+    /// Whoever lives there, by the map's intel.
+    pub occupying_group: Option<String>,
+    /// What the map says about it: `friendly`, `hostile`, `empty`, ...
+    #[serde(default)]
+    pub status: Option<String>,
+    pub sovereignty: Option<Sovereignty>,
+    /// When a scan was last pasted here.
+    pub signatures_pasted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// A wormhole a system always has.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct Static {
     pub code: String,
+    /// Where it leads, as a class id; `None` for the few with no fixed destination.
+    #[serde(default)]
+    pub dest_class: Option<i64>,
+    #[serde(default)]
+    pub lifetime_hours: Option<f64>,
+    /// Kilograms, all told and per jump.
+    #[serde(default)]
+    pub total_mass: Option<f64>,
+    #[serde(default)]
+    pub max_jump_mass: Option<f64>,
+}
+
+/// Who holds a system: an alliance, a corporation (both with a ticker), or an NPC faction.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct Sovereignty {
+    pub name: String,
+    #[serde(default)]
+    pub ticker: Option<String>,
+}
+
+/// A recent kill, as the map's kill card lists it.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct Kill {
+    pub time: chrono::DateTime<chrono::Utc>,
+    pub victim: KillParty,
+    #[serde(default)]
+    pub total_value: Option<f64>,
+    #[serde(default)]
+    pub is_npc: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct KillParty {
+    pub character_name: Option<String>,
+    pub corporation_ticker: Option<String>,
+    pub alliance_ticker: Option<String>,
+    pub ship_name: Option<String>,
+}
+
+/// A buff or debuff a wormhole effect applies at the system's class.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct EffectModifier {
+    pub stat: String,
+    pub value: String,
+}
+
+/// A pilot on the map: online, tracked, and where.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct Pilot {
+    pub name: String,
+    #[serde(default)]
+    pub corporation_ticker: String,
+    pub solar_system_id: Option<i64>,
+    pub ship_type: Option<String>,
+    #[serde(default)]
+    pub is_docked: bool,
+    #[serde(default)]
+    pub is_mine: bool,
+}
+
+#[derive(Deserialize)]
+struct SystemDetails {
+    notes: Option<String>,
 }
 
 /// A hole drawn on the map that nobody has been through, so its system is unknown.
@@ -594,6 +674,37 @@ impl Client {
         Ok(list.into_iter().map(|i| i.solar_system_id).collect())
     }
 
+    /// The latest kills in a system on the map, newest first.
+    pub(crate) fn kills(&self, map_id: i64, solar_system_id: i64) -> Result<Vec<Kill>> {
+        self.get(&format!(
+            "/api/maps/{map_id}/killmails?solar_system_id={solar_system_id}&only_system=true"
+        ))
+    }
+
+    /// The map's notes on a placed system. Viewers may not read them, which is `None` too.
+    pub(crate) fn notes(&self, map_id: i64, placement: i64) -> Result<Option<String>> {
+        let details: SystemDetails =
+            self.get(&format!("/api/maps/{map_id}/systems/{placement}/details"))?;
+        Ok(details.notes.filter(|n| !n.trim().is_empty()))
+    }
+
+    /// What a wormhole effect does at a class.
+    pub(crate) fn effect(&self, name: &str, class: i64) -> Result<Vec<EffectModifier>> {
+        self.agent
+            .get(&self.url("/api/effects"))
+            .query("name", name)
+            .query("class", class.to_string())
+            .header("Authorization", &format!("Bearer {}", self.token))
+            .call()
+            .with_context(|| format!("could not reach {}", self.base))
+            .and_then(|r| Self::read("/api/effects", r))
+    }
+
+    /// The map's pilots who are online and tracked.
+    pub(crate) fn pilots(&self, map_id: i64) -> Result<Vec<Pilot>> {
+        self.get(&format!("/api/maps/{map_id}/characters"))
+    }
+
     /// The system called exactly `name`, ignoring case.
     pub(crate) fn find_system(&self, name: &str) -> Result<Option<SystemHit>> {
         let hits: Vec<SystemHit> = self
@@ -767,7 +878,7 @@ mod tests {
             security_status: 0.0,
             position_x: 0.0,
             position_y: 0.0,
-            statics: Vec::new(),
+            ..Default::default()
         }
     }
 

@@ -20,6 +20,7 @@ pub(crate) enum Action {
     PasteScan,
     DeleteMissing,
     ToggleOverlay,
+    ToggleCard,
     SetAlias,
     CopyBookmark,
     MassReduced,
@@ -30,10 +31,11 @@ pub(crate) enum Action {
 }
 
 impl Action {
-    pub(crate) const ALL: [Action; 10] = [
+    pub(crate) const ALL: [Action; 11] = [
         Action::PasteScan,
         Action::DeleteMissing,
         Action::ToggleOverlay,
+        Action::ToggleCard,
         Action::SetAlias,
         Action::CopyBookmark,
         Action::MassReduced,
@@ -48,6 +50,7 @@ impl Action {
             Action::PasteScan => "Paste the scan in the clipboard",
             Action::DeleteMissing => "Delete what the scan no longer sees",
             Action::ToggleOverlay => "Show or hide the overlay",
+            Action::ToggleCard => "Show or hide the system card",
             Action::SetAlias => "Name the system you are in",
             Action::CopyBookmark => "Copy the bookmark again",
             Action::MassReduced => "Mass reduced",
@@ -72,6 +75,7 @@ impl Action {
             Action::PasteScan
             | Action::DeleteMissing
             | Action::ToggleOverlay
+            | Action::ToggleCard
             | Action::SetAlias
             | Action::CopyBookmark => None,
             Action::MassReduced => Some(mass(MassStatus::Reduced)),
@@ -88,6 +92,7 @@ impl Action {
             (Action::PasteScan, "control+alt+KeyV"),
             (Action::DeleteMissing, "control+alt+KeyD"),
             (Action::ToggleOverlay, "control+alt+KeyO"),
+            (Action::ToggleCard, "control+alt+KeyI"),
             (Action::SetAlias, "control+alt+KeyA"),
             (Action::CopyBookmark, "control+alt+KeyB"),
             (Action::MassReduced, "control+alt+KeyR"),

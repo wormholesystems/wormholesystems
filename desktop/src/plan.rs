@@ -385,7 +385,7 @@ mod tests {
             security_status: if class == 7 { 0.9 } else { -1.0 },
             position_x: 0.0,
             position_y: 0.0,
-            statics: Vec::new(),
+            ..Default::default()
         }
     }
 

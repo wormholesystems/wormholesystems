@@ -22,8 +22,10 @@ use crate::api::{
     Connection, MapSnapshot, MassStatus, PlacedSystem, Signature, SignatureCatalog, SignatureEdit,
     SignatureType, TimeStatus,
 };
+use crate::card::Intel;
 use crate::classes;
 use crate::config::{ListView, Overlay, SortColumn};
+use crate::overlay::Floating;
 use crate::theme::{self, HEADING};
 use crate::ui::{self, ButtonState, Kind, Notice, rpx};
 
@@ -35,6 +37,7 @@ pub(crate) enum Command {
     Delete(i64),
     ClearReview,
     HideOverlay,
+    HideCard,
     /// The list's filter or sort changed, to keep.
     SaveList,
     /// Change a signature: its category, type, or the connection it is.
@@ -45,8 +48,9 @@ pub(crate) enum Command {
     CopyBookmark(i64),
     /// Leave the jump off the map.
     SkipJump,
-    /// The overlay was dragged or resized to this: top-left corner and size.
+    /// A floating panel was dragged or resized to this: top-left corner and size.
     PlaceOverlay {
+        which: Floating,
         x: f32,
         y: f32,
         width: f32,
@@ -161,6 +165,10 @@ pub(crate) struct Sigs {
     /// The outcome of the last thing done here, shown in the header for a moment.
     pub notice: Option<Notice>,
     pub overlay: Overlay,
+    /// Where the system card sits; it looks like the overlay.
+    pub card: Overlay,
+    /// What the system card knows beyond the map: kills, notes, the effect, who is there.
+    pub intel: Option<Intel>,
     pub list: ListView,
     pub ask: Option<Ask>,
     /// How the pick keys read before the digit, `Ctrl+Alt+`.
@@ -461,13 +469,7 @@ fn age(sig: &Signature, connection: Option<&Connection>, now: DateTime<Utc>) -> 
     } else {
         sig.updated_at
     };
-    let minutes = (now - since).num_minutes();
-    match minutes {
-        m if m < 1 => "now".into(),
-        m if m < 60 => format!("{m}m"),
-        m if m < 24 * 60 => format!("{}h", m / 60),
-        m => format!("{}d", m / (24 * 60)),
-    }
+    crate::card::ago(since, now)
 }
 
 /// The age's color: the hole's mass first, then its lifetime, where the signature's own

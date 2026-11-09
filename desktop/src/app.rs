@@ -21,13 +21,14 @@ use gpui_kit::{
 use crate::alias;
 use crate::api::NameBookmark;
 use crate::api::{Beat, Client, MapEntry, MapSnapshot, SignatureCatalog, SignatureEdit};
+use crate::card::Intel;
 use crate::chatlog::{self, ChatEvent, Watcher};
-use crate::config::Config;
+use crate::config::{Config, Overlay};
 use crate::focus::{self, Focus};
 use crate::fresh::Freshness;
 use crate::hotkeys::{self, Action, Press, Registry};
 use crate::jump::Grid;
-use crate::overlay;
+use crate::overlay::{self, Floating};
 use crate::plan::{
     JumpContext, LastJump, LoneGhost, Plan, bookmark_for, landed_on, plan_jump, submit,
 };
@@ -38,6 +39,8 @@ use crate::ui::{self, Mood, Notice};
 
 /// How often the map and its signatures are fetched again.
 const REFRESH: Duration = Duration::from_secs(5);
+/// How long the system card's kills and pilots are good for while you stay put.
+const INTEL: Duration = Duration::from_secs(30);
 /// How often the server hears which characters' jumps this app maps. It lets them go after a
 /// few missed beats, and the website maps them again.
 const HEARTBEAT: Duration = Duration::from_secs(30);
@@ -149,6 +152,9 @@ pub(crate) struct DesktopApp {
     hotkeys: Registry,
     clipboard: Option<arboard::Clipboard>,
     overlay: Option<AnyWindowHandle>,
+    card: Option<AnyWindowHandle>,
+    /// The system the card's intel is being fetched for.
+    intel_for: Option<i64>,
     /// A newer release, from the last check.
     update: Option<crate::update::Available>,
     updater: Updater,
@@ -194,6 +200,7 @@ impl DesktopApp {
         });
         let sigs = cx.new(|_| Sigs {
             overlay: config.overlay.clone(),
+            card: config.card.clone(),
             list: config.list.clone(),
             pick_prefix: hotkeys::pick_prefix(&config.pick_modifiers),
             ..Default::default()
@@ -204,7 +211,6 @@ impl DesktopApp {
         let mut hotkeys = Registry::new();
         let refused = hotkeys.apply(&config.hotkeys);
         let clipboard = arboard::Clipboard::new().ok();
-        let open_overlay = config.overlay.open;
 
         let mut this = DesktopApp {
             config,
@@ -241,6 +247,8 @@ impl DesktopApp {
             hotkeys,
             clipboard,
             overlay: None,
+            card: None,
+            intel_for: None,
             update: None,
             updater: Updater::Idle,
             update_note: None,
@@ -267,10 +275,18 @@ impl DesktopApp {
         } else {
             this.connect(cx);
         }
-        if open_overlay {
-            this.open_overlay(cx);
-        }
+        this.reopen(cx);
         this
+    }
+
+    /// Bring back the floating panels that were up when the app last quit.
+    fn reopen(&mut self, cx: &mut Context<'_, Self>) {
+        if self.config.overlay.open {
+            self.open_overlay(cx);
+        }
+        if self.config.card.open {
+            self.open_card(cx);
+        }
     }
 
     fn subscribe(
@@ -492,6 +508,7 @@ impl DesktopApp {
                         sigs.snapshot = Some(snapshot);
                         cx.notify();
                     });
+                    this.fetch_intel(cx);
                 })
                 .ok();
             }
@@ -758,6 +775,7 @@ impl DesktopApp {
                 cx.notify();
             }
         });
+        self.fetch_intel(cx);
     }
 
     // Jumps.
@@ -1127,6 +1145,7 @@ impl DesktopApp {
             Action::PasteScan => return self.paste(cx),
             Action::DeleteMissing => return self.delete_missing(cx),
             Action::ToggleOverlay => return self.toggle_overlay(cx),
+            Action::ToggleCard => return self.toggle_card(cx),
             Action::SetAlias => return self.open_alias(cx),
             _ => {}
         }
@@ -1256,15 +1275,20 @@ impl DesktopApp {
                 cx.notify();
             }),
             Command::HideOverlay => self.close_overlay(cx),
+            Command::HideCard => self.close_card(cx),
             Command::Pick(index) => self.pick(index, cx),
             Command::SkipJump => self.skip_jump(cx),
             Command::PlaceOverlay {
+                which,
                 x,
                 y,
                 width,
                 height,
             } => {
-                let o = &mut self.config.overlay;
+                let o = match which {
+                    Floating::Signatures => &mut self.config.overlay,
+                    Floating::System => &mut self.config.card,
+                };
                 (o.x, o.y) = (Some(x), Some(y));
                 if o.dimensions() != (width, height) {
                     (o.width, o.height) = (Some(width), Some(height));
@@ -1767,10 +1791,17 @@ impl DesktopApp {
         self.remove_overlay(cx);
         self.config.overlay.open = true;
         self.save();
-        match overlay::open(self.sigs.clone(), &self.config.overlay, cx) {
+        self.sync_open(cx);
+        match overlay::open(
+            self.sigs.clone(),
+            Floating::Signatures,
+            &self.config.overlay,
+            cx,
+        ) {
             Ok(handle) => self.overlay = Some(handle),
             Err(err) => {
                 self.config.overlay.open = false;
+                self.sync_open(cx);
                 self.note(Level::Problem, format!("Could not open the overlay: {err}"));
             }
         }
@@ -1780,6 +1811,7 @@ impl DesktopApp {
     fn close_overlay(&mut self, cx: &mut Context<'_, Self>) {
         self.remove_overlay(cx);
         self.config.overlay.open = false;
+        self.sync_open(cx);
         self.save();
         cx.notify();
     }
@@ -1790,6 +1822,151 @@ impl DesktopApp {
                 .update(cx, |_, window, _| window.remove_window())
                 .ok();
         }
+    }
+
+    /// Tell the panels which of them are up, so each snaps to the other.
+    fn sync_open(&mut self, cx: &mut Context<'_, Self>) {
+        let (overlay, card) = (self.config.overlay.open, self.config.card.open);
+        self.sigs.update(cx, |sigs, cx| {
+            sigs.overlay.open = overlay;
+            sigs.card.open = card;
+            cx.notify();
+        });
+    }
+
+    pub(crate) fn toggle_card(&mut self, cx: &mut Context<'_, Self>) {
+        if self.card.is_none() {
+            self.open_card(cx);
+        } else {
+            self.close_card(cx);
+        }
+    }
+
+    /// Open the system card, or open it again to take changed settings.
+    fn open_card(&mut self, cx: &mut Context<'_, Self>) {
+        self.remove_card(cx);
+        self.config.card.open = true;
+        self.save();
+        self.sync_open(cx);
+        match overlay::open(self.sigs.clone(), Floating::System, &self.config.card, cx) {
+            Ok(handle) => self.card = Some(handle),
+            Err(err) => {
+                self.config.card.open = false;
+                self.sync_open(cx);
+                self.note(
+                    Level::Problem,
+                    format!("Could not open the system card: {err}"),
+                );
+            }
+        }
+        self.fetch_intel(cx);
+        cx.notify();
+    }
+
+    fn close_card(&mut self, cx: &mut Context<'_, Self>) {
+        self.remove_card(cx);
+        self.config.card.open = false;
+        self.sync_open(cx);
+        self.save();
+        cx.notify();
+    }
+
+    fn remove_card(&mut self, cx: &mut Context<'_, Self>) {
+        if let Some(handle) = self.card.take() {
+            handle
+                .update(cx, |_, window, _| window.remove_window())
+                .ok();
+        }
+    }
+
+    /// Put the card back where it starts.
+    fn reset_card(&mut self, cx: &mut Context<'_, Self>) {
+        self.config.card = Overlay {
+            open: self.config.card.open,
+            ..Overlay::card()
+        };
+        let card = self.config.card.clone();
+        self.sigs.update(cx, |sigs, cx| {
+            sigs.card = card;
+            cx.notify();
+        });
+        if self.config.card.open {
+            self.open_card(cx);
+        } else {
+            self.save();
+        }
+        cx.notify();
+    }
+
+    /// Fetch what the card shows beyond the map, for the system you are in: straight away
+    /// after a jump, then now and again while you stay.
+    fn fetch_intel(&mut self, cx: &mut Context<'_, Self>) {
+        if self.card.is_none() {
+            return;
+        }
+        let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
+            return;
+        };
+        let sigs = self.sigs.read(cx);
+        let Some(system) = sigs.system().cloned() else {
+            return;
+        };
+        let fresh = sigs.intel.as_ref().is_some_and(|i| {
+            i.solar_system_id == system.solar_system_id && i.fetched.elapsed() < INTEL
+        });
+        if fresh || self.intel_for == Some(system.solar_system_id) {
+            return;
+        }
+        self.intel_for = Some(system.solar_system_id);
+        let solar_system_id = system.solar_system_id;
+        let work = cx.background_spawn(async move {
+            let kills = client.kills(map_id, system.solar_system_id)?;
+            // Viewers may not read notes or see pilots; the card goes without.
+            let notes = client.notes(map_id, system.id).unwrap_or_default();
+            let pilots = client.pilots(map_id).unwrap_or_default();
+            let effect = match (&system.effect_name, system.wormhole_class_id) {
+                (Some(name), Some(class)) => client.effect(name, class).unwrap_or_default(),
+                _ => Vec::new(),
+            };
+            anyhow::Ok(Intel {
+                solar_system_id: system.solar_system_id,
+                kills,
+                notes,
+                effect,
+                pilots,
+                fetched: std::time::Instant::now(),
+            })
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |this, cx| {
+                this.intel_for = None;
+                match result {
+                    Ok(intel) => this.sigs.update(cx, |sigs, cx| {
+                        sigs.intel = Some(intel);
+                        cx.notify();
+                    }),
+                    Err(err) => {
+                        this.note(Level::Problem, format!("Could not read the system: {err}"));
+                        // Nothing for now; the next try waits as long as a refresh would.
+                        this.sigs.update(cx, |sigs, cx| {
+                            sigs.intel = Some(Intel {
+                                solar_system_id,
+                                kills: Vec::new(),
+                                notes: None,
+                                effect: Vec::new(),
+                                pilots: Vec::new(),
+                                fetched: std::time::Instant::now(),
+                            });
+                            cx.notify();
+                        });
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Change an overlay setting; an open overlay is reopened to take it.
@@ -1809,6 +1986,10 @@ impl DesktopApp {
             self.open_overlay(cx);
         } else {
             self.save();
+        }
+        // The card looks like the overlay; a pop-up one is sized when it opens.
+        if self.config.card.open {
+            self.open_card(cx);
         }
         cx.notify();
     }
