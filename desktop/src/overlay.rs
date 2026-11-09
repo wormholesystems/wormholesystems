@@ -24,7 +24,9 @@ use gpui_kit::{
     WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, canvas, div, point, px,
 };
 
-use crate::config::Overlay;
+use serde::{Deserialize, Serialize};
+
+use crate::config::{Corner, Overlay};
 #[cfg(not(target_os = "linux"))]
 use crate::native;
 use crate::sigs::{self, Command, Sigs};
@@ -35,6 +37,86 @@ const MIN_W: f32 = 260.0;
 const MIN_H: f32 = 140.0;
 /// Keep this much of it on the screen while dragging.
 const KEEP: f32 = 40.0;
+
+/// The panels that float over the game, each in its own surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Floating {
+    Signatures,
+    /// The system you are in.
+    System,
+    /// Jumps to the watch list and to the map's pilots.
+    Navigation,
+    /// The chain around you.
+    Chain,
+}
+
+impl Floating {
+    /// The cards beside the signatures, which have their own place in the settings.
+    pub(crate) const CARDS: [Floating; 3] =
+        [Floating::System, Floating::Navigation, Floating::Chain];
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Floating::Signatures => "Signatures",
+            Floating::System => "System",
+            Floating::Navigation => "Navigation",
+            Floating::Chain => "Chain map",
+        }
+    }
+
+    pub(crate) fn blurb(self) -> &'static str {
+        match self {
+            Floating::Signatures => "The signatures in the system you are in.",
+            Floating::System => {
+                "Statics, effect, who is there and the latest kills in the system you are in."
+            }
+            Floating::Navigation => {
+                "Jumps to the watch list and to the map's pilots; click one to set it as your destination."
+            }
+            Floating::Chain => "The chain around you, with the holes' mass and lifetime.",
+        }
+    }
+
+    /// Where a card starts, before it is dragged or resized.
+    pub(crate) fn default_place(self) -> Overlay {
+        let (corner, w, h) = match self {
+            Floating::Signatures => return Overlay::default(),
+            Floating::System => (Corner::TopLeft, 320.0, 400.0),
+            Floating::Navigation => (Corner::BottomLeft, 320.0, 340.0),
+            Floating::Chain => (Corner::BottomRight, 420.0, 300.0),
+        };
+        Overlay {
+            corner,
+            width: Some(w),
+            height: Some(h),
+            show_on_paste: false,
+            show_on_jump: false,
+            ..Overlay::default()
+        }
+    }
+
+    /// Where this one sits.
+    pub(crate) fn place(self, sigs: &Sigs) -> Overlay {
+        match self {
+            Floating::Signatures => sigs.overlay.clone(),
+            card => sigs
+                .cards
+                .get(&card)
+                .cloned()
+                .unwrap_or_else(|| card.default_place()),
+        }
+    }
+
+    fn app_id(self) -> &'static str {
+        match self {
+            Floating::Signatures => "wormholesystems-overlay",
+            Floating::System => "wormholesystems-card",
+            Floating::Navigation => "wormholesystems-navigation",
+            Floating::Chain => "wormholesystems-chain",
+        }
+    }
+}
 
 /// What kind of window the overlay lives in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,10 +141,20 @@ struct Drag {
     start: snap::Rect,
     current: snap::Rect,
     guides: Vec<snap::Guide>,
+    /// The other floating panels that are up, to snap to.
+    others: Vec<snap::Rect>,
+}
+
+/// Where `settings` put a panel on a screen of that size.
+fn placed(settings: &Overlay, screen: (f32, f32)) -> snap::Rect {
+    let (x, y) = settings.origin(screen);
+    let (w, h) = settings.dimensions();
+    snap::Rect { x, y, w, h }
 }
 
 pub(crate) struct OverlayView {
     sigs: Entity<Sigs>,
+    which: Floating,
     surface: Surface,
     drag: Option<Drag>,
     /// The panel's bounds at the last paint, for the input region.
@@ -78,10 +170,16 @@ pub(crate) struct OverlayView {
 }
 
 impl OverlayView {
-    fn new(sigs: Entity<Sigs>, surface: Surface, cx: &mut Context<'_, Self>) -> Self {
+    fn new(
+        sigs: Entity<Sigs>,
+        which: Floating,
+        surface: Surface,
+        cx: &mut Context<'_, Self>,
+    ) -> Self {
         let observe = cx.observe(&sigs, |_, _, cx| cx.notify());
         OverlayView {
             sigs,
+            which,
             surface,
             drag: None,
             measured: Rc::default(),
@@ -99,13 +197,18 @@ impl OverlayView {
         if let Some(drag) = &self.drag {
             return drag.current;
         }
-        let (x, y) = settings.origin(screen);
-        let (w, h) = settings.dimensions();
-        snap::Rect { x, y, w, h }
+        placed(settings, screen)
     }
 
-    fn start_drag(&mut self, mode: DragMode, mouse: Point<Pixels>, start: snap::Rect) {
+    fn start_drag(
+        &mut self,
+        mode: DragMode,
+        mouse: Point<Pixels>,
+        start: snap::Rect,
+        others: Vec<snap::Rect>,
+    ) {
         self.drag = Some(Drag {
+            others,
             mode,
             mouse_start: mouse,
             start,
@@ -120,6 +223,7 @@ impl OverlayView {
         let dx = f32::from(mouse.x - drag.mouse_start.x);
         let dy = f32::from(mouse.y - drag.mouse_start.y);
         let s = drag.start;
+        let others = drag.others.clone();
         let (rect, guides) = match drag.mode {
             DragMode::Move => snap::snap_move(
                 snap::Rect {
@@ -127,7 +231,7 @@ impl OverlayView {
                     y: (s.y + dy).clamp(0.0, (screen.1 - KEEP).max(0.0)),
                     ..s
                 },
-                &[],
+                &others,
                 screen,
             ),
             DragMode::Resize => snap::snap_resize(
@@ -136,7 +240,7 @@ impl OverlayView {
                     h: (s.h + dy).clamp(MIN_H, (screen.1 - s.y).max(MIN_H)),
                     ..s
                 },
-                &[],
+                &others,
                 screen,
             ),
         };
@@ -148,7 +252,9 @@ impl OverlayView {
     fn finish_drag(&mut self, cx: &mut Context<'_, Self>) {
         let Some(drag) = self.drag.take() else { return };
         let r = drag.current;
+        let which = self.which;
         let command = Command::PlaceOverlay {
+            which,
             x: r.x.round(),
             y: r.y.round(),
             width: r.w.round(),
@@ -156,11 +262,18 @@ impl OverlayView {
         };
         self.sigs.update(cx, |sigs, cx| {
             // Straight away, so the next frame does not jump back while the app saves.
-            sigs.overlay.x = Some(r.x.round());
-            sigs.overlay.y = Some(r.y.round());
+            let settings = match which {
+                Floating::Signatures => &mut sigs.overlay,
+                card => sigs
+                    .cards
+                    .entry(card)
+                    .or_insert_with(|| card.default_place()),
+            };
+            settings.x = Some(r.x.round());
+            settings.y = Some(r.y.round());
             if drag.mode == DragMode::Resize {
-                sigs.overlay.width = Some(r.w.round());
-                sigs.overlay.height = Some(r.h.round());
+                settings.width = Some(r.w.round());
+                settings.height = Some(r.h.round());
             }
             cx.emit(command);
             cx.notify();
@@ -200,10 +313,13 @@ impl OverlayView {
         let input = self.drag.is_some()
             || native::cursor_position(window).is_some_and(|p| {
                 let sigs = self.sigs.read(cx);
-                let popup = sigs
-                    .picker
-                    .filter(|picker| picker.overlay)
-                    .and_then(|_| *sigs.popup.borrow());
+                let popup = match self.which {
+                    Floating::Chain => sigs.chain.borrow().menu_bounds(),
+                    _ => sigs
+                        .picker
+                        .filter(|picker| picker.overlay && self.which == Floating::Signatures)
+                        .and_then(|_| *sigs.popup.borrow()),
+                };
                 let panel = if sigs.overlay_hidden {
                     None
                 } else {
@@ -269,32 +385,31 @@ impl OverlayView {
         &self,
         base: Div,
         r: snap::Rect,
+        others: Vec<snap::Rect>,
         theme: &Theme,
         cx: &mut Context<'_, Self>,
     ) -> Stateful<Div> {
         let this = cx.entity().downgrade();
+        let grabbed = others.clone();
         let grab: sigs::Grab = Box::new(move |event, _, cx| {
             this.update(cx, |this, cx| {
-                this.start_drag(DragMode::Move, event.position, r);
+                this.start_drag(DragMode::Move, event.position, r, grabbed.clone());
                 cx.notify();
             })
             .ok();
         });
         let measured = Rc::clone(&self.measured);
-        base.id("overlay-panel")
+        base.id(self.which.app_id())
             .absolute()
             .left(px(r.x))
             .top(px(r.y))
             .w(px(r.w))
             .h(px(r.h))
             .when(self.drag.is_some(), |d| d.border_color(theme.primary))
-            .child(crate::ui::top_line(theme))
-            .child(sigs::panel_with(
-                &self.sigs,
-                sigs::Place::Overlay,
-                Some(grab),
-                cx,
-            ))
+            .when(self.which == Floating::Signatures, |d| {
+                d.child(crate::ui::top_line(theme))
+            })
+            .child(self.content(Some(grab), cx))
             .child(
                 canvas(
                     move |bounds, _, _| *measured.borrow_mut() = Some(bounds),
@@ -309,22 +424,52 @@ impl OverlayView {
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
-                    this.start_drag(DragMode::Resize, event.position, r);
+                    this.start_drag(DragMode::Resize, event.position, r, others.clone());
                     cx.notify();
                 }),
             ))
     }
 }
 
+impl OverlayView {
+    fn content(&self, grab: Option<sigs::Grab>, cx: &App) -> AnyElement {
+        match self.which {
+            Floating::Signatures => sigs::panel_with(&self.sigs, sigs::Place::Overlay, grab, cx),
+            Floating::System => crate::card::panel(&self.sigs, grab, cx),
+            Floating::Navigation => crate::nav::panel(&self.sigs, grab, cx),
+            Floating::Chain => crate::chain::panel(&self.sigs, grab, cx),
+        }
+    }
+}
+
 impl Render for OverlayView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let theme = cx.theme().clone();
+        // Both panels look the way the overlay's settings say.
         let settings = self.sigs.read(cx).overlay.clone();
+        let (place, others) = {
+            let sigs = self.sigs.read(cx);
+            let others: Vec<Overlay> = [Floating::Signatures]
+                .into_iter()
+                .chain(Floating::CARDS)
+                .filter(|&f| f != self.which)
+                .map(|f| f.place(sigs))
+                .filter(|o| o.open)
+                .collect();
+            (self.which.place(sigs), others)
+        };
         let opacity = f32::from(settings.opacity) / 100.0;
         // Its own window, outside the kit's root, so the text size is set here.
         window.set_rem_size(px(crate::ui::scaled_font(settings.text_size)));
+        // The cards are the website's panels, on its card color.
+        let card = self.which != Floating::Signatures;
+        let base = if card {
+            crate::look::card(&theme)
+        } else {
+            theme.background
+        };
         let chrome = |d: Div| {
-            d.bg(theme.background.opacity(opacity))
+            d.bg(base.opacity(opacity))
                 .border_1()
                 .border_color(theme.border)
                 .text_color(theme.foreground)
@@ -333,7 +478,7 @@ impl Render for OverlayView {
 
         if self.surface == Surface::Panel {
             return chrome(div().size_full())
-                .child(sigs::panel(&self.sigs, sigs::Place::Overlay, cx))
+                .child(self.content(None, cx))
                 .into_any_element();
         }
 
@@ -351,15 +496,20 @@ impl Render for OverlayView {
             return div().into_any_element();
         }
         let screen = (f32::from(viewport.width), f32::from(viewport.height));
-        let r = self.rect(&settings, screen);
+        let r = self.rect(&place, screen);
+        let others = others.iter().map(|o| placed(o, screen)).collect();
 
-        let panel = self.floating(chrome(div()), r, &theme, cx);
+        let panel = self.floating(chrome(div()), r, others, &theme, cx);
 
         let popup = {
             let sigs = self.sigs.read(cx);
-            sigs.picker
-                .filter(|p| p.overlay)
-                .and_then(|_| *sigs.popup.borrow())
+            match self.which {
+                Floating::Chain => sigs.chain.borrow().menu_bounds(),
+                _ => sigs
+                    .picker
+                    .filter(|p| p.overlay && self.which == Floating::Signatures)
+                    .and_then(|_| *sigs.popup.borrow()),
+            }
         };
         self.update_input_region(popup, window);
         #[cfg(not(target_os = "linux"))]
@@ -397,9 +547,10 @@ impl Render for OverlayView {
     }
 }
 
-/// Open the overlay as `settings` describe it.
+/// Open a floating panel where `settings` put it.
 pub(crate) fn open(
     sigs: Entity<Sigs>,
+    which: Floating,
     settings: &Overlay,
     cx: &mut App,
 ) -> anyhow::Result<AnyWindowHandle> {
@@ -414,7 +565,7 @@ pub(crate) fn open(
         |d| d.bounds(),
     );
     let build = |sigs: Entity<Sigs>, surface: Surface| {
-        move |_: &mut Window, cx: &mut App| cx.new(|cx| OverlayView::new(sigs, surface, cx))
+        move |_: &mut Window, cx: &mut App| cx.new(|cx| OverlayView::new(sigs, which, surface, cx))
     };
 
     #[cfg(target_os = "linux")]
@@ -428,10 +579,10 @@ pub(crate) fn open(
                     point(px(0.0), px(0.0)),
                     gpui_kit::size(px(0.0), px(0.0)),
                 ))),
-                app_id: Some("wormholesystems-overlay".into()),
+                app_id: Some(which.app_id().into()),
                 window_background: WindowBackgroundAppearance::Transparent,
                 kind: WindowKind::LayerShell(LayerShellOptions {
-                    namespace: "wormholesystems-overlay".into(),
+                    namespace: which.app_id().into(),
                     layer: Layer::Overlay,
                     anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
                     keyboard_interactivity: KeyboardInteractivity::None,
@@ -460,7 +611,7 @@ pub(crate) fn open(
             is_resizable: false,
             is_minimizable: false,
             window_background: WindowBackgroundAppearance::Transparent,
-            app_id: Some("wormholesystems-overlay".into()),
+            app_id: Some(which.app_id().into()),
             ..Default::default()
         };
         let handle = cx.open_window(options, build(sigs, Surface::Panel))?;
@@ -474,7 +625,7 @@ pub(crate) fn open(
             titlebar: None,
             window_bounds: Some(WindowBounds::Windowed(screen)),
             display_id: display.map(|d| d.id()),
-            app_id: Some("wormholesystems-overlay".into()),
+            app_id: Some(which.app_id().into()),
             window_background: WindowBackgroundAppearance::Transparent,
             kind: WindowKind::PopUp,
             focus: false,

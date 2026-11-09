@@ -9,6 +9,7 @@ mod pages;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -21,13 +22,14 @@ use gpui_kit::{
 use crate::alias;
 use crate::api::NameBookmark;
 use crate::api::{Beat, Client, MapEntry, MapSnapshot, SignatureCatalog, SignatureEdit};
+use crate::card::Intel;
 use crate::chatlog::{self, ChatEvent, Watcher};
-use crate::config::Config;
+use crate::config::{Config, Overlay};
 use crate::focus::{self, Focus};
 use crate::fresh::Freshness;
 use crate::hotkeys::{self, Action, Press, Registry};
 use crate::jump::Grid;
-use crate::overlay;
+use crate::overlay::{self, Floating};
 use crate::plan::{
     JumpContext, LastJump, LoneGhost, Plan, bookmark_for, landed_on, plan_jump, submit,
 };
@@ -38,6 +40,8 @@ use crate::ui::{self, Mood, Notice};
 
 /// How often the map and its signatures are fetched again.
 const REFRESH: Duration = Duration::from_secs(5);
+/// How long the system card's kills and pilots are good for while you stay put.
+const INTEL: Duration = Duration::from_secs(30);
 /// How often the server hears which characters' jumps this app maps. It lets them go after a
 /// few missed beats, and the website maps them again.
 const HEARTBEAT: Duration = Duration::from_secs(30);
@@ -120,7 +124,7 @@ pub(crate) struct DesktopApp {
     catalog: Arc<SignatureCatalog>,
     grid: Grid,
     /// Which systems each system has a stargate to, so gate travel is never mapped.
-    stargates: Arc<HashMap<i64, Vec<i64>>>,
+    gates: Arc<crate::route::Gates>,
     /// The website's "suggest an alias" setting for this map.
     suggest_alias: bool,
     watcher: Option<Arc<Mutex<Watcher>>>,
@@ -149,6 +153,7 @@ pub(crate) struct DesktopApp {
     hotkeys: Registry,
     clipboard: Option<arboard::Clipboard>,
     overlay: Option<AnyWindowHandle>,
+    cards: Cards,
     /// A newer release, from the last check.
     update: Option<crate::update::Available>,
     updater: Updater,
@@ -157,6 +162,23 @@ pub(crate) struct DesktopApp {
     /// Held so they keep running.
     tasks: Vec<Task<()>>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// The cards beside the signatures, and the work they have out.
+#[derive(Default)]
+struct Cards {
+    /// The ones that are up.
+    open: HashMap<Floating, AnyWindowHandle>,
+    /// The system the system card's intel is being fetched for.
+    intel_for: Option<i64>,
+    /// A fetch for the navigation card is out.
+    nav_pending: bool,
+    /// A route search is running.
+    routing: bool,
+    /// Your route settings on this map, from the website.
+    route_settings: crate::route::Settings,
+    /// Solar system ids by name, for systems you are in that the map does not have.
+    system_ids: HashMap<String, i64>,
 }
 
 /// What the updater is doing.
@@ -194,6 +216,7 @@ impl DesktopApp {
         });
         let sigs = cx.new(|_| Sigs {
             overlay: config.overlay.clone(),
+            cards: config.cards.clone(),
             list: config.list.clone(),
             pick_prefix: hotkeys::pick_prefix(&config.pick_modifiers),
             ..Default::default()
@@ -204,7 +227,6 @@ impl DesktopApp {
         let mut hotkeys = Registry::new();
         let refused = hotkeys.apply(&config.hotkeys);
         let clipboard = arboard::Clipboard::new().ok();
-        let open_overlay = config.overlay.open;
 
         let mut this = DesktopApp {
             config,
@@ -220,7 +242,7 @@ impl DesktopApp {
             connecting: false,
             catalog: Arc::default(),
             grid: Grid::default(),
-            stargates: Arc::default(),
+            gates: Arc::default(),
             suggest_alias: false,
             watcher: None,
             characters: Vec::new(),
@@ -241,6 +263,7 @@ impl DesktopApp {
             hotkeys,
             clipboard,
             overlay: None,
+            cards: Cards::default(),
             update: None,
             updater: Updater::Idle,
             update_note: None,
@@ -267,10 +290,20 @@ impl DesktopApp {
         } else {
             this.connect(cx);
         }
-        if open_overlay {
-            this.open_overlay(cx);
-        }
+        this.reopen(cx);
         this
+    }
+
+    /// Bring back the floating panels that were up when the app last quit.
+    fn reopen(&mut self, cx: &mut Context<'_, Self>) {
+        if self.config.overlay.open {
+            self.open_overlay(cx);
+        }
+        for card in Floating::CARDS {
+            if self.config.cards.get(&card).is_some_and(|c| c.open) {
+                self.open_card(card, cx);
+            }
+        }
     }
 
     fn subscribe(
@@ -387,19 +420,19 @@ impl DesktopApp {
             let maps = client.maps()?;
             let catalog = client.catalog()?;
             let grid = client.grid()?;
-            let stargates = client.stargates()?;
-            anyhow::Ok((me, maps, catalog, grid, stargates))
+            let gates = client.gates()?;
+            anyhow::Ok((me, maps, catalog, grid, gates))
         });
         cx.spawn(async move |this, cx| {
             let result = fetch.await;
             this.update(cx, |this, cx| {
                 this.connecting = false;
                 match result {
-                    Ok((me, maps, catalog, grid, stargates)) => {
+                    Ok((me, maps, catalog, grid, gates)) => {
                         this.note(Level::Done, format!("Signed in as {}", me.name));
                         this.account = Some(me.name);
                         this.grid = grid;
-                        this.stargates = Arc::new(stargates);
+                        this.gates = Arc::new(gates);
                         this.catalog = Arc::new(catalog);
                         let catalog = Arc::clone(&this.catalog);
                         this.sigs.update(cx, |sigs, cx| {
@@ -492,6 +525,8 @@ impl DesktopApp {
                         sigs.snapshot = Some(snapshot);
                         cx.notify();
                     });
+                    this.fetch_intel(cx);
+                    this.fetch_nav(cx);
                 })
                 .ok();
             }
@@ -523,7 +558,22 @@ impl DesktopApp {
             let result = fetch.await;
             this.update(cx, |this, cx| match result {
                 Ok(settings) => {
+                    let grid = this.grid;
+                    this.sigs.update(cx, |sigs, _| {
+                        sigs.map_look = crate::chain::Prefs {
+                            layout_override: settings.layout_override.clone(),
+                            show_threat: settings.show_threat_level,
+                            grid,
+                        };
+                    });
                     this.suggest_alias = settings.suggest_alias;
+                    this.cards.route_settings = settings.route.clone();
+                    let preference = settings.route.preference;
+                    this.sigs.update(cx, |sigs, _| {
+                        sigs.routes = None;
+                        sigs.route_preference = preference;
+                    });
+                    this.fetch_nav(cx);
                     this.sigs.update(cx, |sigs, cx| {
                         sigs.statics_first = settings.show_statics_first;
                         cx.notify();
@@ -758,6 +808,8 @@ impl DesktopApp {
                 cx.notify();
             }
         });
+        self.fetch_intel(cx);
+        self.fetch_nav(cx);
     }
 
     // Jumps.
@@ -820,7 +872,7 @@ impl DesktopApp {
         JumpContext {
             catalog: Arc::clone(&self.catalog),
             grid: self.grid,
-            stargates: Arc::clone(&self.stargates),
+            stargates: Arc::clone(&self.gates.adjacency),
             suggest_alias: self.suggest_alias,
         }
     }
@@ -1107,6 +1159,7 @@ impl DesktopApp {
                     .timer(Duration::from_millis(50))
                     .await;
                 let alive = this.update(cx, |this, cx| {
+                    this.load_images(cx);
                     for press in this.hotkeys.pressed() {
                         match press {
                             Press::Action(action) => this.run(action, cx),
@@ -1256,15 +1309,32 @@ impl DesktopApp {
                 cx.notify();
             }),
             Command::HideOverlay => self.close_overlay(cx),
+            Command::HideCard(card) => self.close_card(card, cx),
+            Command::SetDestination(id) => self.set_destination(id, cx),
+            Command::ChangeMap(change) => self.change_map(change, cx),
+            Command::Copy(text) => {
+                if self.copy(&text) {
+                    self.tell(Tone::Done, format!("Copied “{text}”"), cx);
+                }
+            }
+            Command::LoadBookmarks(connection) => self.load_bookmarks(connection, cx),
             Command::Pick(index) => self.pick(index, cx),
             Command::SkipJump => self.skip_jump(cx),
             Command::PlaceOverlay {
+                which,
                 x,
                 y,
                 width,
                 height,
             } => {
-                let o = &mut self.config.overlay;
+                let o = match which {
+                    Floating::Signatures => &mut self.config.overlay,
+                    card => self
+                        .config
+                        .cards
+                        .entry(card)
+                        .or_insert_with(|| card.default_place()),
+                };
                 (o.x, o.y) = (Some(x), Some(y));
                 if o.dimensions() != (width, height) {
                     (o.width, o.height) = (Some(width), Some(height));
@@ -1767,10 +1837,17 @@ impl DesktopApp {
         self.remove_overlay(cx);
         self.config.overlay.open = true;
         self.save();
-        match overlay::open(self.sigs.clone(), &self.config.overlay, cx) {
+        self.sync_open(cx);
+        match overlay::open(
+            self.sigs.clone(),
+            Floating::Signatures,
+            &self.config.overlay,
+            cx,
+        ) {
             Ok(handle) => self.overlay = Some(handle),
             Err(err) => {
                 self.config.overlay.open = false;
+                self.sync_open(cx);
                 self.note(Level::Problem, format!("Could not open the overlay: {err}"));
             }
         }
@@ -1780,6 +1857,7 @@ impl DesktopApp {
     fn close_overlay(&mut self, cx: &mut Context<'_, Self>) {
         self.remove_overlay(cx);
         self.config.overlay.open = false;
+        self.sync_open(cx);
         self.save();
         cx.notify();
     }
@@ -1790,6 +1868,422 @@ impl DesktopApp {
                 .update(cx, |_, window, _| window.remove_window())
                 .ok();
         }
+    }
+
+    /// Tell the panels which of them are up, so each snaps to the others.
+    fn sync_open(&mut self, cx: &mut Context<'_, Self>) {
+        let overlay = self.config.overlay.open;
+        let cards = self.config.cards.clone();
+        self.sigs.update(cx, |sigs, cx| {
+            sigs.overlay.open = overlay;
+            sigs.cards = cards;
+            cx.notify();
+        });
+    }
+
+    pub(crate) fn card_open(&self, card: Floating) -> bool {
+        self.cards.open.contains_key(&card)
+    }
+
+    fn card_config(&mut self, card: Floating) -> &mut Overlay {
+        self.config
+            .cards
+            .entry(card)
+            .or_insert_with(|| card.default_place())
+    }
+
+    /// Open a card, or open it again to take changed settings.
+    fn open_card(&mut self, card: Floating, cx: &mut Context<'_, Self>) {
+        self.remove_card(card, cx);
+        self.card_config(card).open = true;
+        self.save();
+        self.sync_open(cx);
+        let place = self.card_config(card).clone();
+        match overlay::open(self.sigs.clone(), card, &place, cx) {
+            Ok(handle) => {
+                self.cards.open.insert(card, handle);
+            }
+            Err(err) => {
+                self.card_config(card).open = false;
+                self.sync_open(cx);
+                self.note(
+                    Level::Problem,
+                    format!("Could not open the {} card: {err}", card.name()),
+                );
+            }
+        }
+        self.fetch_intel(cx);
+        self.fetch_nav(cx);
+        cx.notify();
+    }
+
+    fn close_card(&mut self, card: Floating, cx: &mut Context<'_, Self>) {
+        self.remove_card(card, cx);
+        self.card_config(card).open = false;
+        self.sync_open(cx);
+        self.save();
+        cx.notify();
+    }
+
+    fn remove_card(&mut self, card: Floating, cx: &mut Context<'_, Self>) {
+        if let Some(handle) = self.cards.open.remove(&card) {
+            handle
+                .update(cx, |_, window, _| window.remove_window())
+                .ok();
+        }
+    }
+
+    /// Put the cards back where they start.
+    fn reset_cards(&mut self, cx: &mut Context<'_, Self>) {
+        for card in Floating::CARDS {
+            let open = self.card_config(card).open;
+            *self.card_config(card) = Overlay {
+                open,
+                ..card.default_place()
+            };
+        }
+        self.sync_open(cx);
+        self.save();
+        for card in Floating::CARDS {
+            if self.card_open(card) {
+                self.open_card(card, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Fetch the pictures the cards asked for since last time.
+    fn load_images(&mut self, cx: &mut Context<'_, Self>) {
+        let wanted = self.sigs.read(cx).images.take_wanted();
+        if wanted.is_empty() {
+            return;
+        }
+        let agent = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(15)))
+            .build()
+            .new_agent();
+        for url in wanted {
+            let agent = agent.clone();
+            let fetch = cx.background_spawn({
+                let url = url.clone();
+                async move {
+                    let bytes = agent.get(&url).call().ok()?.body_mut().read_to_vec().ok()?;
+                    let format = if bytes.starts_with(b"\x89PNG") {
+                        ImageFormat::Png
+                    } else {
+                        ImageFormat::Jpeg
+                    };
+                    Some(Arc::new(Image::from_bytes(format, bytes)))
+                }
+            });
+            let images = Rc::clone(&self.sigs.read(cx).images);
+            let sigs = self.sigs.downgrade();
+            cx.spawn(async move |_, cx| {
+                if let Some(image) = fetch.await {
+                    images.arrived(url, image);
+                    sigs.update(cx, |_, cx| cx.notify()).ok();
+                }
+            })
+            .detach();
+        }
+    }
+
+    /// Fetch what the navigation and chain cards show beyond the map, now and again, and
+    /// work the routes out again.
+    fn fetch_nav(&mut self, cx: &mut Context<'_, Self>) {
+        if !self.card_open(Floating::Navigation) && !self.card_open(Floating::Chain) {
+            return;
+        }
+        let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
+            return;
+        };
+        let nav = self.sigs.read(cx).nav.clone().unwrap_or_default();
+        let fresh = nav.fetched.is_some_and(|f| f.elapsed() < INTEL);
+        if fresh || self.cards.nav_pending {
+            self.route(cx);
+            return;
+        }
+        self.cards.nav_pending = true;
+        let scout = self.cards.route_settings.use_evescout;
+        let work = cx.background_spawn(async move {
+            // Viewers see no pilots; the card goes without.
+            let pilots = client.pilots(map_id).unwrap_or_default();
+            let watch = client.watchlist(map_id)?;
+            let ignored = client.ignored(map_id)?.into_iter().collect();
+            let scout = if scout {
+                client.evescout().unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let mut nav = crate::nav::Nav {
+                watch,
+                pilots,
+                scout,
+                ignored,
+                names: nav.names,
+                fetched: Some(std::time::Instant::now()),
+            };
+            let unnamed = nav.unnamed();
+            if !unnamed.is_empty() {
+                for system in client.resolve(&unnamed)? {
+                    nav.names.insert(system.id, system);
+                }
+            }
+            anyhow::Ok(nav)
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |this, cx| {
+                this.cards.nav_pending = false;
+                match result {
+                    Ok(nav) => {
+                        this.sigs.update(cx, |sigs, cx| {
+                            sigs.nav = Some(nav);
+                            cx.notify();
+                        });
+                        this.route(cx);
+                    }
+                    Err(err) => {
+                        this.note(
+                            Level::Problem,
+                            format!("Could not read the watch list: {err}"),
+                        );
+                        // Try again when a refresh would, not on every tick.
+                        this.sigs.update(cx, |sigs, _| {
+                            let nav = sigs.nav.get_or_insert_with(Default::default);
+                            nav.fetched = Some(std::time::Instant::now());
+                        });
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Work out the routes from where you are, off the main thread.
+    fn route(&mut self, cx: &mut Context<'_, Self>) {
+        if !self.card_open(Floating::Navigation) || self.cards.routing {
+            return;
+        }
+        let sigs = self.sigs.read(cx);
+        let (Some(snapshot), Some(nav), Some(here)) =
+            (sigs.snapshot.clone(), sigs.nav.clone(), sigs.here.clone())
+        else {
+            return;
+        };
+        let from = sigs
+            .system()
+            .map(|s| s.solar_system_id)
+            .or_else(|| self.cards.system_ids.get(&here.system).copied());
+        let Some(from) = from else {
+            return self.find_system_id(here.system, cx);
+        };
+        self.cards.routing = true;
+        let gates = Arc::clone(&self.gates);
+        let settings = self.cards.route_settings.clone();
+        let work = cx.background_spawn(async move {
+            let holes = crate::route::holes(&snapshot, &nav.scout, &settings);
+            crate::route::Search::new(&gates, &holes, from, &settings, &nav.ignored)
+        });
+        cx.spawn(async move |this, cx| {
+            let search = work.await;
+            this.update(cx, |this, cx| {
+                this.cards.routing = false;
+                this.sigs.update(cx, |sigs, cx| {
+                    sigs.routes = Some(Arc::new(search));
+                    cx.notify();
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Look up a system the map does not have, so routes can start there.
+    fn find_system_id(&mut self, name: String, cx: &mut Context<'_, Self>) {
+        let Some(client) = self.client() else { return };
+        self.cards.routing = true;
+        let work = cx.background_spawn({
+            let name = name.clone();
+            async move { client.find_system(&name) }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |this, cx| {
+                this.cards.routing = false;
+                if let Ok(Some(hit)) = result {
+                    this.cards.system_ids.insert(name, hit.id);
+                    this.route(cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Make a system the autopilot destination of the character you follow.
+    /// Make a change the chain card's menus asked for, then read the map again.
+    fn change_map(&mut self, change: crate::sigs::MapChange, cx: &mut Context<'_, Self>) {
+        let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
+            return;
+        };
+        let work = cx.background_spawn(async move {
+            match change {
+                crate::sigs::MapChange::Post { action, body, done } => {
+                    client.change_map(map_id, action, body).map(|()| done)
+                }
+                crate::sigs::MapChange::Waypoint {
+                    character,
+                    destination,
+                    how,
+                    done,
+                } => client.waypoint(character, destination, how).map(|()| done),
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(done) => this.tell(Tone::Done, done, cx),
+                    Err(err) => this.tell(Tone::Problem, err.to_string(), cx),
+                }
+                this.refresh(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The bookmark names for a connection, for the chain card's menu to offer.
+    fn load_bookmarks(&mut self, connection: i64, cx: &mut Context<'_, Self>) {
+        let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
+            return;
+        };
+        let work =
+            cx.background_spawn(async move { client.connection_bookmarks(map_id, connection) });
+        cx.spawn(async move |this, cx| {
+            let Ok(names) = work.await else { return };
+            this.update(cx, |this, cx| {
+                this.sigs.update(cx, |sigs, cx| {
+                    let names = names.into_iter().map(|b| b.text).collect();
+                    sigs.chain.borrow_mut().bookmarks_for(connection, names);
+                    cx.notify();
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn set_destination(&mut self, system: i64, cx: &mut Context<'_, Self>) {
+        let Some(client) = self.client() else { return };
+        let character = self.active.as_ref().and_then(|active| {
+            self.characters
+                .iter()
+                .find(|(name, _, _)| name == active)
+                .and_then(|(name, _, id)| Some((name.clone(), (*id)?)))
+        });
+        let Some((name, character_id)) = character else {
+            return self.tell(
+                Tone::Problem,
+                "No character to set the destination for yet".into(),
+                cx,
+            );
+        };
+        let target = self
+            .sigs
+            .read(cx)
+            .nav
+            .as_ref()
+            .and_then(|n| n.names.get(&system))
+            .map_or_else(|| format!("#{system}"), |s| s.name.clone());
+        let work = cx.background_spawn(async move { client.set_destination(character_id, system) });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |this, cx| match result {
+                Ok(()) => this.tell(Tone::Done, format!("{name}: destination {target}"), cx),
+                Err(err) => this.tell(
+                    Tone::Problem,
+                    format!("Could not set the destination: {err}"),
+                    cx,
+                ),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Fetch what the card shows beyond the map, for the system you are in: straight away
+    /// after a jump, then now and again while you stay.
+    fn fetch_intel(&mut self, cx: &mut Context<'_, Self>) {
+        if !self.card_open(Floating::System) {
+            return;
+        }
+        let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
+            return;
+        };
+        let sigs = self.sigs.read(cx);
+        let Some(system) = sigs.system().cloned() else {
+            return;
+        };
+        let fresh = sigs.intel.as_ref().is_some_and(|i| {
+            i.solar_system_id == system.solar_system_id && i.fetched.elapsed() < INTEL
+        });
+        if fresh || self.cards.intel_for == Some(system.solar_system_id) {
+            return;
+        }
+        self.cards.intel_for = Some(system.solar_system_id);
+        let solar_system_id = system.solar_system_id;
+        let work = cx.background_spawn(async move {
+            let kills = client.kills(map_id, system.solar_system_id)?;
+            // Viewers may not read notes or see pilots; the card goes without.
+            let notes = client.notes(map_id, system.id).unwrap_or_default();
+            let pilots = client.pilots(map_id).unwrap_or_default();
+            let effect = match (&system.effect_name, system.wormhole_class_id) {
+                (Some(name), Some(class)) => client.effect(name, class).unwrap_or_default(),
+                _ => Vec::new(),
+            };
+            anyhow::Ok(Intel {
+                solar_system_id: system.solar_system_id,
+                kills,
+                notes,
+                effect,
+                pilots,
+                fetched: std::time::Instant::now(),
+            })
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |this, cx| {
+                this.cards.intel_for = None;
+                match result {
+                    Ok(intel) => this.sigs.update(cx, |sigs, cx| {
+                        sigs.intel = Some(intel);
+                        cx.notify();
+                    }),
+                    Err(err) => {
+                        this.note(Level::Problem, format!("Could not read the system: {err}"));
+                        // Nothing for now; the next try waits as long as a refresh would.
+                        this.sigs.update(cx, |sigs, cx| {
+                            sigs.intel = Some(Intel {
+                                solar_system_id,
+                                kills: Vec::new(),
+                                notes: None,
+                                effect: Vec::new(),
+                                pilots: Vec::new(),
+                                fetched: std::time::Instant::now(),
+                            });
+                            cx.notify();
+                        });
+                        cx.notify();
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Change an overlay setting; an open overlay is reopened to take it.
@@ -1809,6 +2303,12 @@ impl DesktopApp {
             self.open_overlay(cx);
         } else {
             self.save();
+        }
+        // The cards look like the overlay; a pop-up one is sized when it opens.
+        for card in Floating::CARDS {
+            if self.card_open(card) {
+                self.open_card(card, cx);
+            }
         }
         cx.notify();
     }

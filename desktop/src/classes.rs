@@ -19,7 +19,7 @@ pub(crate) fn dest_includes(dest: i64, class: Option<i64>) -> bool {
 
 /// Security the way the game shows it: 0.0 stays, anything in (0, 0.05) is 0.1, the rest
 /// rounds to the nearest tenth, halves away from zero.
-fn ccp_round_security(security: f64) -> f64 {
+pub(crate) fn ccp_round_security(security: f64) -> f64 {
     if security == 0.0 {
         return 0.0;
     }
