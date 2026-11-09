@@ -403,6 +403,13 @@ impl MapSnapshot {
     }
 }
 
+/// A system for the autopilot: the destination, clearing the route, or one more waypoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Waypoint {
+    Destination,
+    Added,
+}
+
 /// What a hotkey changes on a connection. Fields left `None` stay as they are.
 #[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct StatusChange {
@@ -825,6 +832,42 @@ impl Client {
                 "clear_other_waypoints": true,
             }),
         )?;
+        Ok(())
+    }
+
+    /// Run one of the map's changes: `POST /api/maps/{map_id}/{action}` with `body`, which
+    /// gets the map's id added.
+    pub(crate) fn change_map(
+        &self,
+        map_id: i64,
+        action: &str,
+        mut body: serde_json::Value,
+    ) -> Result<()> {
+        body["map_id"] = map_id.into();
+        let _: serde_json::Value = self.post(&format!("/api/maps/{map_id}/{action}"), &body)?;
+        Ok(())
+    }
+
+    /// Set the destination, or add a waypoint, for one of your characters or, with `None`,
+    /// for all of them.
+    pub(crate) fn waypoint(
+        &self,
+        character_id: Option<i64>,
+        destination_id: i64,
+        how: Waypoint,
+    ) -> Result<()> {
+        let mut body = serde_json::json!({
+            "destination_id": destination_id,
+            "clear_other_waypoints": how == Waypoint::Destination,
+        });
+        let path = match character_id {
+            Some(id) => {
+                body["character_id"] = id.into();
+                "/api/waypoints"
+            }
+            None => "/api/waypoints/all",
+        };
+        let _: serde_json::Value = self.post(path, &body)?;
         Ok(())
     }
 

@@ -1311,6 +1311,13 @@ impl DesktopApp {
             Command::HideOverlay => self.close_overlay(cx),
             Command::HideCard(card) => self.close_card(card, cx),
             Command::SetDestination(id) => self.set_destination(id, cx),
+            Command::ChangeMap(change) => self.change_map(change, cx),
+            Command::Copy(text) => {
+                if self.copy(&text) {
+                    self.tell(Tone::Done, format!("Copied “{text}”"), cx);
+                }
+            }
+            Command::LoadBookmarks(connection) => self.load_bookmarks(connection, cx),
             Command::Pick(index) => self.pick(index, cx),
             Command::SkipJump => self.skip_jump(cx),
             Command::PlaceOverlay {
@@ -2117,6 +2124,59 @@ impl DesktopApp {
     }
 
     /// Make a system the autopilot destination of the character you follow.
+    /// Make a change the chain card's menus asked for, then read the map again.
+    fn change_map(&mut self, change: crate::sigs::MapChange, cx: &mut Context<'_, Self>) {
+        let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
+            return;
+        };
+        let work = cx.background_spawn(async move {
+            match change {
+                crate::sigs::MapChange::Post { action, body, done } => {
+                    client.change_map(map_id, action, body).map(|()| done)
+                }
+                crate::sigs::MapChange::Waypoint {
+                    character,
+                    destination,
+                    how,
+                    done,
+                } => client.waypoint(character, destination, how).map(|()| done),
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(done) => this.tell(Tone::Done, done, cx),
+                    Err(err) => this.tell(Tone::Problem, err.to_string(), cx),
+                }
+                this.refresh(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The bookmark names for a connection, for the chain card's menu to offer.
+    fn load_bookmarks(&mut self, connection: i64, cx: &mut Context<'_, Self>) {
+        let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
+            return;
+        };
+        let work =
+            cx.background_spawn(async move { client.connection_bookmarks(map_id, connection) });
+        cx.spawn(async move |this, cx| {
+            let Ok(names) = work.await else { return };
+            this.update(cx, |this, cx| {
+                this.sigs.update(cx, |sigs, cx| {
+                    let names = names.into_iter().map(|b| b.text).collect();
+                    sigs.chain.borrow_mut().bookmarks_for(connection, names);
+                    cx.notify();
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn set_destination(&mut self, system: i64, cx: &mut Context<'_, Self>) {
         let Some(client) = self.client() else { return };
         let character = self.active.as_ref().and_then(|active| {

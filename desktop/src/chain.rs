@@ -6,6 +6,7 @@
 //! together. Click a system to set it as your destination.
 
 mod edges;
+mod menu;
 mod tree;
 
 use std::cell::RefCell;
@@ -81,6 +82,10 @@ pub(crate) struct View {
     /// Scroll with Ctrl held, gathered until it makes a zoom step.
     wheel: f32,
     cache: Option<Cached>,
+    /// The right-click menu, while it is open.
+    menu: Option<menu::Open>,
+    /// Each line as drawn, in the area's pixels, for finding the one right-clicked.
+    hits: Vec<(i64, Vec<P>)>,
 }
 
 struct Drag {
@@ -98,6 +103,43 @@ struct Cached {
 }
 
 impl View {
+    /// Where the open menu was drawn, which the overlay has to take clicks on.
+    pub(crate) fn menu_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.menu.as_ref().and_then(|m| m.bounds)
+    }
+
+    /// A connection's bookmark names arrived, for its menu if that is still open.
+    pub(crate) fn bookmarks_for(&mut self, connection: i64, names: Vec<String>) {
+        if let Some(m) = self.menu.as_mut() {
+            m.bookmarks_for(connection, names);
+        }
+    }
+
+    /// The connection whose line passes within a few pixels of `p`, in the area's pixels.
+    fn line_at(&self, p: P) -> Option<i64> {
+        let near = |a: P, b: P| {
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let len = dx * dx + dy * dy;
+            let t = if len > 0.0 {
+                (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            (a.0 + t * dx - p.0).hypot(a.1 + t * dy - p.1)
+        };
+        self.hits
+            .iter()
+            .filter_map(|(id, points)| {
+                let d = points
+                    .windows(2)
+                    .map(|w| near(w[0], w[1]))
+                    .fold(f32::INFINITY, f32::min);
+                (d <= 8.0).then_some((d, *id))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, id)| id)
+    }
+
     fn zoom(&self) -> f32 {
         self.zoom.unwrap_or(1.0)
     }
@@ -358,6 +400,7 @@ pub(crate) fn panel(entity: &Entity<Sigs>, grab: Option<Grab>, cx: &App) -> AnyE
     };
     frame
         .child(map(entity, sigs, &snapshot, &places, &theme))
+        .children(menu::render(entity, sigs, &view, &theme))
         .into_any_element()
 }
 
@@ -574,6 +617,7 @@ fn lines(
                 Shape::Curve(a, b) => Shape::Curve(cam.screen(a), cam.screen(b)),
             };
             Some(Line {
+                id: g.id,
                 shape,
                 color: edge_color(c, theme),
                 dash: dashed(c).then_some(cam.z),
@@ -627,6 +671,7 @@ fn map(
         (layout == Layout::Manual).then_some(&prefs.grid),
         theme,
     );
+    view_rc.borrow_mut().hits = lines.iter().map(|l| (l.id, polyline(&l.shape))).collect();
     let drawing = drawing(lines, grid, cam.z, Rc::clone(&view_rc));
     let badges = geometry.iter().filter_map(|g| {
         let c = connections.get(&g.id)?;
@@ -647,7 +692,7 @@ fn map(
     } else {
         oklch(0.968, 0.0, 0.0)
     };
-    gestures(div().id("chain-map"), &view_rc)
+    gestures(div().id("chain-map"), entity, &view_rc)
         .flex_1()
         .min_h_0()
         .relative()
@@ -659,13 +704,41 @@ fn map(
 }
 
 /// Press and drag to pan, scroll to pan, Ctrl and scroll to zoom where the cursor is.
-fn gestures(d: gpui_kit::Stateful<Div>, view: &Rc<RefCell<View>>) -> gpui_kit::Stateful<Div> {
+fn gestures(
+    d: gpui_kit::Stateful<Div>,
+    entity: &Entity<Sigs>,
+    view: &Rc<RefCell<View>>,
+) -> gpui_kit::Stateful<Div> {
     let down = Rc::clone(view);
+    let right = Rc::clone(view);
+    let entity = entity.clone();
     let moving = Rc::clone(view);
     let up = Rc::clone(view);
     let wheel = Rc::clone(view);
-    d.on_mouse_down(MouseButton::Left, move |e, _, _| {
+    d.on_mouse_down(MouseButton::Right, move |e, window, cx| {
+        // A line under the cursor, else the map itself.
+        let mut v = right.borrow_mut();
+        let at = v.area.map_or((0.0, 0.0), |a| {
+            (
+                f32::from(e.position.x - a.origin.x),
+                f32::from(e.position.y - a.origin.y),
+            )
+        });
+        let target = match v.line_at(at) {
+            Some(id) => {
+                entity.update(cx, |_, cx| cx.emit(Command::LoadBookmarks(id)));
+                menu::Target::Connection(id)
+            }
+            None => menu::Target::Canvas,
+        };
+        v.menu = Some(menu::Open::new(e.position, target));
+        window.refresh();
+    })
+    .on_mouse_down(MouseButton::Left, move |e, window, _| {
         let mut v = down.borrow_mut();
+        if v.menu.take().is_some() {
+            window.refresh();
+        }
         let pan = v.pan.unwrap_or((0.0, 0.0));
         v.drag = Some(Drag {
             from: (f32::from(e.position.x), f32::from(e.position.y)),
@@ -734,10 +807,31 @@ fn gestures(d: gpui_kit::Stateful<Div>, view: &Rc<RefCell<View>>) -> gpui_kit::S
 
 /// A connection's line, in pixels within the drawing area.
 struct Line {
+    id: i64,
     shape: Shape,
     color: Hsla,
     /// The dash pattern's unit, for a degraded hole.
     dash: Option<f32>,
+}
+
+/// A line as points, a curve sampled along its length.
+fn polyline(shape: &Shape) -> Vec<P> {
+    match *shape {
+        Shape::Elbow(points) => points.to_vec(),
+        Shape::Curve(from, to) => {
+            let (c1, c2) = edges::curve_controls(from, to);
+            (0..=16)
+                .map(|i| {
+                    let t = float(i) / 16.0;
+                    let u = 1.0 - t;
+                    let mix = |a: f32, b: f32, c: f32, d: f32| {
+                        u * u * u * a + 3.0 * u * u * t * b + 3.0 * u * t * t * c + t * t * t * d
+                    };
+                    (mix(from.0, c1.0, c2.0, to.0), mix(from.1, c1.1, c2.1, to.1))
+                })
+                .collect()
+        }
+    }
 }
 
 /// The manual map's grid: lines every cell across the world, in pixels.
@@ -1172,6 +1266,15 @@ fn node(
         .line_height(s(13.75))
         .text_color(theme.foreground)
         .children(rings(p, marks, z, theme))
+        .on_mouse_down(MouseButton::Right, {
+            let view = Rc::clone(&view);
+            let id = p.id;
+            move |e, window, cx| {
+                cx.stop_propagation();
+                view.borrow_mut().menu = Some(menu::Open::new(e.position, menu::Target::Node(id)));
+                window.refresh();
+            }
+        })
         .when_some(destination, |d, id| {
             d.cursor_pointer().on_click(move |_, _, cx| {
                 // The end of a drag across the map is not a click on the node under it.

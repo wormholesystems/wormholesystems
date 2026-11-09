@@ -313,10 +313,13 @@ impl OverlayView {
         let input = self.drag.is_some()
             || native::cursor_position(window).is_some_and(|p| {
                 let sigs = self.sigs.read(cx);
-                let popup = sigs
-                    .picker
-                    .filter(|picker| picker.overlay && self.which == Floating::Signatures)
-                    .and_then(|_| *sigs.popup.borrow());
+                let popup = match self.which {
+                    Floating::Chain => sigs.chain.borrow().menu_bounds(),
+                    _ => sigs
+                        .picker
+                        .filter(|picker| picker.overlay && self.which == Floating::Signatures)
+                        .and_then(|_| *sigs.popup.borrow()),
+                };
                 let panel = if sigs.overlay_hidden {
                     None
                 } else {
@@ -500,9 +503,13 @@ impl Render for OverlayView {
 
         let popup = {
             let sigs = self.sigs.read(cx);
-            sigs.picker
-                .filter(|p| p.overlay && self.which == Floating::Signatures)
-                .and_then(|_| *sigs.popup.borrow())
+            match self.which {
+                Floating::Chain => sigs.chain.borrow().menu_bounds(),
+                _ => sigs
+                    .picker
+                    .filter(|p| p.overlay && self.which == Floating::Signatures)
+                    .and_then(|_| *sigs.popup.borrow()),
+            }
         };
         self.update_input_region(popup, window);
         #[cfg(not(target_os = "linux"))]

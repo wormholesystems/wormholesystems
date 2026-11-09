@@ -40,6 +40,12 @@ pub(crate) enum Command {
     HideCard(Floating),
     /// Set the autopilot's destination for the character you follow.
     SetDestination(i64),
+    /// A change to the map from the chain card's menus.
+    ChangeMap(MapChange),
+    /// Put this on the clipboard.
+    Copy(String),
+    /// Fetch the bookmark names for this connection, for its menu.
+    LoadBookmarks(i64),
     /// The list's filter or sort changed, to keep.
     SaveList,
     /// Change a signature: its category, type, or the connection it is.
@@ -57,6 +63,25 @@ pub(crate) enum Command {
         y: f32,
         width: f32,
         height: f32,
+    },
+}
+
+/// A change the chain card's menus make to the map, and what to say once it is done.
+#[derive(Debug, Clone)]
+pub(crate) enum MapChange {
+    /// `POST /api/maps/{map}/{action}` with this body.
+    Post {
+        action: &'static str,
+        body: serde_json::Value,
+        done: String,
+    },
+    /// Set the destination or add a waypoint, for one character or, with `None`, all of
+    /// yours.
+    Waypoint {
+        character: Option<i64>,
+        destination: i64,
+        how: crate::api::Waypoint,
+        done: String,
     },
 }
 
