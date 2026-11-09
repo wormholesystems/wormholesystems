@@ -88,14 +88,21 @@ pub(crate) struct EndBookmark {
     pub text: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct MapInfo {
     pub name: String,
+    /// `manual` or `tree`: dragged into shape, or drawn from the connections.
+    #[serde(default)]
+    pub layout: String,
+    /// Whether a viewer may pick their own placement instead.
+    #[serde(default)]
+    pub allow_layout_override: bool,
 }
 
 /// A placed system. Ghosts (holes nobody has flown yet) are kept apart as [`Ghost`]s:
 /// nothing can be jumped into one, but a jump can say which system it was.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[expect(clippy::struct_excessive_bools, reason = "the map's flags on a system")]
 pub(crate) struct PlacedSystem {
     pub id: i64,
     pub solar_system_id: i64,
@@ -121,6 +128,13 @@ pub(crate) struct PlacedSystem {
     pub is_shattered: bool,
     #[serde(default)]
     pub is_home: bool,
+    #[serde(default)]
+    pub is_rally: bool,
+    #[serde(default)]
+    pub is_pinned: bool,
+    /// Kill activity: `low`, `medium`, `high` or `critical`.
+    #[serde(default)]
+    pub threat_level: Option<String>,
     /// Whoever lives there, by the map's intel.
     pub occupying_group: Option<String>,
     /// What the map says about it: `friendly`, `hostile`, `empty`, ...
@@ -210,10 +224,18 @@ struct SystemDetails {
 }
 
 /// A hole drawn on the map that nobody has been through, so its system is unknown.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct Ghost {
     pub id: i64,
     pub alias: Option<String>,
+    #[serde(default)]
+    pub is_home: bool,
+    #[serde(default)]
+    pub is_rally: bool,
+    #[serde(default)]
+    pub is_pinned: bool,
+    #[serde(default)]
+    pub status: Option<String>,
     #[serde(default)]
     pub position_x: f64,
     #[serde(default)]
@@ -236,6 +258,9 @@ pub(crate) struct Connection {
     /// The biggest ship it takes, once somebody has said.
     #[serde(default)]
     pub size: Option<WormholeSize>,
+    /// When `time_status` was last set, which the lifetime countdown runs from.
+    #[serde(default)]
+    pub time_status_updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -406,6 +431,15 @@ pub(crate) struct UserSettings {
     pub show_statics_first: bool,
     #[serde(flatten)]
     pub route: crate::route::Settings,
+    /// Your own placement for the map, when it lets you pick one.
+    #[serde(default)]
+    pub layout_override: Option<String>,
+    #[serde(default = "yes")]
+    pub show_threat_level: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// A system on a watch list.

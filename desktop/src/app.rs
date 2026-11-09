@@ -558,6 +558,14 @@ impl DesktopApp {
             let result = fetch.await;
             this.update(cx, |this, cx| match result {
                 Ok(settings) => {
+                    let grid = this.grid;
+                    this.sigs.update(cx, |sigs, _| {
+                        sigs.map_look = crate::chain::Prefs {
+                            layout_override: settings.layout_override.clone(),
+                            show_threat: settings.show_threat_level,
+                            grid,
+                        };
+                    });
                     this.suggest_alias = settings.suggest_alias;
                     this.cards.route_settings = settings.route.clone();
                     let preference = settings.route.preference;

@@ -404,6 +404,7 @@ mod tests {
             preserve_mass: false,
             created_at: None,
             size: None,
+            time_status_updated_at: None,
         }
     }
 
@@ -422,6 +423,7 @@ mod tests {
         MapSnapshot {
             map: MapInfo {
                 name: "Chain".into(),
+                ..MapInfo::default()
             },
             systems: vec![system(10, AMARR, "Amarr", 7, "Domain")],
             ghosts: Vec::new(),
@@ -641,8 +643,7 @@ mod tests {
         snapshot.ghosts.push(Ghost {
             id: 7,
             alias: Some("B1".into()),
-            position_x: 0.0,
-            position_y: 0.0,
+            ..Ghost::default()
         });
         snapshot.connections.push(connection(60, 10, 7));
         let map = FakeMap::new(snapshot);
@@ -689,8 +690,7 @@ mod tests {
         snapshot.ghosts.push(Ghost {
             id: 7,
             alias: None,
-            position_x: 0.0,
-            position_y: 0.0,
+            ..Ghost::default()
         });
         snapshot.connections.push(connection(60, 10, 7));
         let map = FakeMap::new(snapshot);
