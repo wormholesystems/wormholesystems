@@ -22,8 +22,10 @@ use crate::api::{
     Connection, MapSnapshot, MassStatus, PlacedSystem, Signature, SignatureCatalog, SignatureEdit,
     SignatureType, TimeStatus,
 };
+use crate::card::Intel;
 use crate::classes;
 use crate::config::{ListView, Overlay, SortColumn};
+use crate::overlay::Floating;
 use crate::theme::{self, HEADING};
 use crate::ui::{self, ButtonState, Kind, Notice, rpx};
 
@@ -35,6 +37,15 @@ pub(crate) enum Command {
     Delete(i64),
     ClearReview,
     HideOverlay,
+    HideCard(Floating),
+    /// Set the autopilot's destination for the character you follow.
+    SetDestination(i64),
+    /// A change to the map from the chain card's menus.
+    ChangeMap(MapChange),
+    /// Put this on the clipboard.
+    Copy(String),
+    /// Fetch the bookmark names for this connection, for its menu.
+    LoadBookmarks(i64),
     /// The list's filter or sort changed, to keep.
     SaveList,
     /// Change a signature: its category, type, or the connection it is.
@@ -45,12 +56,32 @@ pub(crate) enum Command {
     CopyBookmark(i64),
     /// Leave the jump off the map.
     SkipJump,
-    /// The overlay was dragged or resized to this: top-left corner and size.
+    /// A floating panel was dragged or resized to this: top-left corner and size.
     PlaceOverlay {
+        which: Floating,
         x: f32,
         y: f32,
         width: f32,
         height: f32,
+    },
+}
+
+/// A change the chain card's menus make to the map, and what to say once it is done.
+#[derive(Debug, Clone)]
+pub(crate) enum MapChange {
+    /// `POST /api/maps/{map}/{action}` with this body.
+    Post {
+        action: &'static str,
+        body: serde_json::Value,
+        done: String,
+    },
+    /// Set the destination or add a waypoint, for one character or, with `None`, all of
+    /// yours.
+    Waypoint {
+        character: Option<i64>,
+        destination: i64,
+        how: crate::api::Waypoint,
+        done: String,
     },
 }
 
@@ -161,6 +192,22 @@ pub(crate) struct Sigs {
     /// The outcome of the last thing done here, shown in the header for a moment.
     pub notice: Option<Notice>,
     pub overlay: Overlay,
+    /// Where the cards beside the signatures sit; they look like the overlay.
+    pub cards: std::collections::BTreeMap<Floating, Overlay>,
+    /// What the navigation and chain cards know beyond the map.
+    pub nav: Option<crate::nav::Nav>,
+    /// Where the chain card looks and how close.
+    pub chain: Rc<RefCell<crate::chain::View>>,
+    /// How the map's settings say to draw it.
+    pub map_look: crate::chain::Prefs,
+    /// Pictures from EVE's image server the cards show.
+    pub images: Rc<crate::look::Images>,
+    /// How your routes are worked out, for the navigation card's title.
+    pub route_preference: crate::route::Preference,
+    /// Routes from where you are, worked out again whenever the chain or the place changes.
+    pub routes: Option<Arc<crate::route::Search>>,
+    /// What the system card knows beyond the map: kills, notes, the effect, who is there.
+    pub intel: Option<Intel>,
     pub list: ListView,
     pub ask: Option<Ask>,
     /// How the pick keys read before the digit, `Ctrl+Alt+`.
@@ -461,13 +508,7 @@ fn age(sig: &Signature, connection: Option<&Connection>, now: DateTime<Utc>) -> 
     } else {
         sig.updated_at
     };
-    let minutes = (now - since).num_minutes();
-    match minutes {
-        m if m < 1 => "now".into(),
-        m if m < 60 => format!("{m}m"),
-        m if m < 24 * 60 => format!("{}h", m / 60),
-        m => format!("{}d", m / (24 * 60)),
-    }
+    crate::card::ago(since, now)
 }
 
 /// The age's color: the hole's mass first, then its lifetime, where the signature's own

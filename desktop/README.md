@@ -6,7 +6,9 @@ overlay above the game shows that system's signatures and what the paste changed
 deletes what the scan no longer sees with one click or key. When you jump out of the
 chain, the overlay numbers the signatures it could have been; press the number and the
 jump is mapped, with the bookmark for the way back on your clipboard. Keys mark the hole
-you just flew and name the system you are in.
+you just flew and name the system you are in. More cards can float beside it: the
+system you are in at a glance, jumps to the watch list and the map's pilots, and the chain
+around you.
 
 ## How it works
 

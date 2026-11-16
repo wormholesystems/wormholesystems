@@ -14,6 +14,7 @@ use super::{DesktopApp, Level, Page, Updater};
 use crate::config::{Corner, Overlay, OverlaySize};
 use crate::focus::{self, Focus};
 use crate::hotkeys::{self, Action, PICK_MODIFIERS};
+use crate::overlay::Floating;
 use crate::sigs;
 use crate::theme::{self, Appearance, HEADING};
 use crate::ui::{self, ButtonState, Kind, rpx};
@@ -667,6 +668,7 @@ impl DesktopApp {
         let maps = self.maps_panel(&theme, cx);
         let logs = self.logs_panel(&theme, cx);
         let overlay = self.overlay_panel(&theme, cx);
+        let card = self.card_panel(&theme, cx);
         let looks = self.looks_panel(&theme, cx);
         let about = self.about_panel(&theme, cx);
 
@@ -680,6 +682,7 @@ impl DesktopApp {
             .children(maps)
             .child(logs)
             .child(overlay)
+            .child(card)
             .child(looks)
             .child(about)
             .into_any_element()
@@ -965,6 +968,53 @@ impl DesktopApp {
             overlay = self.overlay_characters(overlay, &o, theme, cx);
         }
         overlay
+    }
+
+    fn card_panel(&self, theme: &Theme, cx: &mut Context<'_, Self>) -> Div {
+        let mut cards = panel("Cards", theme).child(muted(
+            "More panels that float beside the signatures. Each sits and sizes on its own; they look and hide the way the overlay's settings say.",
+            theme,
+        ));
+        for card in Floating::CARDS {
+            cards = cards.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .text_sm()
+                            .child(card.name())
+                            .child(muted(card.blurb(), theme).text_xs()),
+                    )
+                    .child(
+                        Switch::new(ElementId::from(format!("card-{card:?}")))
+                            .checked(self.card_open(card))
+                            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                                if *checked {
+                                    this.open_card(card, cx);
+                                } else {
+                                    this.close_card(card, cx);
+                                }
+                            })),
+                    ),
+            );
+        }
+        cards.child(setting_row(
+            "Positions and sizes",
+            ui::button(
+                "cards-reset",
+                "Reset",
+                Kind::Normal,
+                ButtonState::Enabled,
+                theme,
+            )
+            .on_click(cx.listener(|this, _, _, cx| this.reset_cards(cx)))
+            .into_any_element(),
+        ))
     }
 
     /// Which characters' clients the overlay shows for, added to its `panel`.
