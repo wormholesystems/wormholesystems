@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select m.id as \"id!\" from maps m\n           where coalesce(m.parent_id, m.id) = map_root($1)\n           order by m.tab_order, m.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7144348966ffb453fecd63a1e4accd158aa9458920c67d976f6d45902ca9927a"
+}

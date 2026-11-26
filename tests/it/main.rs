@@ -54,6 +54,7 @@ mod maps_removal;
 mod maps_signatures;
 mod maps_signatures_paste;
 mod maps_solar_system;
+mod maps_tabs;
 mod maps_tracking;
 mod maps_transfer;
 mod maps_undo_round_trip;

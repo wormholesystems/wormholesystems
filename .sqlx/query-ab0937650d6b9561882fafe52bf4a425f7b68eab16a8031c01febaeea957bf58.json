@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into maps (name, parent_id, tab_name, tab_order)\n           select '', $1, $2, coalesce(max(tab_order), -1) + 1\n           from maps where id = $1 or parent_id = $1\n           returning id as \"id!\", tab_name as \"name!\", false as \"is_root!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "tab_name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "is_root!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "ab0937650d6b9561882fafe52bf4a425f7b68eab16a8031c01febaeea957bf58"
+}

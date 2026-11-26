@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select killmail_filter from map_user_settings where map_id = $1 and user_id = $2",
+  "query": "select killmail_filter from map_user_settings\n             where map_id = map_root($1) and user_id = $2",
   "describe": {
     "columns": [
       {
@@ -37,5 +37,5 @@
       false
     ]
   },
-  "hash": "7a8704a53a1a70d9a39ab87a2c72c151bd55cecfcb24b4cd8d248088c9310290"
+  "hash": "32ce68b494c4fc6fe8b6c182375e02e9fb4deb31bcce11c1b8e4f4dd6c69943e"
 }

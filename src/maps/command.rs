@@ -455,11 +455,17 @@ impl MapTx {
         role: Role,
     ) -> Result<Self> {
         let mut tx = pool.begin().await?;
+        // The map first and then the tab, when this is one: writing intel on a tab
+        // writes it to the sibling tabs too, so the tabs of one map take turns as a whole,
+        // and always take the two locks in this order.
         sqlx::query!(
-            "select id from maps where id = $1 for no key update",
+            "select id from maps
+             where id = map_root($1) or id = $1
+             order by (parent_id is not null), id
+             for no key update",
             map_id
         )
-        .fetch_optional(&mut *tx)
+        .fetch_all(&mut *tx)
         .await?;
         let found = match actor {
             EventActor::Character(character) => {

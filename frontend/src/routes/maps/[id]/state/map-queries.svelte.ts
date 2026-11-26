@@ -2,7 +2,13 @@
 // the mutations carry the policy every map write shares. Component init only: the
 // queries need the provider's client.
 
-import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+import {
+	createMutation,
+	createQuery,
+	keepPreviousData,
+	useQueryClient,
+} from '@tanstack/svelte-query';
+import { untrack } from 'svelte';
 import { toast } from 'svelte-sonner';
 
 import { errorMessage } from '$lib/api/client';
@@ -38,7 +44,8 @@ export interface MapSeed {
 const BURST_MS = 60;
 
 export function createMapQueries(
-	mapId: number,
+	/** The tab in view. Read on every use: the screen stays up while it changes. */
+	mapId: () => number,
 	signedIn: boolean,
 	seed: MapSeed,
 	/** Whether the map socket is open, and the server echo will drive the refetch. */
@@ -46,44 +53,68 @@ export function createMapQueries(
 ) {
 	const client = useQueryClient();
 
-	// Seed once, via setQueryData rather than initialData: initialData is ignored whenever
-	// the cache entry already exists (revisiting a map), which would silently discard the
+	// Seeded via setQueryData rather than initialData: initialData is ignored whenever the
+	// cache entry already exists (revisiting a map), which would silently discard the
 	// fresh payload this navigation's load just fetched. Stamped fresh-now, so staleTime
 	// suppresses the mount refetch, while a socket-driven invalidation always refetches.
-	if (seed.view) client.setQueryData(key.mapView(mapId), seed.view);
-	if (seed.settings) client.setQueryData(key.userSettings(mapId), seed.settings);
-	if (seed.signatures) client.setQueryData(key.signatures(mapId), seed.signatures);
-	// The grid is the same for every map and never goes stale, so a copy already in the
-	// cache stays; the seed only fills it on the first map of the session.
-	if (seed.grid && client.getQueryData(q.gridConfig().queryKey) === undefined) {
-		client.setQueryData(q.gridConfig().queryKey, seed.grid);
-	}
+	// Only a seed that was loaded for this very tab: one fetched for the tab just left
+	// would otherwise be filed under the new tab's keys as fresh.
+	const plant = (id: number, seed: MapSeed) => {
+		const mine = seed.view?.map.id === id;
+		if (seed.view && mine) client.setQueryData(key.mapView(id), seed.view);
+		if (seed.settings) client.setQueryData(key.userSettings(id), seed.settings);
+		if (seed.signatures && mine) client.setQueryData(key.signatures(id), seed.signatures);
+		// The grid is the same for every map and never goes stale, so a copy already in the
+		// cache stays; the seed only fills it on the first map of the session.
+		if (seed.grid && client.getQueryData(q.gridConfig().queryKey) === undefined) {
+			client.setQueryData(q.gridConfig().queryKey, seed.grid);
+		}
+	};
+	plant(untrack(mapId), seed);
 
-	const graph = createQuery(() => ({ ...q.mapView(mapId), meta: { toastOnError: true } }));
+	// What belongs to the map rather than to one tab of it is the same under every tab's
+	// id, so going to a tab not visited yet keeps showing it while that tab's copy loads.
+	const mapWide = { placeholderData: keepPreviousData };
+
+	// The graph is planted before a tab is shown, so the placeholder is only the net under
+	// a navigation that brought none: the screen stays up rather than going back to loading.
+	const graph = createQuery(() => ({
+		...q.mapView(mapId()),
+		...mapWide,
+		meta: { toastOnError: true },
+	}));
 	const signatures = createQuery(() => ({
-		...q.listSignatures(mapId),
+		...q.listSignatures(mapId()),
 		meta: { toastOnError: true },
 	}));
 	const watchlist = createQuery(() => ({
-		...q.listWatchlist(mapId),
+		...q.listWatchlist(mapId()),
+		...mapWide,
 		meta: { toastOnError: true },
 	}));
 	// Signed-in only: a watcher on a share link has no list of their own.
 	const personalWatchlist = createQuery(() => ({
-		...q.listPersonalWatchlist(mapId),
+		...q.listPersonalWatchlist(mapId()),
+		...mapWide,
 		enabled: signedIn,
 	}));
 	const ignored = createQuery(() => ({
-		...q.listIgnored(mapId),
+		...q.listIgnored(mapId()),
+		...mapWide,
 		meta: { toastOnError: true },
 	}));
 	// Everything below fails silently, as the old fetchers did: a watcher's 403 or a blip
 	// leaves the panel empty rather than raising a toast.
-	const history = createQuery(() => ({ ...q.mapHistory(mapId), enabled: signedIn }));
-	const stale = createQuery(() => ({ ...q.listStaleConnections(mapId), enabled: signedIn }));
-	const settings = createQuery(() => ({ ...q.mapUserSettings(mapId), enabled: signedIn }));
+	const history = createQuery(() => ({ ...q.mapHistory(mapId()), enabled: signedIn }));
+	const stale = createQuery(() => ({ ...q.listStaleConnections(mapId()), enabled: signedIn }));
+	const settings = createQuery(() => ({
+		...q.mapUserSettings(mapId()),
+		...mapWide,
+		enabled: signedIn,
+	}));
 	const characters = createQuery(() => ({
-		...q.mapCharacters(mapId),
+		...q.mapCharacters(mapId()),
+		...mapWide,
 		enabled: signedIn,
 		// Movement arrives over the sockets; this is only the net under a dropped frame.
 		refetchInterval: 120_000,
@@ -92,7 +123,8 @@ export function createMapQueries(
 	// What members share of their structures is for members: a viewer is not asked, since
 	// the answer would only be a refusal.
 	const structures = createQuery(() => ({
-		...q.mapStructures(mapId),
+		...q.mapStructures(mapId()),
+		...mapWide,
 		enabled: signedIn && atLeast(graph.data?.role, 'member'),
 	}));
 	// An attack is worth interrupting for whether or not the card is on screen. The first
@@ -131,7 +163,7 @@ export function createMapQueries(
 		for (const queryKey of keys) void client.invalidateQueries({ queryKey });
 	}, BURST_MS);
 
-	const invalidateAll = () => client.invalidateQueries({ queryKey: key.map(mapId) });
+	const invalidateAll = () => client.invalidateQueries({ queryKey: key.map(mapId()) });
 
 	const write = createMutation(() => ({
 		mutationFn: (vars: MapWrite) => vars.exec(),
@@ -170,13 +202,15 @@ export function createMapQueries(
 		settingsWriter,
 		backgroundWriter,
 		invalidateAll,
+		/** File what a navigation loaded for a tab, before the screen is shown that tab. */
+		plant,
 		/** Refetch what one socket frame invalidated; [`keysFor`] holds the table. */
 		applyEvent(event: MapEvent | null) {
-			for (const k of keysFor(mapId, event)) coalescer.schedule(k);
+			for (const k of keysFor(mapId(), event)) coalescer.schedule(k);
 		},
 		/** An optimistic local edit of the viewer's settings, without a round trip. */
 		patchSettingsLocal(update: (s: MapUserSettings) => MapUserSettings) {
-			client.setQueryData(key.userSettings(mapId), (s: MapUserSettings | undefined) =>
+			client.setQueryData(key.userSettings(mapId()), (s: MapUserSettings | undefined) =>
 				s ? update(s) : s,
 			);
 		},

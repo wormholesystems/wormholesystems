@@ -44,6 +44,7 @@ pub async fn list_watchlist(
     Query(share): Query<ShareQuery>,
 ) -> ApiResult<Vec<WatchlistEntry>> {
     read_map_as(&state, &creds, map_id, &share).await?;
+    let map_id = super::extract::map_of(&state.db, map_id).await?;
     let entries = crate::maps::watchlist::read_watchlist(&state.db, map_id).await?;
     Ok(Json(entries))
 }
@@ -60,9 +61,10 @@ pub async fn add_watchlist_entry(
     State(state): State<AppState>,
     creds: Credentials,
     Path(map_id): Path<i64>,
-    Json(cmd): Json<AddWatchlistEntry>,
+    Json(mut cmd): Json<AddWatchlistEntry>,
 ) -> ApiResult<WatchlistEntry> {
     let actor = acting_on(&state.db, &creds, map_id, cmd.map_id).await?;
+    cmd.map_id = super::extract::map_of(&state.db, map_id).await?;
     let entry = crate::maps::run(&state.db, actor, cmd).await?;
     Ok(Json(entry))
 }
@@ -79,9 +81,10 @@ pub async fn set_watchlist_pinned(
     State(state): State<AppState>,
     creds: Credentials,
     Path(map_id): Path<i64>,
-    Json(cmd): Json<SetWatchlistPinned>,
+    Json(mut cmd): Json<SetWatchlistPinned>,
 ) -> ApiResult<WatchlistEntry> {
     let actor = acting_on(&state.db, &creds, map_id, cmd.map_id).await?;
+    cmd.map_id = super::extract::map_of(&state.db, map_id).await?;
     let entry = crate::maps::run(&state.db, actor, cmd).await?;
     Ok(Json(entry))
 }
@@ -98,9 +101,10 @@ pub async fn remove_watchlist_entry(
     State(state): State<AppState>,
     creds: Credentials,
     Path(map_id): Path<i64>,
-    Json(cmd): Json<RemoveWatchlistEntry>,
+    Json(mut cmd): Json<RemoveWatchlistEntry>,
 ) -> ApiResult<()> {
     let actor = acting_on(&state.db, &creds, map_id, cmd.map_id).await?;
+    cmd.map_id = super::extract::map_of(&state.db, map_id).await?;
     crate::maps::run(&state.db, actor, cmd).await?;
     Ok(Json(()))
 }
@@ -119,7 +123,8 @@ pub async fn list_personal_watchlist(
     Path(map_id): Path<i64>,
 ) -> ApiResult<Vec<WatchlistEntry>> {
     let actor = require_actor(&state.db, &creds).await?;
-    let entries = crate::maps::personal_watchlist::list(&state.db, actor, map_id).await?;
+    let of_map = super::extract::map_of(&state.db, map_id).await?;
+    let entries = crate::maps::personal_watchlist::list(&state.db, actor, of_map).await?;
     Ok(Json(entries))
 }
 
@@ -138,7 +143,8 @@ pub async fn add_personal_watchlist_entry(
     Json(body): Json<AddPersonalWatchlistEntry>,
 ) -> ApiResult<WatchlistEntry> {
     let actor = require_actor(&state.db, &creds).await?;
-    let entry = crate::maps::personal_watchlist::add(&state.db, actor, map_id, body).await?;
+    let of_map = super::extract::map_of(&state.db, map_id).await?;
+    let entry = crate::maps::personal_watchlist::add(&state.db, actor, of_map, body).await?;
     personal_changed(&state, actor.user_id, map_id);
     Ok(Json(entry))
 }
@@ -158,7 +164,8 @@ pub async fn set_personal_watchlist_pinned(
     Json(body): Json<SetPersonalWatchlistPinned>,
 ) -> ApiResult<WatchlistEntry> {
     let actor = require_actor(&state.db, &creds).await?;
-    let entry = crate::maps::personal_watchlist::set_pinned(&state.db, actor, map_id, body).await?;
+    let of_map = super::extract::map_of(&state.db, map_id).await?;
+    let entry = crate::maps::personal_watchlist::set_pinned(&state.db, actor, of_map, body).await?;
     personal_changed(&state, actor.user_id, map_id);
     Ok(Json(entry))
 }
@@ -178,7 +185,8 @@ pub async fn remove_personal_watchlist_entry(
     Json(body): Json<RemovePersonalWatchlistEntry>,
 ) -> ApiResult<()> {
     let actor = require_actor(&state.db, &creds).await?;
-    crate::maps::personal_watchlist::remove(&state.db, actor, map_id, body).await?;
+    let of_map = super::extract::map_of(&state.db, map_id).await?;
+    crate::maps::personal_watchlist::remove(&state.db, actor, of_map, body).await?;
     personal_changed(&state, actor.user_id, map_id);
     Ok(Json(()))
 }

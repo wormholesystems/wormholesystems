@@ -390,6 +390,53 @@ and hands the hub's rows to the command; the command never talks to EVE Scout it
 
 ---
 
+## Tabs
+
+A map can be split over several **tabs**. Each tab is a map of its own underneath: a
+`maps` row whose `parent_id` names the map, with its own systems, connections,
+signatures, intel and history. So everything in this document applies to a tab exactly as
+written, under the tab's id: placing, aliases, pin, home, rally, clear, clean, stale
+sweeps, ghosts, undo and redo all act on one tab and never on another. The same system
+on two tabs is two placements.
+
+The map itself is the first tab, so a map nobody has split is unchanged.
+
+What the tabs of one map share:
+
+- **Access and sharing.** A grant on the map is a grant on each tab; a tab is public or
+  shared exactly as its map is. Tabs do not appear in `list_maps`.
+- **Viewer settings, watchlist, ignore list, alerts, shared structures.** These routes
+  answer for the map when asked of a tab.
+- **Map settings.** `update_map` on a tab changes the map, and the naming, placement and
+  ghost settings reach every tab.
+- **Routes.** `get_map` on a tab returns `elsewhere`: the solar system ids the other
+  tabs draw and their connections, by solar system id. The client adds those connections
+  to its route graph, and marks a system that another tab draws too.
+- **Intel.** `set_status`, `set_occupier` and `set_notes` on a tab write the system's
+  details to every tab of the map, whether or not it draws the system, and so do their
+  undos. A new tab starts with the map's intel. An import into a tab shares the intel
+  it carries the same way.
+
+Nothing else crosses: signatures, the ghosts they raise and aliases are each tab's own,
+even for a system two tabs both draw.
+
+`get_map` also returns `root_id`, `tabs` (`id`, `name`, `is_root`, in bar order) and
+`tabs_enabled`.
+
+### `create_tab` / `rename_tab` / `reorder_tabs` / `delete_tab`
+
+- **Auth:** `Manager` on the map.
+- **Switch:** tabs are off unless the operator names the map in `TABS_MAP_IDS` (map ids,
+  comma separated, or `all`). Off, `create_tab` answers `Conflict` and `get_map` returns
+  `tabs_enabled: false`, on which the client shows no way to add a tab. The switch only
+  gates adding: a map that already has tabs keeps and manages them.
+- **Validation:** a name of 1 to 24 characters; at most 12 tabs; `reorder_tabs` names
+  each tab exactly once.
+- **Effect:** `create_tab` adds an empty tab with the map's settings. `delete_tab`
+  deletes the tab's row, and with it everything drawn on it; it is not undoable. The
+  first tab is the map and cannot be deleted (`Conflict`). Each emits `MapUpdated` on the
+  map.
+
 ## Signatures
 
 Cosmic signatures scanned in a placed system. A `wormhole`-group signature carries the

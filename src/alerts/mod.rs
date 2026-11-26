@@ -142,6 +142,11 @@ impl Runtime {
 
     /// The active alerts of a kind, optionally on one map only.
     async fn of_kind(&self, pool: &PgPool, kind: AlertKind, map_id: Option<i64>) -> Vec<Alert> {
+        // An alert is set on a map, and what sets it off may happen on any of its tabs.
+        let map_id = match map_id {
+            Some(id) => Some(crate::maps::tabs::root_of(pool, id).await.unwrap_or(id)),
+            None => None,
+        };
         self.alerts(pool)
             .await
             .iter()

@@ -73,6 +73,8 @@ export default defineConfig({
 				// several gigabytes before the first spec ran.
 				KILLMAIL_BACKFILL_DAYS: '0',
 				EVE_SCOUT_URL: 'http://127.0.0.1:3999/evescout',
+				// Off by default; the tab specs split the maps they make.
+				TABS_MAP_IDS: 'all',
 			},
 			// First run compiles the API and may seed the SDE into a fresh database.
 			timeout: 300_000,

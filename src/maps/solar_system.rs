@@ -428,7 +428,7 @@ pub(super) async fn apply_set_status(tx: &mut Tx<'_>, cmd: SetStatus) -> Result<
         status: Some(cmd.status),
         ..IntelChange::default()
     };
-    write_intel(tx, cmd.map_id, cmd.map_solar_system_id, &change).await?;
+    let elsewhere = write_intel(tx, cmd.map_id, cmd.map_solar_system_id, &change).await?;
     let label = format!("set a system to {}", cmd.status.as_str());
     let inverse = MapCommand::SetStatus(SetStatus {
         status: before.status,
@@ -440,7 +440,8 @@ pub(super) async fn apply_set_status(tx: &mut Tx<'_>, cmd: SetStatus) -> Result<
         cmd.map_id,
         cmd.map_solar_system_id,
         inverse,
-    ))
+    )
+    .emit_all(elsewhere))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, utoipa::ToSchema)]
@@ -463,7 +464,7 @@ pub(super) async fn apply_set_occupier(tx: &mut Tx<'_>, cmd: SetOccupier) -> Res
         occupier: TextChange::Set(cmd.occupier.clone()),
         ..IntelChange::default()
     };
-    write_intel(tx, cmd.map_id, cmd.map_solar_system_id, &change).await?;
+    let elsewhere = write_intel(tx, cmd.map_id, cmd.map_solar_system_id, &change).await?;
     let label = match &cmd.occupier {
         Some(occupier) => format!("set the occupier to {occupier}"),
         None => "cleared an occupier".to_string(),
@@ -478,7 +479,8 @@ pub(super) async fn apply_set_occupier(tx: &mut Tx<'_>, cmd: SetOccupier) -> Res
         cmd.map_id,
         cmd.map_solar_system_id,
         inverse,
-    ))
+    )
+    .emit_all(elsewhere))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, utoipa::ToSchema)]
@@ -521,7 +523,7 @@ pub(super) async fn apply_set_notes(tx: &mut Tx<'_>, cmd: SetNotes) -> Result<Ef
         notes: TextChange::Set(cmd.notes.clone()),
         ..IntelChange::default()
     };
-    write_intel(tx, cmd.map_id, cmd.map_solar_system_id, &change).await?;
+    let elsewhere = write_intel(tx, cmd.map_id, cmd.map_solar_system_id, &change).await?;
     let inverse = MapCommand::SetNotes(SetNotes {
         notes: before.notes,
         expected: None,
@@ -533,7 +535,8 @@ pub(super) async fn apply_set_notes(tx: &mut Tx<'_>, cmd: SetNotes) -> Result<Ef
         cmd.map_id,
         cmd.map_solar_system_id,
         inverse,
-    ))
+    )
+    .emit_all(elsewhere))
 }
 
 /// The intel recorded against a placement's system, as it stands.
@@ -603,12 +606,15 @@ async fn intel(tx: &mut Tx<'_>, map_id: i64, map_solar_system_id: i64) -> Result
 
 /// Upsert the details row behind a placement, setting only the columns the change names.
 /// A row made here starts from the column defaults for the rest.
+///
+/// Intel is the map's, not the tab's: the other tabs take the row too, and the events for
+/// the placements that changed there are handed back.
 async fn write_intel(
     tx: &mut Tx<'_>,
     map_id: i64,
     map_solar_system_id: i64,
     change: &IntelChange,
-) -> Result<()> {
+) -> Result<Vec<MapEvent>> {
     #[expect(
         clippy::as_conversions,
         reason = "sqlx's `as` type override for a typed parameter, not a value conversion"
@@ -634,7 +640,7 @@ async fn write_intel(
     )
     .execute(&mut **tx)
     .await?;
-    Ok(())
+    super::tabs::share_placement_intel(tx, map_id, map_solar_system_id).await
 }
 
 /// The effect of an intel write: one placement's details changed, and `inverse` puts back

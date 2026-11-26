@@ -33,6 +33,10 @@ pub async fn map_structures(
 ) -> ApiResult<MapStructures> {
     super::extract::require_role_on_map(&state, &creds, map_id, Role::Member).await?;
     Ok(Json(
-        crate::maps::structures::for_map(&state.db, map_id).await?,
+        crate::maps::structures::for_map(
+            &state.db,
+            super::extract::map_of(&state.db, map_id).await?,
+        )
+        .await?,
     ))
 }

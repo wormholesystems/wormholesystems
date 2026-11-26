@@ -139,7 +139,7 @@ pub async fn evaluate(
 async fn mapped_along(pool: &PgPool, map_id: i64, route: &[i64]) -> sqlx::Result<Vec<i64>> {
     let rows = sqlx::query!(
         "select id, solar_system_id from map_solar_systems
-         where map_id = $1 and solar_system_id = any($2)",
+         where map_id in (select id from maps where coalesce(parent_id, id) = map_root($1)) and solar_system_id = any($2)",
         map_id,
         route,
     )

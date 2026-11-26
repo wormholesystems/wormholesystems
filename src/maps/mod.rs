@@ -26,6 +26,7 @@ pub mod signatures;
 pub mod solar_system;
 mod store;
 pub mod structures;
+pub mod tabs;
 pub mod tracking;
 pub mod transfer;
 pub mod user_settings;
@@ -307,6 +308,17 @@ pub struct MapView {
     pub character_has_access: bool,
     pub systems: Vec<MapSystemView>,
     pub connections: Vec<MapConnection>,
+    /// The map this is a tab of: its own id when it is the map itself. Grants, sharing and
+    /// the viewer's settings are read and written under this one.
+    pub root_id: i64,
+    /// The map's tabs in bar order, this one among them. Never empty.
+    pub tabs: Vec<tabs::MapTab>,
+    /// Whether the operator lets this map be split into tabs. Off, the client offers no
+    /// way to add one, and a map nobody has split looks as it always did.
+    pub tabs_enabled: bool,
+    /// What the other tabs draw, for the routes that run across them and for marking the
+    /// systems this tab shares with another.
+    pub elsewhere: Vec<tabs::TabNetwork>,
 }
 
 /// Map canvas geometry. Server-owned (built from env in `crate::config`), fetched by the

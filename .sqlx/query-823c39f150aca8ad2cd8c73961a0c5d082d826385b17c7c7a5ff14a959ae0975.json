@@ -1,40 +1,42 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select is_public, share_token from maps where id = $1",
+  "query": "select m.id, m.name from maps m\n         join map_user_roles r on r.map_id = m.id\n         where r.user_id = $1 and m.name ilike $2 and m.parent_id is null\n         order by m.name\n         limit $3",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "is_public",
-        "type_info": "Bool",
+        "name": "id",
+        "type_info": "Int8",
         "origin": {
           "Table": {
             "table": "maps",
-            "name": "is_public"
+            "name": "id"
           }
         }
       },
       {
         "ordinal": 1,
-        "name": "share_token",
+        "name": "name",
         "type_info": "Text",
         "origin": {
           "Table": {
             "table": "maps",
-            "name": "share_token"
+            "name": "name"
           }
         }
       }
     ],
     "parameters": {
       "Left": [
+        "Int8",
+        "Text",
         "Int8"
       ]
     },
     "nullable": [
       false,
-      true
+      false
     ]
   },
-  "hash": "4c60123b00e11fdb71afd929a781914b82160cc9110c873abe5c043232edf1f4"
+  "hash": "823c39f150aca8ad2cd8c73961a0c5d082d826385b17c7c7a5ff14a959ae0975"
 }

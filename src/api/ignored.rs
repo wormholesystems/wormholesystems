@@ -37,6 +37,7 @@ pub async fn list_ignored_systems(
     Query(share): Query<ShareQuery>,
 ) -> ApiResult<Vec<IgnoredSystem>> {
     read_map_as(&state, &creds, map_id, &share).await?;
+    let map_id = super::extract::map_of(&state.db, map_id).await?;
     let rows = crate::maps::ignored::read_ignored_systems(&state.db, map_id).await?;
     Ok(Json(rows))
 }
@@ -53,9 +54,10 @@ pub async fn add_ignored_system(
     State(state): State<AppState>,
     creds: Credentials,
     Path(map_id): Path<i64>,
-    Json(cmd): Json<AddIgnoredSystem>,
+    Json(mut cmd): Json<AddIgnoredSystem>,
 ) -> ApiResult<IgnoredSystem> {
     let actor = acting_on(&state.db, &creds, map_id, cmd.map_id).await?;
+    cmd.map_id = super::extract::map_of(&state.db, map_id).await?;
     let row = crate::maps::run(&state.db, actor, cmd).await?;
     Ok(Json(row))
 }
@@ -72,9 +74,10 @@ pub async fn remove_ignored_system(
     State(state): State<AppState>,
     creds: Credentials,
     Path(map_id): Path<i64>,
-    Json(cmd): Json<RemoveIgnoredSystem>,
+    Json(mut cmd): Json<RemoveIgnoredSystem>,
 ) -> ApiResult<()> {
     let actor = acting_on(&state.db, &creds, map_id, cmd.map_id).await?;
+    cmd.map_id = super::extract::map_of(&state.db, map_id).await?;
     crate::maps::run(&state.db, actor, cmd).await?;
     Ok(Json(()))
 }
@@ -91,9 +94,10 @@ pub async fn clear_ignored_systems(
     State(state): State<AppState>,
     creds: Credentials,
     Path(map_id): Path<i64>,
-    Json(cmd): Json<ClearIgnoredSystems>,
+    Json(mut cmd): Json<ClearIgnoredSystems>,
 ) -> ApiResult<u64> {
     let actor = acting_on(&state.db, &creds, map_id, cmd.map_id).await?;
+    cmd.map_id = super::extract::map_of(&state.db, map_id).await?;
     let count = crate::maps::run(&state.db, actor, cmd).await?;
     Ok(Json(count))
 }

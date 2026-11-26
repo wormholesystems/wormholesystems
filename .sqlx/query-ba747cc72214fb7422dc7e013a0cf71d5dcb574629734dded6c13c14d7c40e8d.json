@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update maps m set tab_order = o.tab_order\n         from unnest($1::bigint[], $2::int[]) as o(id, tab_order)\n         where m.id = o.id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8Array",
+        "Int4Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ba747cc72214fb7422dc7e013a0cf71d5dcb574629734dded6c13c14d7c40e8d"
+}

@@ -157,6 +157,24 @@ pub(crate) fn share_cookie(creds: &Credentials, map_id: i64) -> Option<String> {
         .filter(|token| !token.is_empty())
 }
 
+/// As [`share_cookie`], for a map that may be a tab: the link was followed to its map, so
+/// that is the id the cookie is filed under.
+pub(crate) async fn share_cookie_for(
+    db: &sqlx::PgPool,
+    creds: &Credentials,
+    map_id: i64,
+) -> Option<String> {
+    if let Some(token) = share_cookie(creds, map_id) {
+        return Some(token);
+    }
+    let root = sqlx::query_scalar!("select map_root($1)", map_id)
+        .fetch_one(db)
+        .await
+        .ok()
+        .flatten()?;
+    share_cookie(creds, root)
+}
+
 /// Who is reading: a grant if the session has one, otherwise whatever the map has been
 /// opened up to. Guests never get further than viewer.
 pub(crate) async fn read_map_as(
@@ -166,10 +184,17 @@ pub(crate) async fn read_map_as(
     share: &ShareQuery,
 ) -> Result<crate::maps::access::Reader, ApiError> {
     let actor = session_actor(&state.db, creds).await?;
-    let token = share
-        .share
-        .clone()
-        .or_else(|| share_cookie(creds, map_id))
-        .filter(|token| !token.is_empty());
+    let token = match share.share.clone() {
+        Some(token) => Some(token),
+        None => share_cookie_for(&state.db, creds, map_id).await,
+    }
+    .filter(|token| !token.is_empty());
     Ok(crate::maps::access::reader_for(&state.db, map_id, actor, token.as_deref()).await?)
+}
+
+/// The map a tab belongs to, for the routes whose subject is the map's and not a tab's:
+/// its watchlist, its ignore list, the structures shared with it. Asked of a tab, they
+/// answer for its map. Call it after the access check, which works on either id.
+pub(crate) async fn map_of(db: &sqlx::PgPool, map_id: i64) -> Result<i64, ApiError> {
+    Ok(crate::maps::tabs::root_of(db, map_id).await?)
 }

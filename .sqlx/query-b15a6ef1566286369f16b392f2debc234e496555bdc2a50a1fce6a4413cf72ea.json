@@ -1,11 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select m.id, m.name from maps m\n         join map_user_roles r on r.map_id = m.id\n         where r.user_id = $1 and m.name ilike $2\n         order by m.name\n         limit $3",
+  "query": "update maps set tab_name = $2 where id = $1\n           returning id as \"id!\", tab_name as \"name!\", (parent_id is null) as \"is_root!\"",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id",
+        "name": "id!",
         "type_info": "Int8",
         "origin": {
           "Table": {
@@ -16,27 +16,33 @@
       },
       {
         "ordinal": 1,
-        "name": "name",
+        "name": "name!",
         "type_info": "Text",
         "origin": {
           "Table": {
             "table": "maps",
-            "name": "name"
+            "name": "tab_name"
           }
         }
+      },
+      {
+        "ordinal": 2,
+        "name": "is_root!",
+        "type_info": "Bool",
+        "origin": "Expression"
       }
     ],
     "parameters": {
       "Left": [
         "Int8",
-        "Text",
-        "Int8"
+        "Text"
       ]
     },
     "nullable": [
       false,
-      false
+      false,
+      null
     ]
   },
-  "hash": "16e941f768be4b1ecaeca8e88ddf06d8d718fb6c669aaac83734827a9ba3f3a1"
+  "hash": "b15a6ef1566286369f16b392f2debc234e496555bdc2a50a1fce6a4413cf72ea"
 }

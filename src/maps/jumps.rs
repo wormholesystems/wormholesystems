@@ -499,8 +499,10 @@ pub async fn record_transit(
     // only if the origin is on the map, so a connection created moments later can claim it.
     let recorded = sqlx::query!(
         r#"with maps as (
-               select mus.map_id
+               -- Sharing is switched on for a map, and holds on each of its tabs.
+               select tab.id as map_id
                from map_user_settings mus
+               join maps tab on coalesce(tab.parent_id, tab.id) = mus.map_id
                where mus.user_id = $1 and mus.tracking_allowed
                  and exists (
                      select 1 from map_user_roles r

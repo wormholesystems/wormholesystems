@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select exists(\n             select 1 from map_ignored_solar_systems\n             where map_id = $1 and solar_system_id = $2\n         )",
+  "query": "select exists(\n             select 1 from map_ignored_solar_systems\n             where map_id = map_root($1) and solar_system_id = $2\n         )",
   "describe": {
     "columns": [
       {
@@ -20,5 +20,5 @@
       null
     ]
   },
-  "hash": "30900fd483ea2e460ec88884c50ee97c241dae9e344478b17c39e6ca59c34dea"
+  "hash": "7e869781e7db877312b9ffea38a6161778205c6ca58fab6bbcb9c0c341494d9a"
 }

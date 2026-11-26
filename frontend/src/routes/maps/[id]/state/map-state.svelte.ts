@@ -29,6 +29,7 @@ import {
 	treeShapeKey,
 } from '$lib/map/positions';
 import { routeOrigin } from '$lib/routing/origin';
+import { tabsBySystem } from '$lib/map/tabs';
 import { ghostSignatures } from '$lib/map/ghosts';
 import { layoutMode } from '$lib/map/layout-mode';
 import { orphanedSystems } from '$lib/map/orphans';
@@ -48,6 +49,7 @@ import { CharactersApi } from './characters';
 import { ConnectionsApi } from './connections';
 import { SignaturesApi } from './signatures';
 import { SystemsApi } from './systems';
+import { TabsApi } from './tabs';
 import { IgnoredApi } from './ignored';
 import { PersonalWatchlistApi, WatchlistApi } from './watchlist';
 import { WaypointsApi } from './waypoints';
@@ -70,6 +72,28 @@ function searchResultOf(placed: Extract<MapSystemView, { kind: 'system' }>): Sys
 		sovereignty: placed.sovereignty,
 		statics: placed.statics,
 	};
+}
+
+// What the map keeps for all of its tabs. The socket carries every tab's frames, and
+// these are about the map whichever tab they are stamped with.
+const MAP_WIDE: ReadonlySet<NonNullable<MapEvent>['type']> = new Set([
+	'map_updated',
+	'access_changed',
+	'characters_changed',
+	'watchlist_changed',
+	'ignored_systems_changed',
+	'structures_changed',
+]);
+
+/**
+ * A frame as this tab should hear it. Something drawn on another tab changed nothing that
+ * is drawn here, but it may have changed the routes through it and what the two tabs
+ * share, both of which ride on the map read: so it is heard as "the map changed".
+ */
+function aboutThisTab(event: MapEvent | null, mapId: number): MapEvent | null {
+	if (event === null || !('map_id' in event) || event.map_id === mapId) return event;
+	if (MAP_WIDE.has(event.type)) return event;
+	return { type: 'map_updated', map_id: mapId };
 }
 
 /** An in-progress connection drag: from this placement to the current cursor (world coords). */
@@ -102,7 +126,13 @@ const defaultGrid: GridConfig = {
 };
 
 export class MapState {
-	mapId: number;
+	/** The map the screen was opened on, which outlives every tab switch. */
+	readonly rootId: number;
+	/**
+	 * The tab in view: the id everything drawn here is read and written under. It changes
+	 * when another tab of the map is shown ([`show`]), so nothing may keep a copy of it.
+	 */
+	mapId = $state(0);
 	camera: MapCamera;
 	panels: PanelLayoutStore;
 	route: RoutePlanner;
@@ -110,6 +140,7 @@ export class MapState {
 
 	// The domain namespaces: data plus verbs, one per noun.
 	systems: SystemsApi;
+	tabs: TabsApi;
 	connections: ConnectionsApi;
 	signatures: SignaturesApi;
 	watchlist: WatchlistApi;
@@ -135,6 +166,15 @@ export class MapState {
 	get userSettings() {
 		return this.queries.settings.data ?? null;
 	}
+
+	/** What the map's other tabs draw, for the routes and the links between tabs. */
+	private get elsewhere() {
+		return this.data?.elsewhere ?? [];
+	}
+	/** Whether the operator lets this map be split into tabs. */
+	tabsEnabled = $derived(this.data?.tabs_enabled ?? false);
+	/** The other tabs each solar system is drawn on. Empty on a map with one tab. */
+	tabsBySystem = $derived(tabsBySystem(this.data?.elsewhere ?? [], this.data?.tabs ?? []));
 
 	get naming() {
 		return this.data?.map.naming ?? null;
@@ -313,14 +353,25 @@ export class MapState {
 	/** What the whole map keeps off its routes, as the router and the tracker read it. */
 	ignoredIds = $derived(new Set(this.ignoredRows.map((row) => row.solar_system_id)));
 
-	constructor(mapId: number, signedIn = true, seed: MapSeed = { view: null, settings: null }) {
+	constructor(
+		rootId: number,
+		mapId: number,
+		signedIn = true,
+		seed: MapSeed = { view: null, settings: null },
+	) {
+		this.rootId = rootId;
 		this.mapId = mapId;
-		this.camera = new MapCamera(mapId);
+		// Everything below is handed the tab in view as something to read, never as a value.
+		const tab = () => this.mapId;
+		this.camera = new MapCamera(tab);
 		this.signedIn = signedIn;
-		this.queries = createMapQueries(mapId, signedIn, seed, () => this.socket === 'open');
+		this.queries = createMapQueries(tab, signedIn, seed, () => this.socket === 'open');
 		const run: RunAction = (action, exec, detail) => this.run(action, exec, detail);
+		this.tabs = new TabsApi({ mapId: tab, all: () => this.data?.tabs ?? [], run });
 		this.systems = new SystemsApi({
-			mapId,
+			get mapId() {
+				return tab();
+			},
 			camera: this.camera,
 			all: () => this.systemsView,
 			byId: () => this.systemsById,
@@ -329,14 +380,16 @@ export class MapState {
 			run,
 			notesLocal: (id, notes) =>
 				this.queries.client.setQueryData(
-					q.systemDetails(mapId, id).queryKey,
+					q.systemDetails(tab(), id).queryKey,
 					(d: SystemDetails | undefined) => d && { ...d, notes },
 				),
 			refetchNotes: (id) =>
-				void this.queries.client.invalidateQueries({ queryKey: key.systemDetails(mapId, id) }),
+				void this.queries.client.invalidateQueries({ queryKey: key.systemDetails(tab(), id) }),
 		});
 		this.connections = new ConnectionsApi({
-			mapId,
+			get mapId() {
+				return tab();
+			},
 			all: () => this.connectionsView,
 			byId: () => this.connectionsById,
 			stale: () => this.queries.stale.data ?? [],
@@ -344,26 +397,34 @@ export class MapState {
 			run,
 			refreshJumps: (connectionId) =>
 				void this.queries.client.invalidateQueries({
-					queryKey: key.connectionJumps(mapId, connectionId),
+					queryKey: key.connectionJumps(tab(), connectionId),
 				}),
 		});
 		this.signatures = new SignaturesApi({
-			mapId,
+			get mapId() {
+				return tab();
+			},
 			all: () => this.queries.signatures.data ?? [],
 			run,
 		});
 		this.watchlist = new WatchlistApi({
-			mapId,
+			get mapId() {
+				return tab();
+			},
 			all: () => this.queries.watchlist.data ?? [],
 			run,
 		});
 		this.personalWatchlist = new PersonalWatchlistApi({
-			mapId,
+			get mapId() {
+				return tab();
+			},
 			all: () => this.queries.personalWatchlist.data ?? [],
 			run,
 		});
 		this.ignored = new IgnoredApi({
-			mapId,
+			get mapId() {
+				return tab();
+			},
 			all: () => this.queries.ignored.data ?? [],
 			run,
 		});
@@ -372,7 +433,7 @@ export class MapState {
 			mine: () => this.queries.myCharacters.data ?? [],
 			refresh: () => {
 				if (this.signedIn)
-					void this.queries.client.invalidateQueries({ queryKey: key.mapCharacters(mapId) });
+					void this.queries.client.invalidateQueries({ queryKey: key.mapCharacters(tab()) });
 			},
 			refreshMine: () => {
 				if (this.signedIn)
@@ -381,15 +442,24 @@ export class MapState {
 		});
 		this.waypoints = new WaypointsApi({ run });
 		this.placement = new PlacementApi({
-			mapId,
+			get mapId() {
+				return tab();
+			},
 			mapLayout: () => this.data?.map.layout ?? null,
 			run,
 			patchSettingsLocal: (update) => this.queries.patchSettingsLocal(update),
 			patchUserSettings: (patch) => this.patchUserSettings(patch),
 		});
-		this.background = new BackgroundApi({ mapId, writer: this.queries.backgroundWriter });
+		this.background = new BackgroundApi({
+			get mapId() {
+				return tab();
+			},
+			writer: this.queries.backgroundWriter,
+		});
 		this.history = new HistoryStore({
-			mapId,
+			get mapId() {
+				return tab();
+			},
 			data: () => this.queries.history.data ?? null,
 			run,
 		});
@@ -433,6 +503,33 @@ export class MapState {
 		});
 	}
 
+	/**
+	 * Show another tab of the map on the screen that is already up, with what the
+	 * navigation loaded for it. Planted first, so the queries find it under the new id
+	 * instead of fetching it again; then everything that was about the tab just left goes.
+	 */
+	show(mapId: number, seed: MapSeed) {
+		this.queries.plant(mapId, seed);
+		if (untrack(() => this.mapId) === mapId) return;
+		this.mapId = mapId;
+		this.selected = new Set();
+		this.drag = null;
+		this.pending = {};
+		this.linking = null;
+		this.band = null;
+		this.menu = null;
+		this.panDrag = null;
+		this.connectionPopover = null;
+		this.searchAnchor = null;
+		this.activeId = null;
+		this.linkFrom = null;
+		this.assignGhostId = null;
+		this.hoveredSystemId = null;
+		this.cleanPrompt = false;
+		this.lastPositions = null;
+		this.camera.reset();
+	}
+
 	/** The signature type catalog, cached forever in the query client. */
 	loadCatalog() {
 		return loadCatalog(this.queries.client);
@@ -468,13 +565,15 @@ export class MapState {
 	/** The planner's narrow view of this map; tables come from the query cache. */
 	private routeHost(): RouteHost {
 		return {
-			mapId: this.mapId,
+			// The viewer's own ignore list is kept per map, not per tab.
+			mapId: this.rootId,
 			systems: () => this.systemsView,
 			connections: () => this.connectionsView,
 			sigs: () => this.signatures.all,
 			eveScout: () => this.eveScout,
 			useEveScout: () => this.useEveScout,
 			useWormholes: () => this.useWormholes,
+			elsewhere: () => this.elsewhere,
 			mapIgnored: () => this.ignoredIds,
 			settings: () => this.routingSettings,
 			loadTables: () => this.queries.client.ensureQueryData(q.routingGraph()),
@@ -519,7 +618,7 @@ export class MapState {
 
 	/** Refetch what one socket frame invalidated; the table lives in [`keysFor`]. */
 	applyEvent(event: MapEvent | null) {
-		this.queries.applyEvent(event);
+		this.queries.applyEvent(aboutThisTab(event, this.mapId));
 	}
 
 	/** Refetch the whole map subtree; resolves once the active refetches settle. */

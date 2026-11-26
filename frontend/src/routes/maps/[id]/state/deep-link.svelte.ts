@@ -7,15 +7,16 @@ import { deepLinkTarget, systemParamUrl } from './deep-link';
 import type { MapState } from './map-state.svelte';
 
 /**
- * Component init only. The link activates its system once the graph is in, exactly once,
- * and from then on the param follows the active system. It is only ever written: clearing
+ * Component init only. The link activates its system once the graph is in, once per tab
+ * shown, and from then on the param follows the active system. It is only ever written: clearing
  * it would race the load-time restore, which reads it before the map data has arrived.
  */
 export function syncDeepLink(map: MapState): void {
-	let applied = false;
+	let appliedFor: number | null = null;
 	$effect(() => {
-		if (applied || !map.loaded) return;
-		applied = true;
+		// The graph of the tab in view, not the one a switch is just leaving.
+		if (appliedFor === map.mapId || map.data?.map.id !== map.mapId) return;
+		appliedFor = map.mapId;
 		if (map.activeId === null) {
 			map.activeId = deepLinkTarget(map.systems.all, page.url.searchParams.get('system'));
 		}

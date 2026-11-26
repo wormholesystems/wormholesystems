@@ -56,6 +56,9 @@ function stationGroup(group: {
  * What the planner reads off the map, plus how the static tables arrive. Narrow on
  * purpose, like [`LayoutHost`]: a test hands in a plain object.
  */
+import type { TabNetwork } from '$lib/api/types/TabNetwork';
+import { elsewhereEdges } from '$lib/map/tabs';
+
 export interface RouteHost {
 	mapId: number;
 	systems(): MapSystemView[];
@@ -65,6 +68,8 @@ export interface RouteHost {
 	useEveScout(): boolean;
 	/** Whether the chain's own holes count as route edges. */
 	useWormholes(): boolean;
+	/** What the map's other tabs draw: their connections are part of the same network. */
+	elsewhere?(): TabNetwork[];
 	/** The map's own ignore list, which every viewer routes around. */
 	mapIgnored(): Set<number>;
 	/** The viewer's route preference and tolerances. */
@@ -123,12 +128,14 @@ export class RoutePlanner {
 		const stargates = this.stargates;
 		if (!stargates) return null;
 		const security = this.security;
-		const edges = graphBuild.chainEdges(
-			this.map.systems(),
-			this.map.connections(),
-			this.map.useEveScout() ? this.map.eveScout() : null,
-			this.map.useWormholes(),
-		);
+		const edges = graphBuild
+			.chainEdges(
+				this.map.systems(),
+				this.map.connections(),
+				this.map.useEveScout() ? this.map.eveScout() : null,
+				this.map.useWormholes(),
+			)
+			.concat(elsewhereEdges(this.map.elsewhere?.() ?? [], this.map.useWormholes()));
 		const built = this.built;
 		if (
 			built &&

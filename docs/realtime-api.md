@@ -21,6 +21,11 @@ OpenAPI document, since it cannot describe a stream.
 Authenticate the upgrade request the way you authenticate any other request: the session
 cookie, or `Authorization: Bearer wst_...` with a personal access token.
 
+A map split over tabs is one map to its socket: `/ws/map/{id}` for the map or any of its
+tabs carries the frames of all of them, each stamped with the `map_id` of the tab it
+happened on. A frame for another tab changes nothing drawn on yours, but may change the
+routes and the systems you share, so refetch `GET /api/maps/{id}` for it and nothing else.
+
 A map socket keeps checking. Whenever the map's grants or sharing change, and once a
 minute besides (a grant can run out, a character can leave the corporation it was granted
 through), the server asks again whether the reader may still see the map. Once they may
@@ -44,7 +49,7 @@ about. The schemas are in the OpenAPI document under `components.schemas.MapEven
 
 | `type` | Fields | Sent when | Read again |
 |--------|--------|-----------|------------|
-| `map_updated` | `map_id` | The map's name, description or image changed | `GET /api/maps/{id}` |
+| `map_updated` | `map_id` | The map's name, description or image changed, or a tab was added, renamed, moved or deleted | `GET /api/maps/{id}` |
 | `system_added` | `map_id`, `map_solar_system_id` | A system was placed | `GET /api/maps/{id}` |
 | `system_moved` | `map_id`, `map_solar_system_id` | A placement moved | `GET /api/maps/{id}` |
 | `system_removed` | `map_id`, `map_solar_system_id` | A placement was removed | `GET /api/maps/{id}` |

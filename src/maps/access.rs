@@ -124,7 +124,8 @@ pub async fn reader_for(
     }
 
     let map = sqlx::query!(
-        "select is_public, share_token from maps where id = $1",
+        // A tab is shared the way its map is.
+        "select is_public, share_token from maps where id = map_root($1)",
         map_id,
     )
     .fetch_optional(pool)

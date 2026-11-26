@@ -376,7 +376,9 @@ async fn account(state: &AppState, user_id: i64) -> String {
     .await
     .unwrap_or_default();
     let maps = sqlx::query_scalar!(
-        "select count(*) from map_user_roles where user_id = $1",
+        "select count(*) from map_user_roles r
+         join maps m on m.id = r.map_id and m.parent_id is null
+         where r.user_id = $1",
         user_id,
     )
     .fetch_one(&state.db)
@@ -831,7 +833,7 @@ async fn maps_for(state: &AppState, user_id: i64, typed: &str) -> Vec<Value> {
     let rows = sqlx::query!(
         "select m.id, m.name from maps m
          join map_user_roles r on r.map_id = m.id
-         where r.user_id = $1 and m.name ilike $2
+         where r.user_id = $1 and m.name ilike $2 and m.parent_id is null
          order by m.name
          limit $3",
         user_id,

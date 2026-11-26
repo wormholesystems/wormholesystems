@@ -26,6 +26,7 @@ pub mod search;
 pub mod signatures;
 pub mod structures;
 pub mod systems;
+pub mod tabs;
 pub mod tokens;
 pub mod tracking;
 pub mod transfer;
@@ -272,6 +273,7 @@ Live updates go over WebSockets, which this document cannot describe: see \
         (name = "maps", description = "The maps themselves: list yours, create one, read a whole map in one call, rename or reconfigure it, and who is on it right now. Everything else hangs off a map id from here."),
         (name = "access", description = "Who may see and edit a map. Roles are granted to a character, corporation or alliance, ownership can be handed over, and a share token gives read-only access without an account."),
         (name = "systems", description = "The nodes on the map: placing and removing solar systems, moving them, and everything written on a node such as its alias, status, notes, occupier, and the home and rally markers. Also the unresolved hole placeholders and clearing a map."),
+        (name = "tabs", description = "A map split over several canvases. Each tab is a map id of its own with its own systems, connections and history, read and edited through the same routes as any map. Access, sharing and viewer settings are the map's. Routes run across every tab, and what is known about a system (its signatures and intel) is the same on each tab that draws it."),
         (name = "connections", description = "The wormholes between two placed systems: adding and removing them, setting mass and lifetime status, the jump log that feeds the mass estimate, and pruning connections nobody has used in a while."),
         (name = "signatures", description = "Scan results per system: pasting the probe scanner, editing single signatures, and linking a wormhole signature to the connection it turned out to be. The type catalogue for the pickers lives here too."),
         (name = "naming", description = "How a map names things: the alias a newly reached system gets and the bookmark names for its holes, both decided by the map's naming strategy so every client names alike."),
@@ -334,6 +336,7 @@ fn areas() -> OpenApiRouter<AppState> {
         .merge(maps::routes())
         .merge(naming::routes())
         .merge(systems::routes())
+        .merge(tabs::routes())
         .merge(connections::routes())
         .merge(signatures::routes())
         .merge(watchlist::routes())

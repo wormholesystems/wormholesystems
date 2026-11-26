@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select is_public, share_token from maps where id = map_root($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_public",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "is_public"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "share_token",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "share_token"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "fee0a7a174119d7aa3f52720541a647ff15c324c16c3902da22265a7f83983b4"
+}

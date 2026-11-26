@@ -436,6 +436,9 @@ async fn import_solarsystems(
             counts.created += 1;
         }
     }
+    // Intel is the map's: its other tabs take it too. Their viewers refetch on the
+    // import's own `HistoryChanged`, so the events are not needed.
+    crate::maps::tabs::share_intel(tx, map_id, &ids).await?;
     Ok(())
 }
 

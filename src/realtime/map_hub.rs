@@ -163,6 +163,13 @@ pub struct Subscription {
     channels: Arc<Mutex<HashMap<i64, broadcast::Sender<MapEvent>>>>,
 }
 
+impl Subscription {
+    /// The map this subscription listens to.
+    pub fn map_id(&self) -> i64 {
+        self.map_id
+    }
+}
+
 impl std::ops::Deref for Subscription {
     type Target = broadcast::Receiver<MapEvent>;
 
