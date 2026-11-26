@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select m.id, m.name, m.description, m.image_url, m.created_at, m.alias_scheme, m.naming_strategy,\n                  m.ignored_alias, m.bookmark_wormhole, m.bookmark_kspace, m.bookmark_return,\n                  m.ghost_unlinked_wormholes, m.layout, m.allow_layout_override,\n                  m.is_public, m.share_token,\n                  -- The view cannot promise not-null the way the table does.\n                  ma.role as \"role!: Role\"\n           from maps m\n           join map_user_roles ma on ma.map_id = m.id\n           where ma.user_id = $1\n           order by m.created_at",
+  "query": "select m.id, m.name, m.description, m.image_url, m.created_at, m.alias_scheme, m.naming_strategy,\n                  m.ignored_alias, m.bookmark_wormhole, m.bookmark_kspace, m.bookmark_return,\n                  m.ghost_unlinked_wormholes, m.layout, m.allow_layout_override,\n                  m.is_public, m.share_token,\n                  -- The view cannot promise not-null the way the table does.\n                  ma.role as \"role!: Role\"\n           from maps m\n           join map_user_roles ma on ma.map_id = m.id\n           -- A tab is part of its map, not a map of its own in anybody's list.\n           where ma.user_id = $1 and m.parent_id is null\n           order by m.created_at",
   "describe": {
     "columns": [
       {
@@ -258,5 +258,5 @@
       true
     ]
   },
-  "hash": "9a43387d25b47001e805e99287da5b00cb322aed497cdd9758ef25de9cfd09b8"
+  "hash": "df0efd8d7fde7e496bb7d74bdc8c152231531afb0804f3365c93bf1075b53507"
 }

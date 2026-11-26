@@ -1,16 +1,16 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id from maps where id = $1 for no key update",
+  "query": "select solar_system_id from map_ignored_solar_systems where map_id = map_root($1)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id",
+        "name": "solar_system_id",
         "type_info": "Int8",
         "origin": {
           "Table": {
-            "table": "maps",
-            "name": "id"
+            "table": "map_ignored_solar_systems",
+            "name": "solar_system_id"
           }
         }
       }
@@ -24,5 +24,5 @@
       false
     ]
   },
-  "hash": "d334ee3aebd251e84075a16a9aebca4b8351eac3962f795bd73037264966a6cf"
+  "hash": "340de0fb2745b9031a3a1949fce370b8a97498f35406c982aa6ada7c61604b04"
 }

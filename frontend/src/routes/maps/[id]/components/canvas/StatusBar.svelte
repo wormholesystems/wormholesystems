@@ -30,6 +30,7 @@
 	import RollingDialog from '../overlays/RollingDialog.svelte';
 	import StaleConnectionsPopover from '../connection/StaleConnectionsPopover.svelte';
 	import TrackingSettings from '../tracking/TrackingSettings.svelte';
+	import TabBar from './TabBar.svelte';
 
 	let { map, onstarttour }: { map: MapState; onstarttour?: () => void } = $props();
 
@@ -129,6 +130,7 @@
 		Search
 		<kbd class="rounded border border-border/60 px-1 font-mono text-[10px]">⌘K</kbd>
 	</Button>
+	<TabBar {map} />
 
 	<div class="flex flex-1 items-center justify-center gap-2">
 		{#if watching}
@@ -353,7 +355,7 @@
 				{#snippet child({ props })}
 					<Button
 						{...props}
-						href="{mapPath(map.data?.map ?? { id: map.mapId, name: '' })}/settings"
+						href="{mapPath({ id: map.rootId, name: map.data?.map.name ?? '' })}/settings"
 						variant="ghost"
 						size="icon"
 						class="size-7"

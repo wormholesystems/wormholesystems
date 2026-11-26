@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into map_solar_system_details\n             (map_id, solar_system_id, status, occupying_group, notes)\n         select $1, solar_system_id, status, occupying_group, notes\n         from map_solar_system_details\n         where map_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a9507353b09f7d1711a0c2b8b5e8ba87e5cb15b66afa32376e7e07eed9b46ac3"
+}

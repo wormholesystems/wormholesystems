@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id, solar_system_id from map_solar_systems\n         where map_id = $1 and solar_system_id = any($2)",
+  "query": "select id, solar_system_id from map_solar_systems\n         where map_id in (select id from maps where coalesce(parent_id, id) = map_root($1)) and solar_system_id = any($2)",
   "describe": {
     "columns": [
       {
@@ -37,5 +37,5 @@
       true
     ]
   },
-  "hash": "c4e837e58ec2485720453281392549466247191b28bb26af652102ebadd36017"
+  "hash": "9f5ddb8f8c541a03839e2acb2115d972487879171f99f15e1bd777f1a826de8d"
 }

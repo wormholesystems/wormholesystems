@@ -44,6 +44,8 @@ pub struct AppState {
     /// Who may create maps, independent of who may log in: an instance can admit a whole
     /// alliance while only its leadership creates maps.
     pub map_creators: crate::allowlist::AffiliationAllowlist,
+    /// Which maps may be split into tabs.
+    pub tabs: crate::maps::tabs::TabsFor,
     /// The site-wide banner, if the operator set one.
     pub announcement: Option<Arc<crate::announcement::Announcement>>,
     /// EVE Scout's public Thera and Turnur holes, with the last read cached.
@@ -164,6 +166,7 @@ pub async fn serve(config: Config) {
         backgrounds: crate::maps::BackgroundStore::new(config.uploads_dir),
         allowed_logins: config.allowed_logins,
         map_creators: config.map_creators,
+        tabs: config.tabs,
         announcement: config.announcement.map(Arc::new),
         eve_scout: Arc::new(crate::integrations::eve_scout::EveScout::new(
             config.eve_scout_url,

@@ -4546,6 +4546,265 @@
         ]
       }
     },
+    "/api/maps/{id}/tabs/create": {
+      "post": {
+        "tags": [
+          "tabs"
+        ],
+        "summary": "`POST /api/maps/{id}/tabs/create`, add an empty tab at the end of the bar. `{id}` is\nthe map or any of its tabs. The new tab's `id` is a map id: read it with\n`GET /api/maps/{id}` and edit it through the same routes as any map. `Conflict` unless\nthe operator switched tabs on for the map (`TABS_MAP_IDS`).",
+        "operationId": "create_tab",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The map, or one of its tabs",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTab"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MapTab"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/maps/{id}/tabs/delete": {
+      "post": {
+        "tags": [
+          "tabs"
+        ],
+        "summary": "`POST /api/maps/{id}/tabs/delete`, delete a tab and everything drawn on it. The map's\nown first tab cannot be deleted this way: it is the map.",
+        "operationId": "delete_tab",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The tab",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteTab"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Done; the body is `null`"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/maps/{id}/tabs/rename": {
+      "post": {
+        "tags": [
+          "tabs"
+        ],
+        "operationId": "rename_tab",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The tab",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameTab"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MapTab"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/maps/{id}/tabs/reorder": {
+      "post": {
+        "tags": [
+          "tabs"
+        ],
+        "summary": "`POST /api/maps/{id}/tabs/reorder`, put the tabs in a new order. The body names each\nof the map's tabs once.",
+        "operationId": "reorder_tabs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The map, or one of its tabs",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReorderTabs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MapTab"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/api/maps/{id}/track-jump": {
       "post": {
         "tags": [
@@ -7395,6 +7654,23 @@
           }
         }
       },
+      "CreateTab": {
+        "type": "object",
+        "required": [
+          "map_id",
+          "name"
+        ],
+        "properties": {
+          "map_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The map, or any of its tabs."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "CreateToken": {
         "type": "object",
         "required": [
@@ -7427,6 +7703,19 @@
           },
           "token": {
             "$ref": "#/components/schemas/PersonalAccessToken"
+          }
+        }
+      },
+      "DeleteTab": {
+        "type": "object",
+        "required": [
+          "map_id"
+        ],
+        "properties": {
+          "map_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The tab."
           }
         }
       },
@@ -9527,6 +9816,28 @@
         ],
         "description": "A placed system enriched with everything a map node displays. Read-only, built by\n`get_map` from joins across the SDE + intel + sovereignty tables. Mutations use the lean\n[`MapSolarSystem`].\n\nTwo shapes, because a node is either a system somebody placed or a hole somebody\nscanned: a ghost has no security, statics, or intel, and saying that in the type makes\nthe check impossible to skip."
       },
+      "MapTab": {
+        "type": "object",
+        "description": "One tab of a map. `id` is a map id like any other: it is what the tab's systems and\nconnections are read and written under.",
+        "required": [
+          "id",
+          "name",
+          "is_root"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "is_root": {
+            "type": "boolean",
+            "description": "The map itself, which is its own first tab and goes only when the map does."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "MapUserSettings": {
         "type": "object",
         "description": "A user's per-map preferences.",
@@ -9687,7 +9998,11 @@
           "role",
           "character_has_access",
           "systems",
-          "connections"
+          "connections",
+          "root_id",
+          "tabs",
+          "tabs_enabled",
+          "elsewhere"
         ],
         "properties": {
           "character_has_access": {
@@ -9700,6 +10015,13 @@
               "$ref": "#/components/schemas/MapConnection"
             }
           },
+          "elsewhere": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TabNetwork"
+            },
+            "description": "What the other tabs draw, for the routes that run across them and for marking the\nsystems this tab shares with another."
+          },
           "map": {
             "$ref": "#/components/schemas/Map"
           },
@@ -9707,11 +10029,27 @@
             "$ref": "#/components/schemas/Role",
             "description": "The caller's effective role on this map, for client-side permission gating."
           },
+          "root_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The map this is a tab of: its own id when it is the map itself. Grants, sharing and\nthe viewer's settings are read and written under this one."
+          },
           "systems": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/MapSystemView"
             }
+          },
+          "tabs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MapTab"
+            },
+            "description": "The map's tabs in bar order, this one among them. Never empty."
+          },
+          "tabs_enabled": {
+            "type": "boolean",
+            "description": "Whether the operator lets this map be split into tabs. Off, the client offers no\nway to add one, and a map nobody has split looks as it always did."
           }
         }
       },
@@ -10315,6 +10653,45 @@
           "map_id": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "RenameTab": {
+        "type": "object",
+        "required": [
+          "map_id",
+          "name"
+        ],
+        "properties": {
+          "map_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The tab."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "ReorderTabs": {
+        "type": "object",
+        "required": [
+          "map_id",
+          "tab_ids"
+        ],
+        "properties": {
+          "map_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The map, or any of its tabs."
+          },
+          "tab_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "Every tab of the map, in the order the bar should show them."
           }
         }
       },
@@ -12340,6 +12717,77 @@
           "empty"
         ]
       },
+      "TabEdge": {
+        "type": "object",
+        "description": "A connection on another tab, by the systems it joins rather than by placements this\ntab has never heard of.",
+        "required": [
+          "from_solar_system_id",
+          "to_solar_system_id",
+          "kind"
+        ],
+        "properties": {
+          "from_solar_system_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ConnectionType"
+          },
+          "mass_status": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MassStatus"
+              }
+            ]
+          },
+          "time_status": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TimeStatus"
+              }
+            ]
+          },
+          "to_solar_system_id": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "TabNetwork": {
+        "type": "object",
+        "description": "What another tab draws, as little of it as the routes and the links between tabs need.",
+        "required": [
+          "tab_id",
+          "systems",
+          "connections"
+        ],
+        "properties": {
+          "connections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TabEdge"
+            }
+          },
+          "systems": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "The solar systems it draws, each once."
+          },
+          "tab_id": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "ThreatAnalysis": {
         "type": "object",
         "description": "A wormhole system's threat analysis, for the threat card.",
@@ -13230,6 +13678,10 @@
     {
       "name": "systems",
       "description": "The nodes on the map: placing and removing solar systems, moving them, and everything written on a node such as its alias, status, notes, occupier, and the home and rally markers. Also the unresolved hole placeholders and clearing a map."
+    },
+    {
+      "name": "tabs",
+      "description": "A map split over several canvases. Each tab is a map id of its own with its own systems, connections and history, read and edited through the same routes as any map. Access, sharing and viewer settings are the map's. Routes run across every tab, and what is known about a system (its signatures and intel) is the same on each tab that draws it."
     },
     {
       "name": "connections",

@@ -191,11 +191,12 @@ pub struct Chain {
 }
 
 /// A map's placed systems, the connections between them, and what it routes around, in
-/// solar-system ids.
+/// solar-system ids. Every tab's: an alert is the map's, and a chain is no shorter for
+/// being drawn on two canvases.
 pub async fn chain_of(pool: &PgPool, map_id: i64) -> Option<Chain> {
     let systems: Vec<i64> = sqlx::query_scalar!(
         r#"select solar_system_id as "solar_system_id!" from map_solar_systems
-           where map_id = $1 and solar_system_id is not null"#,
+           where map_id in (select id from maps where coalesce(parent_id, id) = map_root($1)) and solar_system_id is not null"#,
         map_id,
     )
     .fetch_all(pool)
@@ -209,7 +210,7 @@ pub async fn chain_of(pool: &PgPool, map_id: i64) -> Option<Chain> {
          from map_connections c
          join map_solar_systems a on a.id = c.from_system
          join map_solar_systems b on b.id = c.to_system
-         where c.map_id = $1",
+         where c.map_id in (select id from maps where coalesce(parent_id, id) = map_root($1))",
         map_id,
     )
     .fetch_all(pool)

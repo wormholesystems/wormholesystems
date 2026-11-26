@@ -1,0 +1,121 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select c.map_id, f.solar_system_id as \"from!\", t.solar_system_id as \"to!\",\n                  c.type as kind, c.mass_status, c.time_status\n           from map_connections c\n           join maps m on m.id = c.map_id\n           join map_solar_systems f on f.id = c.from_system\n           join map_solar_systems t on t.id = c.to_system\n           where coalesce(m.parent_id, m.id) = map_root($1) and c.map_id <> $1\n             and f.solar_system_id is not null and t.solar_system_id is not null\n           order by c.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "map_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "map_connections",
+            "name": "map_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "from!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "map_solar_systems",
+            "name": "solar_system_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "to!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "map_solar_systems",
+            "name": "solar_system_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "kind",
+        "type_info": {
+          "Custom": {
+            "name": "connection_type",
+            "kind": {
+              "Enum": [
+                "wormhole",
+                "stargate"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "map_connections",
+            "name": "type"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "mass_status",
+        "type_info": {
+          "Custom": {
+            "name": "mass_status",
+            "kind": {
+              "Enum": [
+                "stable",
+                "reduced",
+                "critical"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "map_connections",
+            "name": "mass_status"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "time_status",
+        "type_info": {
+          "Custom": {
+            "name": "time_status",
+            "kind": {
+              "Enum": [
+                "stable",
+                "eol",
+                "critical",
+                "expired"
+              ]
+            }
+          }
+        },
+        "origin": {
+          "Table": {
+            "table": "map_connections",
+            "name": "time_status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "bc316c83c216274e027a57db799b3966db8ba3367d8894efd9aef9a86a441658"
+}

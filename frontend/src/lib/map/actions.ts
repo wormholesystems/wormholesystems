@@ -29,6 +29,12 @@ export const MAP_ACTIONS = {
 	// The hub may be anywhere on the map, and a list already mapped adds nothing visible.
 	addEveScout: { failed: 'Could not add the EVE Scout holes', done: 'EVE Scout holes added' },
 
+	// --- tabs ---
+	createTab: { failed: 'Could not add the tab' },
+	renameTab: { failed: 'Could not rename the tab' },
+	reorderTabs: { failed: 'Could not move the tab' },
+	deleteTab: { failed: 'Could not delete the tab', done: 'Tab deleted' },
+
 	// --- connections ---
 	addConnection: { failed: 'Could not connect the systems' },
 	removeConnection: { failed: 'Could not remove the connection' },

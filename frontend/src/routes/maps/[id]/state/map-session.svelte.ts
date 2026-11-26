@@ -7,12 +7,14 @@ import { openMapSocket, openUserSocket } from '$lib/ws';
 import type { MapState } from './map-state.svelte';
 
 export function connectMapSession(map: MapState): (() => void) | undefined {
-	if (map.mapId === 0) return;
+	if (map.rootId === 0) return;
 	map.route.load();
 	map.route.loadIgnored();
 	// A frame names what changed; `null` is the reconnect catch-up, "reload everything".
+	// Opened on the map itself, whose socket carries every tab's frames: going to another
+	// tab keeps it.
 	const closeWs = openMapSocket(
-		map.mapId,
+		map.rootId,
 		(event) => map.applyEvent(event),
 		(state) => (map.socket = state),
 	);
@@ -25,7 +27,10 @@ export function connectMapSession(map: MapState): (() => void) | undefined {
 		(event) => {
 			if (event.type === 'character_status_changed') map.characters.refreshMine();
 			// This user changed their own watchlist here, from this tab or another.
-			if (event.type === 'personal_watchlist_changed' && event.map_id === map.mapId) {
+			if (
+				event.type === 'personal_watchlist_changed' &&
+				(event.map_id === map.mapId || event.map_id === map.rootId)
+			) {
 				void map.queries.client.invalidateQueries({
 					queryKey: key.personalWatchlist(map.mapId),
 				});

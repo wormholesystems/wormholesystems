@@ -328,6 +328,14 @@ impl UpdateMap {
 /// public access. Manager+; deleting the map and handing it on stay the owner's.
 pub async fn update_map(pool: &PgPool, actor: Actor, cmd: UpdateMap) -> Result<Map> {
     cmd.validate()?;
+    // The settings are the map's. Asked of a tab, they are changed on its map, and reach
+    // every tab from there.
+    let cmd = UpdateMap {
+        map_id: super::tabs::root_of(pool, cmd.map_id)
+            .await
+            .unwrap_or(cmd.map_id),
+        ..cmd
+    };
     let mut tx = MapTx::begin(
         pool,
         cmd.map_id,
@@ -442,7 +450,8 @@ pub async fn list_maps(pool: &PgPool, user_id: i64) -> Result<Vec<(Map, Role)>> 
                   ma.role as "role!: Role"
            from maps m
            join map_user_roles ma on ma.map_id = m.id
-           where ma.user_id = $1
+           -- A tab is part of its map, not a map of its own in anybody's list.
+           where ma.user_id = $1 and m.parent_id is null
            order by m.created_at"#,
         user_id,
     )
@@ -538,12 +547,19 @@ pub async fn read_map(
         map
     };
 
+    let tabs = super::tabs::list_tabs(pool, cmd.map_id).await?;
+    let elsewhere = super::tabs::elsewhere(pool, cmd.map_id).await?;
     Ok(MapView {
         map,
         role,
         character_has_access,
         systems,
         connections,
+        root_id: super::tabs::root_of(pool, cmd.map_id).await?,
+        tabs,
+        // The operator's switch, which the routes that serve the view know and this does not.
+        tabs_enabled: false,
+        elsewhere,
     })
 }
 

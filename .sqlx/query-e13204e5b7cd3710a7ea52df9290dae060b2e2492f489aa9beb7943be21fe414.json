@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select solar_system_id as \"solar_system_id!\" from map_solar_systems\n           where map_id in (select id from maps where coalesce(parent_id, id) = map_root($1)) and solar_system_id is not null",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "solar_system_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "map_solar_systems",
+            "name": "solar_system_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "e13204e5b7cd3710a7ea52df9290dae060b2e2492f489aa9beb7943be21fe414"
+}

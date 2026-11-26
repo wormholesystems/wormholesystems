@@ -23,7 +23,7 @@ export interface ViewportRect {
 }
 
 export class MapCamera {
-	private mapId: number;
+	private mapId: () => number;
 	viewportEl: HTMLElement | null = null;
 
 	pan = $state({ x: 0, y: 0 });
@@ -35,8 +35,16 @@ export class MapCamera {
 
 	private hideScrollbars: ReturnType<typeof setTimeout> | null = null;
 
-	constructor(mapId: number) {
-		this.mapId = mapId;
+	/** `mapId` is read when it is needed: the screen stays up while its tab changes. */
+	constructor(mapId: number | (() => number)) {
+		this.mapId = typeof mapId === 'number' ? () => mapId : mapId;
+	}
+
+	/** Another tab is its own canvas: back to the corner, at the zoom kept for it. */
+	reset() {
+		this.pan = { x: 0, y: 0 };
+		this.zoom = 1;
+		this.restoreZoom();
 	}
 
 	/**
@@ -144,11 +152,11 @@ export class MapCamera {
 	/** Per map and per browser: how far out you want to be depends on the screen. */
 	restoreZoom() {
 		// Legacy values were written as `String(zoom)`, which is valid JSON for a number.
-		const saved = readStored(`map-zoom-${this.mapId}`, v.number(), NaN);
+		const saved = readStored(`map-zoom-${this.mapId()}`, v.number(), NaN);
 		if (saved >= ZOOM_MIN && saved <= ZOOM_MAX) this.zoom = saved;
 	}
 
 	private rememberZoom() {
-		writeStored(`map-zoom-${this.mapId}`, this.zoom);
+		writeStored(`map-zoom-${this.mapId()}`, this.zoom);
 	}
 }

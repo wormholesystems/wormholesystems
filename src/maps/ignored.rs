@@ -46,7 +46,7 @@ pub async fn read_ignored_systems(pool: &PgPool, map_id: i64) -> Result<Vec<Igno
 /// Just the ids, for the searches that route around them.
 pub async fn ignored_ids(pool: &PgPool, map_id: i64) -> sqlx::Result<Vec<i64>> {
     sqlx::query_scalar!(
-        "select solar_system_id from map_ignored_solar_systems where map_id = $1",
+        "select solar_system_id from map_ignored_solar_systems where map_id = map_root($1)",
         map_id,
     )
     .fetch_all(pool)
@@ -61,7 +61,7 @@ pub(super) async fn is_ignored_tx(
     let ignored = sqlx::query_scalar!(
         "select exists(
              select 1 from map_ignored_solar_systems
-             where map_id = $1 and solar_system_id = $2
+             where map_id = map_root($1) and solar_system_id = $2
          )",
         map_id,
         solar_system_id,

@@ -219,6 +219,31 @@ fn map_view_round_trips() {
             created_at: ts(),
             updated_at: ts(),
         }],
+        root_id: 1,
+        tabs_enabled: true,
+        tabs: vec![
+            wormholesystems::maps::tabs::MapTab {
+                id: 1,
+                name: "Main".into(),
+                is_root: true,
+            },
+            wormholesystems::maps::tabs::MapTab {
+                id: 2,
+                name: "Thera".into(),
+                is_root: false,
+            },
+        ],
+        elsewhere: vec![wormholesystems::maps::tabs::TabNetwork {
+            tab_id: 2,
+            systems: vec![31000005],
+            connections: vec![wormholesystems::maps::tabs::TabEdge {
+                from_solar_system_id: 31000005,
+                to_solar_system_id: 30000142,
+                kind: ConnectionType::Wormhole,
+                mass_status: None,
+                time_status: Some(TimeStatus::Eol),
+            }],
+        }],
     };
     let (a, b) = reserialize(&view);
     assert_eq!(a, b);

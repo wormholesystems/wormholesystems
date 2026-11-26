@@ -112,8 +112,9 @@ pub async fn fetch_map(
     Query(share): Query<ShareQuery>,
 ) -> ApiResult<MapView> {
     let reader = read_map_as(&state, &creds, map_id, &share).await?;
-    let view =
+    let mut view =
         crate::maps::map::read_map(&state.db, reader, crate::maps::map::GetMap { map_id }).await?;
+    view.tabs_enabled = state.tabs.allows(view.root_id);
     Ok(Json(view))
 }
 
@@ -134,7 +135,8 @@ pub async fn fetch_shared_map(
     Path(token): Path<String>,
 ) -> ApiResult<MapView> {
     let actor = session_actor(&state.db, &creds).await?;
-    let view = crate::maps::map::read_shared_map(&state.db, &token, actor).await?;
+    let mut view = crate::maps::map::read_shared_map(&state.db, &token, actor).await?;
+    view.tabs_enabled = state.tabs.allows(view.root_id);
     Ok(Json(view))
 }
 

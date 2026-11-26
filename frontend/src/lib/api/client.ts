@@ -52,6 +52,11 @@ import type { RemoveConnectionJump } from './types/RemoveConnectionJump';
 import type { RemoveSignature } from './types/RemoveSignature';
 import type { RemoveSignatures } from './types/RemoveSignatures';
 import type { RemoveSystems } from './types/RemoveSystems';
+import type { RenameTab } from './types/RenameTab';
+import type { ReorderTabs } from './types/ReorderTabs';
+import type { CreateTab } from './types/CreateTab';
+import type { DeleteTab } from './types/DeleteTab';
+import type { MapTab } from './types/MapTab';
 import type { Sections } from './types/Sections';
 import type { SetAlertActive } from './types/SetAlertActive';
 import type { SetAlias } from './types/SetAlias';
@@ -279,6 +284,12 @@ export function createApi(
 		removeSystems: (cmd: RemoveSystems) =>
 			post<null>(`/api/maps/${cmd.map_id}/systems/remove`, cmd),
 		clearMap: (cmd: ClearMap) => post<null>(`/api/maps/${cmd.map_id}/clear`, cmd),
+
+		// Tabs: each is a map id of its own, so only the bar is managed here.
+		createTab: (cmd: CreateTab) => post<MapTab>(`/api/maps/${cmd.map_id}/tabs/create`, cmd),
+		renameTab: (cmd: RenameTab) => post<MapTab>(`/api/maps/${cmd.map_id}/tabs/rename`, cmd),
+		reorderTabs: (cmd: ReorderTabs) => post<MapTab[]>(`/api/maps/${cmd.map_id}/tabs/reorder`, cmd),
+		deleteTab: (cmd: DeleteTab) => post<null>(`/api/maps/${cmd.map_id}/tabs/delete`, cmd),
 		setAlias: (cmd: SetAlias) => post<null>(`/api/maps/${cmd.map_id}/systems/set-alias`, cmd),
 		setStatus: (cmd: SetStatus) => post<null>(`/api/maps/${cmd.map_id}/systems/set-status`, cmd),
 		setOccupier: (cmd: SetOccupier) =>

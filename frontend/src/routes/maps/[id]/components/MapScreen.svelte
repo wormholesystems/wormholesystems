@@ -38,16 +38,19 @@
 	import IntroductionDialog from './overlays/IntroductionDialog.svelte';
 	import TourOverlay from './overlays/TourOverlay.svelte';
 	import StatusBar from './canvas/StatusBar.svelte';
+	import TabLinks from './canvas/TabLinks.svelte';
 	import TrackingDialog from './tracking/TrackingDialog.svelte';
 	import { JumpTracker } from '../state/tracking.svelte';
 
-	// Mounted under `{#key mapId}`, so every map gets a fresh instance and construction
+	// Mounted under `{#key rootId}`, so every map gets a fresh instance and construction
 	// happens at component init, where queries and effects are legal.
 	let {
+		rootId,
 		mapId,
 		signedIn,
 		seed,
 	}: {
+		rootId: number;
 		mapId: number;
 		signedIn: boolean;
 		seed: MapSeed;
@@ -55,7 +58,10 @@
 
 	// svelte-ignore state_referenced_locally -- initial values are the point: the `{#key}`
 	// above remounts this component whenever the map changes.
-	const map = new MapState(mapId, signedIn, seed);
+	const map = new MapState(rootId, mapId, signedIn, seed);
+	// Another tab of the same map: the screen stays up and is shown that tab, with what
+	// the navigation loaded for it. Before anything is drawn, so no frame mixes the two.
+	$effect.pre(() => map.show(mapId, seed));
 	const canWrite = $derived(map.canWrite);
 	// Built with the map, so navigating between maps never carries a half-seen jump over.
 	const tracker = new JumpTracker(map.trackerHost());
@@ -280,6 +286,15 @@
 
 			<!-- Keyed by id so a refetch diffs in place. -->
 			{#each map.systems.all as s (s.id)}
+				{@const elsewhere = s.kind === 'system' ? map.tabsBySystem.get(s.solar_system_id) : null}
+				{#if elsewhere && s.kind === 'system'}
+					<TabLinks
+						{map}
+						tabs={elsewhere}
+						solarSystemId={s.solar_system_id}
+						pos={map.positions.get(s.id) ?? { x: 0, y: 0 }}
+					/>
+				{/if}
 				<SystemNode
 					node={s}
 					nodeH={map.nodeH}

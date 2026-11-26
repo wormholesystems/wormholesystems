@@ -10,12 +10,11 @@
 	let { map, top }: { map: MapState; top: number } = $props();
 
 	const COVER_MS = 250;
+	// Once per screen: switching maps builds a new one, and the gap before it is ready
+	// should look like loading rather than like nothing. Another tab of the same map is
+	// the same screen, already up, so it is never covered.
 	let covered = $state(true);
 	$effect(() => {
-		// Re-covers when the map changes: switching maps rebuilds all of this, and the gap
-		// before the new one is ready should look like loading rather than like nothing.
-		void map.mapId;
-		covered = true;
 		const timer = setTimeout(() => (covered = false), COVER_MS);
 		return () => clearTimeout(timer);
 	});

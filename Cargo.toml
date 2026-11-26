@@ -156,12 +156,13 @@ sha2 = "0.10"
 # own HTTP listener and push gateway are off: axum serves the page.
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
+# Waiting on several broadcast receivers at once: the map socket hears every tab of a map.
+futures-util = "0.3"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 # A real WebSocket client, for the tests that drive the map socket over a socket.
 tokio-tungstenite = "0.29"
-futures-util = "0.3"
 
 # One binary for the integration tests: each file under `tests/` was its own crate, and each
 # linked the whole server, about 400 MB apiece. The two below need a process of their own,

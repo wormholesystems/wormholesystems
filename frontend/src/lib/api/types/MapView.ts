@@ -2,7 +2,9 @@
 import type { Map } from "./Map";
 import type { MapConnection } from "./MapConnection";
 import type { MapSystemView } from "./MapSystemView";
+import type { MapTab } from "./MapTab";
 import type { Role } from "./Role";
+import type { TabNetwork } from "./TabNetwork";
 
 /**
  * The graph as seen by a viewer: the map plus its placed systems and connections.
@@ -18,4 +20,23 @@ role: Role,
  * readable through a different character, but anything tied to the active one
  * (tracking, waypoints) will not behave as the pilot expects.
  */
-character_has_access: boolean, systems: Array<MapSystemView>, connections: Array<MapConnection>, };
+character_has_access: boolean, systems: Array<MapSystemView>, connections: Array<MapConnection>, 
+/**
+ * The map this is a tab of: its own id when it is the map itself. Grants, sharing and
+ * the viewer's settings are read and written under this one.
+ */
+root_id: number, 
+/**
+ * The map's tabs in bar order, this one among them. Never empty.
+ */
+tabs: Array<MapTab>, 
+/**
+ * Whether the operator lets this map be split into tabs. Off, the client offers no
+ * way to add one, and a map nobody has split looks as it always did.
+ */
+tabs_enabled: boolean, 
+/**
+ * What the other tabs draw, for the routes that run across them and for marking the
+ * systems this tab shares with another.
+ */
+elsewhere: Array<TabNetwork>, };

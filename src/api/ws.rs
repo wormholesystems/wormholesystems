@@ -39,7 +39,7 @@ pub async fn map_ws(
         .await
         .ok()
         .flatten();
-    let token = crate::api::extract::share_cookie(&creds, map_id);
+    let token = crate::api::extract::share_cookie_for(&state.db, &creds, map_id).await;
 
     let reader = Reader {
         db: state.db,
@@ -52,7 +52,7 @@ pub async fn map_ws(
     // the check and the subscription is caught by the stream asking again as it opens.
     match reader.check().await {
         Ok(_) => {
-            let events = crate::realtime::hub().subscribe(map_id);
+            let events = family_subscriptions(&reader.db, map_id, Vec::new()).await;
             ws.on_upgrade(move |socket| {
                 crate::telemetry::metrics::track_socket(
                     "map",
@@ -170,10 +170,41 @@ impl Reader {
     }
 }
 
+/// A subscription to the map and to each of its tabs, keeping the ones already held. A map
+/// split over tabs is one map to whoever has it open: what changes on another tab still
+/// changes the routes through it, and the tab bar itself.
+async fn family_subscriptions(
+    db: &sqlx::PgPool,
+    map_id: i64,
+    mut held: Vec<crate::realtime::Subscription>,
+) -> Vec<crate::realtime::Subscription> {
+    let family = crate::maps::tabs::family_ids(db, map_id)
+        .await
+        .unwrap_or_else(|_| vec![map_id]);
+    held.retain(|s| family.contains(&s.map_id()));
+    for id in family {
+        if !held.iter().any(|s| s.map_id() == id) {
+            held.push(crate::realtime::hub().subscribe(id));
+        }
+    }
+    if held.is_empty() {
+        held.push(crate::realtime::hub().subscribe(map_id));
+    }
+    held
+}
+
+/// The next event on any of the subscriptions.
+async fn next_event(
+    subscriptions: &mut [crate::realtime::Subscription],
+) -> Result<crate::realtime::MapEvent, RecvError> {
+    let waiting = subscriptions.iter_mut().map(|s| Box::pin(s.recv()));
+    futures_util::future::select_all(waiting).await.0
+}
+
 async fn stream_map_events(
     mut socket: WebSocket,
     reader: Reader,
-    mut rx: crate::realtime::Subscription,
+    mut subscriptions: Vec<crate::realtime::Subscription>,
 ) {
     use crate::realtime::MapEvent;
 
@@ -200,8 +231,12 @@ async fn stream_map_events(
                 Some(Ok(_)) => continue,
                 _ => return,
             },
-            received = rx.recv() => received,
+            received = next_event(&mut subscriptions) => received,
         };
+        // A tab may have been added or deleted: listen to the family as it now is.
+        if matches!(received, Ok(MapEvent::MapUpdated { .. })) {
+            subscriptions = family_subscriptions(&reader.db, reader.map_id, subscriptions).await;
+        }
         // A change to who may see the map, or to how it is shared, is the moment to ask;
         // so is a lag, which may have swallowed one. Asked before the frame goes out, so a
         // reader who just lost the map does not hear about it.
@@ -217,7 +252,8 @@ async fn stream_map_events(
         let text = match received {
             Ok(event) => serde_json::to_string(&event).unwrap_or_default(),
             Err(RecvError::Lagged(_)) => r#"{"type":"lagged"}"#.to_string(),
-            Err(RecvError::Closed) => break,
+            // One tab's channel closing is not the socket's end: the rest still speak.
+            Err(RecvError::Closed) => continue,
         };
         if socket.send(Message::Text(text.into())).await.is_err() {
             break;

@@ -47,7 +47,7 @@ pub async fn characters_on(pool: &PgPool, map_id: i64, viewer: i64) -> Result<Ve
            from characters c
            join users u on u.id = c.user_id
            join map_user_settings mus
-               on mus.map_id = $1 and mus.user_id = u.id and mus.tracking_allowed
+               on mus.map_id = map_root($1) and mus.user_id = u.id and mus.tracking_allowed
            join character_status s on s.character_id = c.id and s.online
            join corporations co on co.id = c.corporation_id
            left join types t on t.id = s.ship_type_id

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id from maps\n             where id = map_root($1) or id = $1\n             order by (parent_id is not null), id\n             for no key update",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "maps",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "154fbba37699b8a7d4232e7444c34666b6c853c11c1d10438cb763c3bdefc317"
+}

@@ -204,6 +204,10 @@ impl Default for MapUserSettings {
 /// A user's settings on a map, or [the defaults](MapUserSettings::default) when no row
 /// exists yet.
 pub async fn load(db: &PgPool, map_id: i64, user_id: i64) -> Result<MapUserSettings> {
+    // A viewer's settings are theirs for the map, whichever of its tabs asked.
+    let map_id = crate::maps::tabs::root_of(db, map_id)
+        .await
+        .unwrap_or(map_id);
     let row = sqlx::query!(
         r#"select tracking_allowed, structures_shared, show_threat_level,
                   compact_signature_list,
@@ -278,6 +282,9 @@ pub async fn update(
     body: &UpdateMapUserSettings,
 ) -> Result<MapUserSettings> {
     let layout_json = validate(pool, user_id, body).await?;
+    let map_id = crate::maps::tabs::root_of(pool, map_id)
+        .await
+        .unwrap_or(map_id);
 
     let mut tx = pool.begin().await?;
     insert_defaults(&mut *tx, map_id, user_id).await?;

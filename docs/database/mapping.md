@@ -17,6 +17,9 @@ The top-level artifact. A user creates a map and everything else hangs off it.
 | `ghost_unlinked_wormholes` | bool | a wormhole signature with no connection puts a ghost placement on the map |
 | `layout` | text | `manual` (dragged into shape) or `tree` (drawn from the connections) |
 | `allow_layout_override` | bool | whether a viewer may pick their own placement instead |
+| `parent_id` | fk maps, null | set on a **tab**: the map it is a tab of; cascade |
+| `tab_name` | text | what the tab is called in the bar; `Main` on a map nobody has split |
+| `tab_order` | int | left to right in the bar; ties fall back to the id |
 | `created_at`  | timestamptz |                                                             |
 
 **Invariants & expected behaviour**
@@ -33,6 +36,20 @@ The top-level artifact. A user creates a map and everything else hangs off it.
   [map-canvas.md](../legacy/map-canvas.md#8-layout-modes-the-second-rendering-mode)).
 - A viewer's own choice lives in `map_user_settings.layout_override` and only counts while
   the map sets `allow_layout_override`; `null` follows the map.
+- **A tab is a map.** A map split over several canvases is one row per canvas: the map
+  itself, which is its own first tab, and one child row per further tab (`parent_id`).
+  Everything drawn on a tab (placements, connections, signatures, intel, history) hangs
+  off the tab's own id, so every rule on this page holds per tab and nothing that edits
+  one map knows about several. One level only: a trigger refuses a tab of a tab.
+- **What a tab takes from its map.** Grants: the `map_access_live` view lists a map's
+  grants under each of its tabs, so every role check works on either id. Sharing,
+  per-viewer settings, the watchlist and the ignore list are stored on the parent and
+  looked up through `map_root(id)`. The naming, placement and ghost settings are copied
+  onto each tab's row by trigger, on creation and whenever the map's change.
+- **What crosses between tabs.** Only intel: a write to a `map_solar_system_details`
+  row (status, occupier, notes) on one tab is written to the row of every other tab of
+  the map (`maps::tabs::share_intel`), and a new tab starts with the map's rows.
+  Signatures and aliases are each tab's own.
 - Deleting a map cascades to its solar systems, connections, signatures, details,
   and access entries (nothing dangles). Removing the map should also clean up its
   uploaded image from object storage (app-level, outside the DB transaction).

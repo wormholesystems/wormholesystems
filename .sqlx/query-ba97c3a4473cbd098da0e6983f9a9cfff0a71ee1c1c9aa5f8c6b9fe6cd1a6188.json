@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select count(*) from map_user_roles r\n         join maps m on m.id = r.map_id and m.parent_id is null\n         where r.user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ba97c3a4473cbd098da0e6983f9a9cfff0a71ee1c1c9aa5f8c6b9fe6cd1a6188"
+}

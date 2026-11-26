@@ -45,7 +45,8 @@ pub async fn map_killmails(
     // Which kills to show is a per-user preference, and a watcher has nowhere to keep one.
     let scope = match reader.actor {
         Some(actor) => sqlx::query_scalar!(
-            "select killmail_filter from map_user_settings where map_id = $1 and user_id = $2",
+            "select killmail_filter from map_user_settings
+             where map_id = map_root($1) and user_id = $2",
             map_id,
             actor.user_id,
         )
