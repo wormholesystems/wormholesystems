@@ -9,13 +9,14 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::{ActiveTheme as _, Theme, ThemeStyled as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Anchor, Animation, AnimationExt, AnyElement, App, Bounds, ClickEvent, Div, ElementId, Entity,
-    EventEmitter, FontWeight, Hsla, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
-    ParentElement, Pixels, Rems, Stateful, StatefulInteractiveElement, Styled, Window, anchored,
-    canvas, deferred, div, ease_out_quint, px, svg,
+    Anchor, Animation, AnimationExt, AnyElement, App, Bounds, ClickEvent, DisplayId, Div,
+    ElementId, Entity, EventEmitter, FontWeight, Hsla, Image, InteractiveElement, IntoElement,
+    MouseButton, MouseDownEvent, ParentElement, Pixels, Rems, Stateful, StatefulInteractiveElement,
+    Styled, Window, anchored, canvas, deferred, div, ease_out_quint, img, px, svg,
 };
 
 use crate::api::{
@@ -23,9 +24,9 @@ use crate::api::{
     SignatureType, TimeStatus,
 };
 use crate::classes;
-use crate::config::{ListView, Overlay, SortColumn};
+use crate::config::{ListView, Overlay, OverlaySetting, SortColumn};
 use crate::theme::{self, HEADING};
-use crate::ui::{self, ButtonState, Kind, Notice, rpx};
+use crate::ui::{self, ButtonState, Kind, Notice, OPACITIES, TEXT_SIZES, rpx};
 
 /// What a button in a signatures panel asks the app to do.
 #[derive(Debug, Clone)]
@@ -45,6 +46,22 @@ pub(crate) enum Command {
     CopyBookmark(i64),
     /// Leave the jump off the map.
     SkipJump,
+    /// Open this popup in a window of its own, by the pointer at `x`, `y` on `display`, the
+    /// screen the overlay is on.
+    Popover {
+        popup: Popup,
+        x: f32,
+        y: f32,
+        display: Option<DisplayId>,
+    },
+    /// From the overlay's quick settings: follow this character, or whoever moves.
+    Track(Option<String>),
+    /// Map onto this map.
+    PickMap(i64),
+    /// Work on this tab of it.
+    PickTab(i64),
+    ToggleCopyOnJump,
+    Overlay(OverlaySetting),
     /// The overlay was dragged or resized to this: top-left corner and size.
     PlaceOverlay {
         x: f32,
@@ -101,6 +118,38 @@ pub(crate) enum PickerKind {
     Menu,
 }
 
+/// Something hung open off a button: a row's picker, or the overlay's quick settings. Only
+/// one is open at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Popup {
+    Picker(Picker),
+    Quick,
+}
+
+/// Where the overlay's popups are drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum Popups {
+    /// In the overlay itself, under their buttons. It only hears of a click that lands on
+    /// it, and cannot be typed into.
+    #[default]
+    Inline,
+    /// Each in a window of its own over the screen (see `popover`), which a click anywhere
+    /// else closes and which takes the keyboard when there is something to type.
+    Windowed,
+}
+
+impl Popups {
+    /// Windowed where there may be a layer shell to open them on. Whether there is one is
+    /// only known by trying: the first that fails makes them inline.
+    pub(crate) fn detect() -> Self {
+        if cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            Popups::Windowed
+        } else {
+            Popups::Inline
+        }
+    }
+}
+
 /// The types that can lead into a system of `class`. A group like `C1-3` is what a hole says
 /// from outside; with the class known, the type of the same code that names it is the
 /// answer, so the group is left out wherever that one is on offer.
@@ -120,6 +169,58 @@ fn leading_to(types: Vec<&SignatureType>, class: i64) -> Vec<&SignatureType> {
             None => false,
         })
         .collect()
+}
+
+/// Whether a type matches what has been typed: its wormhole code, its name, where it leads
+/// and whatever the catalog notes about it. Every term has to match something, not all the
+/// same thing, so `c6 frig` finds the frigate hole to class 6. A port of `matchesTypeQuery`
+/// in `frontend/src/lib/signatures/type-search.ts`.
+fn matches_query(t: &SignatureType, query: &str) -> bool {
+    let dest = t
+        .target_class
+        .map_or("", |c| theme::dest_class_meta(Some(c)).0);
+    let haystack = format!(
+        "{} {} {} {dest}",
+        t.signature.as_deref().unwrap_or_default(),
+        t.name,
+        t.extra.as_deref().unwrap_or_default(),
+    )
+    .to_lowercase();
+    query
+        .split_whitespace()
+        .all(|term| haystack.contains(&term.to_lowercase()))
+}
+
+/// Which of a category's types to look at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Spawning {
+    /// The ones known to spawn in the system you are in.
+    Here,
+    Anywhere,
+}
+
+/// What a type picker lists for a signature and a search.
+pub(crate) struct TypeChoices<'a> {
+    /// The signature has a category, so there are types to pick from.
+    pub category: bool,
+    /// For wormholes, statics (when wanted), then K162, then the rest; one unnamed section
+    /// otherwise. Without the empty ones.
+    pub sections: Vec<(Option<&'static str>, Vec<&'a SignatureType>)>,
+    /// Matches not known to spawn here, offered when nothing here matches: the spawn data
+    /// lags the game.
+    pub elsewhere: Vec<&'a SignatureType>,
+}
+
+impl TypeChoices<'_> {
+    /// The first one listed, which Enter picks.
+    pub(crate) fn first(&self) -> Option<i64> {
+        self.sections
+            .iter()
+            .flat_map(|(_, types)| types)
+            .chain(&self.elsewhere)
+            .next()
+            .map(|t| t.id)
+    }
 }
 
 /// How a row names its type: the wormhole code and where it leads, else the site.
@@ -172,6 +273,22 @@ pub(crate) enum Tone {
     Problem,
 }
 
+/// What the overlay's quick settings show, kept up to date by the app.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct Quick {
+    /// The characters that can be followed.
+    pub characters: Vec<String>,
+    /// The one followed; `None` for whoever moved last.
+    pub tracked: Option<String>,
+    /// The account's maps, id and name.
+    pub maps: Vec<(i64, String)>,
+    pub map_id: Option<i64>,
+    pub copy_on_jump: bool,
+    /// They are open. They share the pickers' popup, so only one of the two is open at a
+    /// time.
+    pub open: bool,
+}
+
 #[derive(Default)]
 pub(crate) struct Sigs {
     pub here: Option<Here>,
@@ -179,7 +296,7 @@ pub(crate) struct Sigs {
     pub catalog: Arc<SignatureCatalog>,
     pub review: Option<Review>,
     pub busy: bool,
-    /// The outcome of the last thing done here, shown in the header for a moment.
+    /// The outcome of the last thing done here, shown under the list for a moment.
     pub notice: Option<Notice>,
     pub overlay: Overlay,
     pub list: ListView,
@@ -195,11 +312,58 @@ pub(crate) struct Sigs {
     pub statics_first: bool,
     /// The overlay is out of the way: EVE (or the right character) is not in front.
     pub overlay_hidden: bool,
+    pub quick: Quick,
+    pub portraits: HashMap<String, Arc<Image>>,
+    /// The main window's box to search a type picker with.
+    pub search: Option<Entity<InputState>>,
+    pub popups: Popups,
 }
 
 impl EventEmitter<Command> for Sigs {}
 
 impl Sigs {
+    pub(crate) fn is_open(&self, popup: Popup) -> bool {
+        match popup {
+            Popup::Picker(picker) => self.picker == Some(picker),
+            Popup::Quick => self.quick.open,
+        }
+    }
+
+    /// Close `popup` if it is the one open, and say whether it was.
+    pub(crate) fn close(&mut self, popup: Popup) -> bool {
+        let open = self.is_open(popup);
+        if open {
+            self.picker = None;
+            self.quick.open = false;
+        }
+        open
+    }
+
+    /// Whether `popup` is drawn in a window of its own rather than under its button.
+    pub(crate) fn detached(&self, popup: Popup) -> bool {
+        let overlay = match popup {
+            Popup::Picker(picker) => picker.overlay,
+            Popup::Quick => true,
+        };
+        overlay && self.popups == Popups::Windowed
+    }
+
+    /// Where the popup open in the overlay landed, for its input region.
+    pub(crate) fn overlay_popup(&self) -> Option<Bounds<Pixels>> {
+        (self.quick.open || self.picker.is_some_and(|p| p.overlay))
+            .then(|| *self.popup.borrow())
+            .flatten()
+    }
+
+    /// The signature with that row key.
+    pub(crate) fn signature(&self, key: i64) -> Option<&Signature> {
+        self.snapshot
+            .as_ref()?
+            .signatures
+            .iter()
+            .find(|s| s.id == key)
+    }
+
     /// The system you are in, when it is on the map.
     pub(crate) fn system(&self) -> Option<&PlacedSystem> {
         let here = self.here.as_ref()?;
@@ -347,18 +511,13 @@ impl Sigs {
         snapshot.system_named(&name)?.wormhole_class_id
     }
 
-    /// The types a signature can be, grouped the way the website's picker lists them:
-    /// the category's types that spawn in this system, narrowed to the far end's class once
-    /// linked. For wormholes, statics (when wanted), then K162, then the rest.
-    pub(crate) fn type_sections(
-        &self,
-        sig: &Signature,
-    ) -> Vec<(Option<&'static str>, Vec<&SignatureType>)> {
+    /// The types of a signature's category, narrowed to the far end's class once linked, by
+    /// destination.
+    fn types_of(&self, sig: &Signature, spawning: Spawning) -> Vec<&SignatureType> {
         let Some(&(_, category, _)) = theme::CATEGORIES.iter().find(|c| c.0 == sig.group) else {
             return Vec::new();
         };
-        let system = self.system();
-        let linked = self.linked_class(sig);
+        let system = self.system().filter(|_| spawning == Spawning::Here);
         // Types named for this system replace the rest of their category here.
         let named = system.is_some_and(|s| {
             self.catalog
@@ -377,27 +536,59 @@ impl Sigs {
                 None => true,
             })
             .collect();
-        if let Some(class) = linked {
+        if let Some(class) = self.linked_class(sig) {
             types = leading_to(types, class);
         }
         types.sort_by_key(|t| theme::dest_sort_weight(t.target_class));
-        if sig.group != "wormhole" {
-            return vec![(None, types)];
-        }
-        let statics: HashSet<&str> = match self.system() {
-            Some(s) if self.statics_first => s.statics.iter().map(|s| s.code.as_str()).collect(),
-            _ => HashSet::new(),
-        };
-        let code = |t: &SignatureType| t.signature.clone().unwrap_or_default();
-        let (first, rest): (Vec<_>, Vec<_>) = types
+        types
+    }
+
+    /// The types a signature can be, less what `query` rules out, grouped the way the
+    /// website's picker lists them.
+    pub(crate) fn type_choices(&self, sig: &Signature, query: &str) -> TypeChoices<'_> {
+        let available = self.types_of(sig, Spawning::Here);
+        let here: HashSet<i64> = available.iter().map(|t| t.id).collect();
+        let types: Vec<&SignatureType> = available
             .into_iter()
-            .partition(|t| statics.contains(code(t).as_str()));
-        let (k162, rest): (Vec<_>, Vec<_>) = rest.into_iter().partition(|t| code(t) == "K162");
-        [("Statics", first), ("K162", k162), ("Wormholes", rest)]
+            .filter(|t| matches_query(t, query))
+            .collect();
+        let sections = if sig.group == "wormhole" {
+            let statics: HashSet<&str> = match self.system() {
+                Some(s) if self.statics_first => {
+                    s.statics.iter().map(|s| s.code.as_str()).collect()
+                }
+                _ => HashSet::new(),
+            };
+            let code = |t: &SignatureType| t.signature.clone().unwrap_or_default();
+            let (first, rest): (Vec<_>, Vec<_>) = types
+                .into_iter()
+                .partition(|t| statics.contains(code(t).as_str()));
+            let (k162, rest): (Vec<_>, Vec<_>) = rest.into_iter().partition(|t| code(t) == "K162");
+            vec![
+                (Some("Statics"), first),
+                (Some("K162"), k162),
+                (Some("Wormholes"), rest),
+            ]
+        } else {
+            vec![(None, types)]
+        };
+        let sections: Vec<_> = sections
             .into_iter()
             .filter(|(_, v)| !v.is_empty())
-            .map(|(label, v)| (Some(label), v))
-            .collect()
+            .collect();
+        let elsewhere = if sections.is_empty() && !query.trim().is_empty() {
+            self.types_of(sig, Spawning::Anywhere)
+                .into_iter()
+                .filter(|t| !here.contains(&t.id) && matches_query(t, query))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        TypeChoices {
+            category: theme::CATEGORIES.iter().any(|c| c.0 == sig.group),
+            sections,
+            elsewhere,
+        }
     }
 
     /// The connections a wormhole signature could be: the system's, narrowed to the type's
@@ -528,7 +719,7 @@ pub(crate) enum Place {
 
 /// The signatures panel.
 pub(crate) fn panel(entity: &Entity<Sigs>, place: Place, cx: &App) -> AnyElement {
-    panel_with(entity, place, None, cx)
+    panel_with(entity, place, None, None, cx)
 }
 
 /// What pressing on the panel's title does: the overlay moves by it.
@@ -539,6 +730,7 @@ pub(crate) fn panel_with(
     entity: &Entity<Sigs>,
     place: Place,
     grab: Option<Grab>,
+    width: Option<f32>,
     cx: &App,
 ) -> AnyElement {
     let theme = cx.theme().clone();
@@ -549,13 +741,14 @@ pub(crate) fn panel_with(
         sigs,
         compact,
         pad: if compact { rpx(8.0) } else { rpx(16.0) },
+        columns: Columns::fitting(width),
         theme: &theme,
     };
     let now = Utc::now();
     // Once per render: each is a lookup, a filter and a sort.
     let all = sigs.rows();
     let rows = sigs.shown(&all);
-    let header = panel.header(all.len(), rows.len(), grab);
+    let header = panel.header(all.len(), rows.len(), grab, cx);
 
     // The rows.
     let mut list = div().flex().flex_col();
@@ -569,7 +762,7 @@ pub(crate) fn panel_with(
         shown |= open;
     }
     let mine = sigs.picker.is_some_and(|p| p.overlay == compact);
-    if sigs.picker.is_none() || (mine && !shown) {
+    if (sigs.picker.is_none() && !sigs.quick.open) || (mine && !shown) {
         *sigs.anchor.borrow_mut() = None;
         *sigs.popup.borrow_mut() = None;
     }
@@ -582,7 +775,7 @@ pub(crate) fn panel_with(
     let columns = sigs
         .system()
         .is_some()
-        .then(|| column_header(entity, &sigs.list, panel.pad, &theme));
+        .then(|| column_header(entity, &sigs.list, panel.pad, panel.columns, &theme));
 
     div()
         .size_full()
@@ -593,14 +786,51 @@ pub(crate) fn panel_with(
         .children(columns)
         .child(
             div()
-                .id(if compact { "overlay-rows" } else { "page-rows" })
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
-                .child(list),
+                .relative()
+                .child(
+                    div()
+                        .id(if compact { "overlay-rows" } else { "page-rows" })
+                        .size_full()
+                        .overflow_y_scroll()
+                        .child(list),
+                )
+                .children(panel.status()),
         )
         .child(footer)
         .into_any_element()
+}
+
+/// Which of the list's columns a panel has room for. The id, the type, the connection and
+/// the row's buttons always show; the rest give way as it gets narrow, so nothing is ever
+/// cut off at the right edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Columns {
+    All,
+    /// The category as its icon alone.
+    Tight,
+    /// And no age.
+    Tightest,
+}
+
+impl Columns {
+    /// For a panel `width` wide at the normal text size; `None` for one with room to spare.
+    fn fitting(width: Option<f32>) -> Self {
+        match width {
+            Some(w) if w < 390.0 => Columns::Tightest,
+            Some(w) if w < 480.0 => Columns::Tight,
+            _ => Columns::All,
+        }
+    }
+
+    fn category(self) -> Rems {
+        rpx(if self == Columns::All { 72.0 } else { 22.0 })
+    }
+
+    fn age(self) -> bool {
+        self != Columns::Tightest
+    }
 }
 
 /// What one render of a signatures panel draws with.
@@ -611,40 +841,26 @@ struct Panel<'a> {
     /// The overlay's version.
     compact: bool,
     pad: Rems,
+    columns: Columns,
     theme: &'a Theme,
 }
 
 impl Panel<'_> {
-    /// The system, its class, and who is there; `all` signatures, `shown` of them past the
-    /// filters.
-    fn title(&self, all: usize, shown: usize) -> (Div, String) {
+    /// Where you are: the system's class, alias and name.
+    fn title(&self) -> Div {
         let Self { sigs, theme, .. } = *self;
-        let title = div().flex().items_center().gap_2().min_w_0();
+        let title = div().flex().items_center().gap(rpx(6.0)).min_w_0();
         match (&sigs.here, sigs.system()) {
-            (None, _) => (
-                title.child(
-                    div()
-                        .text_color(theme.muted_foreground)
-                        .child("No location"),
-                ),
-                "Log in a character; the chat logs say where you are.".into(),
+            (None, _) => title.child(
+                div()
+                    .text_color(theme.muted_foreground)
+                    .child("No location"),
             ),
-            (Some(here), None) => {
-                let sub = if sigs.snapshot.is_some() {
-                    let map = sigs
-                        .snapshot
-                        .as_ref()
-                        .map_or("the map".into(), |s| s.map.name.clone());
-                    format!("{} · not on {map}", here.character)
-                } else {
-                    here.character.clone()
-                };
-                (title.child(div().child(here.system.clone())), sub)
-            }
-            (Some(here), Some(system)) => {
+            (Some(here), None) => title.child(div().truncate().child(here.system.clone())),
+            (Some(_), Some(system)) => {
                 let (class, color) =
                     theme::class_meta(system.wormhole_class_id, Some(system.security_status));
-                let title = title
+                title
                     .child(div().flex_none().text_color(color).child(class))
                     .when_some(
                         system.alias.clone().filter(|a| !a.trim().is_empty()),
@@ -655,96 +871,177 @@ impl Panel<'_> {
                             .truncate()
                             .text_color(theme.muted_foreground)
                             .child(system.name.clone()),
-                    );
-                let hidden = all - shown;
-                let hidden = if hidden > 0 {
-                    format!(", {hidden} hidden")
-                } else {
-                    String::new()
-                };
-                let map = sigs
-                    .snapshot
-                    .as_ref()
-                    .map_or_default(|s| format!("{} · ", s.map.name));
-                let sub = format!(
-                    "{map}{} · {all} signature{}{hidden}",
-                    here.character,
-                    if all == 1 { "" } else { "s" }
-                );
-                (title, sub)
+                    )
             }
         }
     }
 
-    /// The title and what is under it, the latest notice, and the overlay's close button.
-    fn header(&self, all: usize, shown: usize, grab: Option<Grab>) -> Div {
+    /// Under the title, small: who is mapped from, onto which map and tab, and how many
+    /// signatures (`shown` of `all` when some are filtered out). The names give way before
+    /// the count does.
+    fn meta(&self, all: usize, shown: usize) -> Div {
+        let Self { sigs, theme, .. } = *self;
+        let quiet = theme.muted_foreground;
+        let row = div()
+            .flex()
+            .items_center()
+            .gap(rpx(8.0))
+            .min_w_0()
+            .text_xs()
+            .text_color(quiet);
+        let Some(here) = &sigs.here else {
+            return row.child(
+                div()
+                    .truncate()
+                    .child("Log in a character; the chat logs say where you are."),
+            );
+        };
+        let part = |lead: AnyElement, text: String| {
+            div()
+                .flex()
+                .items_center()
+                .gap(rpx(4.0))
+                .min_w_0()
+                .child(lead)
+                .child(div().truncate().child(text))
+        };
+        let glyph = |path: &'static str| {
+            svg()
+                .flex_none()
+                .path(path)
+                .size(rpx(11.0))
+                .text_color(quiet.opacity(0.7))
+                .into_any_element()
+        };
+        let face = match sigs.portraits.get(&here.character) {
+            Some(portrait) => img(Arc::clone(portrait))
+                .flex_none()
+                .size(rpx(14.0))
+                .rounded(px(2.0))
+                .into_any_element(),
+            None => glyph("icons/user.svg"),
+        };
+        let on_map = sigs.system().is_some();
+        row.child(part(face, here.character.clone()))
+            .when_some(sigs.snapshot.as_ref(), |d, snapshot| {
+                let label = snapshot.label();
+                d.child(part(
+                    glyph("icons/map.svg"),
+                    if on_map {
+                        label
+                    } else {
+                        format!("not on {label}")
+                    },
+                ))
+            })
+            .when(on_map, |d| {
+                d.child(
+                    div()
+                        .flex_none()
+                        .ml_auto()
+                        .font_family(theme.mono_font_family.clone())
+                        .child(if shown == all {
+                            format!("{all} sig{}", if all == 1 { "" } else { "s" })
+                        } else {
+                            format!("{shown}/{all} sigs")
+                        }),
+                )
+            })
+    }
+
+    /// One of the overlay's header buttons.
+    fn header_button(&self, id: &'static str, icon: &'static str) -> Stateful<Div> {
+        let theme = self.theme;
+        div()
+            .id(id)
+            .relative()
+            .flex_none()
+            .size(rpx(22.0))
+            .rounded(px(3.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .hover(|s| s.bg(theme.muted))
+            .child(
+                svg()
+                    .path(icon)
+                    .size(rpx(13.0))
+                    .text_color(theme.muted_foreground),
+            )
+    }
+
+    /// The title with the overlay's quick settings and close button beside it, and the meta
+    /// line under both. The overlay is dragged by all of it but the buttons.
+    fn header(&self, all: usize, shown: usize, grab: Option<Grab>, cx: &App) -> Div {
         let Self {
             entity,
-            sigs,
             compact,
             pad,
             theme,
+            ..
         } = *self;
-        let (title, sub) = self.title(all, shown);
         div()
             .flex_none()
             .flex()
-            .items_start()
-            .gap_2()
+            .flex_col()
+            .gap(rpx(3.0))
             .px(pad)
-            .py_2()
+            .pt(rpx(6.0))
+            .pb(rpx(7.0))
             .border_b_1()
             .border_color(theme.border)
+            .when_some(grab, |d, grab| {
+                d.cursor_move()
+                    .on_mouse_down(MouseButton::Left, move |e, w, cx| grab(e, w, cx))
+            })
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
                     .flex()
-                    .flex_col()
+                    .items_center()
                     .gap(rpx(2.0))
-                    .when_some(grab, |d, grab| {
-                        d.cursor_move()
-                            .on_mouse_down(MouseButton::Left, move |e, w, cx| grab(e, w, cx))
-                    })
+                    .h(rpx(22.0))
                     .child(
-                        title
+                        self.title()
+                            .flex_1()
                             .font_family(HEADING)
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_size(if compact { rpx(13.0) } else { rpx(16.0) }),
+                            .text_size(if compact { rpx(14.0) } else { rpx(16.0) }),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .truncate()
-                            .text_color(theme.muted_foreground)
-                            .child(sub),
-                    ),
+                    .when(compact, |d| {
+                        d.child(self.quick_button(cx)).child(
+                            self.header_button("overlay-hide", "icons/x.svg")
+                                // Not a drag.
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .on_click(emit(entity, Command::HideOverlay)),
+                        )
+                    }),
             )
-            .when_some(sigs.notice.as_ref(), |d, n| {
-                d.child(
-                    div()
-                        .flex_none()
-                        .max_w(rpx(260.0))
-                        .child(ui::notice(n, theme)),
-                )
+            .child(self.meta(all, shown))
+    }
+
+    /// The overlay's button for its quick settings, with their popup while that is open.
+    fn quick_button(&self, cx: &App) -> Stateful<Div> {
+        let Self {
+            entity,
+            sigs,
+            theme,
+            ..
+        } = *self;
+        let open = sigs.quick.open;
+        let popup = (open && !sigs.detached(Popup::Quick)).then(|| {
+            let content = quick_settings(entity, sigs, theme);
+            float(entity, sigs, Popup::Quick, content, cx)
+        });
+        let toggle = toggle(entity, Popup::Quick);
+        self.header_button("overlay-quick", "icons/settings.svg")
+            .when(open, |d| d.bg(theme.muted).child(probe(&sigs.anchor)))
+            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                // Not a drag.
+                cx.stop_propagation();
+                toggle(event, window, cx);
             })
-            .when(compact, |d| {
-                d.child(
-                    div()
-                        .id("overlay-hide")
-                        .flex_none()
-                        .p_1()
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme.muted))
-                        .on_click(emit(entity, Command::HideOverlay))
-                        .child(
-                            svg()
-                                .path("icons/x.svg")
-                                .size(rpx(12.0))
-                                .text_color(theme.muted_foreground),
-                        ),
-                )
-            })
+            .children(popup)
     }
 
     /// What stands in for the rows when none are shown.
@@ -776,6 +1073,7 @@ impl Panel<'_> {
             compact,
             pad,
             theme,
+            ..
         } = *self;
         let status = sigs.paste_status(sig);
         let wormhole = sig.group == "wormhole";
@@ -796,14 +1094,18 @@ impl Panel<'_> {
             .filter(|p| p.sig == key && p.overlay == compact)
             .map(|p| p.kind);
         // The open picker's popup, built once and handed to the cell it hangs off.
-        let float_el = RefCell::new(open.map(|kind| {
-            let content = picker(entity, sigs, sig, connection, kind, theme);
-            let picker = Picker {
+        let float_el = RefCell::new(open.and_then(|kind| {
+            let popup = Popup::Picker(Picker {
                 sig: key,
                 kind,
                 overlay: compact,
-            };
-            (kind, float(entity, sigs, picker, content, cx))
+            });
+            if sigs.detached(popup) {
+                return None;
+            }
+            let search = sigs.search.as_ref().filter(|_| !compact);
+            let content = picker(entity, sigs, sig, connection, kind, theme, search, cx);
+            Some((kind, float(entity, sigs, popup, content, cx)))
         }));
         let float_for = |kind: PickerKind| {
             let mut slot = float_el.borrow_mut();
@@ -857,7 +1159,9 @@ impl Panel<'_> {
             .when(wormhole, |d| {
                 d.child(self.connection_cell(cell(PickerKind::Connection), far))
             })
-            .child(self.age_cell(sig, connection, now))
+            .when(self.columns.age(), |d| {
+                d.child(self.age_cell(sig, connection, now))
+            })
             .child(self.actions(sig, open, float_for(PickerKind::Menu)));
         (row, open.is_some())
     }
@@ -894,11 +1198,11 @@ impl Panel<'_> {
                 MouseButton::Left,
                 toggle(
                     entity,
-                    Picker {
+                    Popup::Picker(Picker {
                         sig: key,
                         kind,
                         overlay: compact,
-                    },
+                    }),
                 ),
             )
             .when(open == Some(kind), |d| d.child(probe(&sigs.anchor)))
@@ -939,20 +1243,24 @@ impl Panel<'_> {
     fn category(&self, cell: Stateful<Div>, sig: &Signature) -> Stateful<Div> {
         let theme = self.theme;
         let (group, group_color) = theme::group_meta(&sig.group);
-        cell.w(rpx(72.0)).flex_none().map(|d| {
-            if sig.group == "unknown" || group_color.is_none() {
-                d.child(div().text_color(theme.muted_foreground).child("Category"))
-            } else {
-                let color = group_color.unwrap_or(theme.muted_foreground);
-                d.child(
+        let named = self.columns == Columns::All;
+        cell.w(self.columns.category()).flex_none().map(|d| {
+            let Some(color) = group_color.filter(|_| sig.group != "unknown") else {
+                return d.child(div().text_color(theme.muted_foreground).child(if named {
+                    "Category"
+                } else {
+                    "?"
+                }));
+            };
+            d.when(!named, |d| d.px_0().justify_center())
+                .child(
                     svg()
                         .flex_none()
                         .path(theme::group_icon(&sig.group))
                         .size(rpx(12.0))
                         .text_color(color),
                 )
-                .child(div().truncate().child(group))
-            }
+                .when(named, |d| d.child(div().truncate().child(group)))
         })
     }
 
@@ -1040,11 +1348,11 @@ impl Panel<'_> {
                         MouseButton::Left,
                         toggle(
                             entity,
-                            Picker {
+                            Popup::Picker(Picker {
                                 sig: key,
                                 kind: PickerKind::Menu,
                                 overlay: compact,
-                            },
+                            }),
                         ),
                     )
                     .children(menu),
@@ -1121,6 +1429,60 @@ impl Panel<'_> {
                     .child(filters(entity, &sigs.list, theme)),
             )
     }
+
+    /// What just happened, for as long as it is news: in full, on as many lines as it needs.
+    /// It lies over the bottom of the list, just above the buttons, so nothing moves when it
+    /// comes and goes.
+    fn status(&self) -> Option<AnyElement> {
+        let Self {
+            sigs, pad, theme, ..
+        } = *self;
+        let notice = sigs.notice.as_ref()?;
+        let (icon, color) = ui::mood_look(notice.mood, theme);
+        let line = div()
+            .flex()
+            .items_start()
+            .gap(rpx(6.0))
+            .px(pad)
+            .py(rpx(5.0))
+            .border_t_1()
+            .border_color(color.opacity(0.45))
+            .bg(color.opacity(0.1))
+            .text_xs()
+            .child(
+                svg()
+                    .flex_none()
+                    .mt(rpx(1.5))
+                    .path(icon)
+                    .size(rpx(13.0))
+                    .text_color(color),
+            )
+            .child(div().flex_1().min_w_0().child(notice.text.clone()));
+        // Solid underneath, so the rows it covers do not show through the tint.
+        let line = div()
+            .absolute()
+            .bottom_0()
+            .left_0()
+            .right_0()
+            .bg(theme.background)
+            .child(line);
+        let (id, leaving) = (notice.id, notice.leaving);
+        Some(
+            line.with_animation(
+                ElementId::NamedInteger(
+                    if leaving { "status-out" } else { "status-in" }.into(),
+                    id,
+                ),
+                Animation::new(if leaving {
+                    ui::FADE
+                } else {
+                    std::time::Duration::from_millis(160)
+                }),
+                move |d, t| d.opacity(if leaving { 1.0 - t } else { t }),
+            )
+            .into_any_element(),
+        )
+    }
 }
 
 /// Change the list's filter or sort, and keep it.
@@ -1140,7 +1502,13 @@ fn relist(
 
 /// The list's column names, the sortable ones clickable: the same column again flips the
 /// direction, another starts it going up. Widths follow the rows'.
-fn column_header(entity: &Entity<Sigs>, list: &ListView, pad: Rems, theme: &Theme) -> Div {
+fn column_header(
+    entity: &Entity<Sigs>,
+    list: &ListView,
+    pad: Rems,
+    columns: Columns,
+    theme: &Theme,
+) -> Div {
     let head = |label: &'static str, column: Option<SortColumn>| {
         let active = column.is_some_and(|c| c == list.sort);
         let arrow = if list.descending {
@@ -1194,10 +1562,17 @@ fn column_header(entity: &Entity<Sigs>, list: &ListView, pad: Rems, theme: &Them
         .border_color(theme.border.opacity(0.5))
         .child(head("ID", Some(SortColumn::Id)).w(rpx(56.0)).flex_none())
         .child(
-            head("Category", Some(SortColumn::Category))
-                .w(rpx(72.0))
-                .flex_none()
-                .pl_1(),
+            head(
+                if columns == Columns::All {
+                    "Category"
+                } else {
+                    ""
+                },
+                Some(SortColumn::Category),
+            )
+            .w(columns.category())
+            .flex_none()
+            .when(columns == Columns::All, gpui_kit::Styled::pl_1),
         )
         .child(
             head("Type", Some(SortColumn::Type))
@@ -1206,12 +1581,14 @@ fn column_header(entity: &Entity<Sigs>, list: &ListView, pad: Rems, theme: &Them
                 .pl_1(),
         )
         .child(head("Connection", None).flex_1().pl_1())
-        .child(
-            head("Age", Some(SortColumn::Age))
-                .w(rpx(32.0))
-                .flex_none()
-                .justify_end(),
-        )
+        .when(columns.age(), |d| {
+            d.child(
+                head("Age", Some(SortColumn::Age))
+                    .w(rpx(32.0))
+                    .flex_none()
+                    .justify_end(),
+            )
+        })
         .child(div().w(rpx(44.0)).flex_none())
 }
 
@@ -1279,39 +1656,54 @@ fn probe(slot: &Rc<RefCell<Option<Bounds<Pixels>>>>) -> impl IntoElement {
     .size_full()
 }
 
-/// A picker's choices in a popup hung under its cell, over the rows rather than between
-/// them. Laid out as the cell's child, so it is placed in the same frame it opens. It fades
-/// in and closes on a press anywhere else.
-fn float(entity: &Entity<Sigs>, sigs: &Sigs, picker: Picker, content: Div, cx: &App) -> AnyElement {
-    let width = match picker.kind {
-        PickerKind::Category => rpx(200.0),
-        PickerKind::Menu => rpx(210.0),
-        PickerKind::Type => rpx(240.0),
-        PickerKind::Connection => rpx(300.0),
-    };
-    let close = {
-        let entity = entity.clone();
-        move |event: &MouseDownEvent, _: &mut Window, cx: &mut App| {
-            entity.update(cx, |sigs, cx| {
-                // A press on the cell itself toggles it, which closes it.
-                let on_cell = sigs
-                    .anchor
-                    .borrow()
-                    .is_some_and(|a| a.contains(&event.position));
-                if !on_cell && sigs.picker == Some(picker) {
-                    sigs.picker = None;
-                    cx.notify();
-                }
-            });
+/// Which edge of its button a popup lines up with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Side {
+    Left,
+    Right,
+}
+
+/// How a popup hangs off the button that opens it.
+pub(crate) struct Hang {
+    /// Tells it from the other popups.
+    pub id: String,
+    pub width: Rems,
+    pub side: Side,
+}
+
+impl Popup {
+    pub(crate) fn hang(self) -> Hang {
+        let Popup::Picker(picker) = self else {
+            return Hang {
+                id: "quick".into(),
+                width: rpx(250.0),
+                side: Side::Right,
+            };
+        };
+        Hang {
+            id: format!("{}-{:?}", picker.sig, picker.kind),
+            width: match picker.kind {
+                PickerKind::Category => rpx(200.0),
+                PickerKind::Menu => rpx(210.0),
+                PickerKind::Type => rpx(240.0),
+                PickerKind::Connection => rpx(300.0),
+            },
+            side: if picker.kind == PickerKind::Menu {
+                Side::Right
+            } else {
+                Side::Left
+            },
         }
-    };
-    let surface = div()
-        .id(ElementId::Name(
-            format!("popup-{}-{:?}", picker.sig, picker.kind).into(),
-        ))
+    }
+}
+
+/// The box a popup's choices are in: as wide as `hang` says, scrolling past a height.
+pub(crate) fn popup_surface(hang: &Hang, content: Div, cx: &App) -> Stateful<Div> {
+    div()
+        .id(ElementId::Name(format!("popup-{}", hang.id).into()))
         .occlude()
         .relative()
-        .w(width)
+        .w(hang.width)
         .max_h(rpx(340.0))
         .overflow_y_scroll()
         .rounded(px(4.0))
@@ -1320,14 +1712,37 @@ fn float(entity: &Entity<Sigs>, sigs: &Sigs, picker: Picker, content: Div, cx: &
         .border_color(cx.theme().border)
         .p_1()
         .child(content)
-        .child(probe(&sigs.popup))
+}
+
+/// `popup`'s choices hung under the cell or button that opens it, over the rows rather than
+/// between them. Laid out as that one's child, so it is placed in the same frame it opens.
+/// It fades in, and a press anywhere else in the window closes it.
+fn float(entity: &Entity<Sigs>, sigs: &Sigs, popup: Popup, content: Div, cx: &App) -> AnyElement {
+    let hang = popup.hang();
+    let close = {
+        let entity = entity.clone();
+        move |event: &MouseDownEvent, _: &mut Window, cx: &mut App| {
+            entity.update(cx, |sigs, cx| {
+                // A press on the button itself toggles it, which closes it.
+                let on_button = sigs
+                    .anchor
+                    .borrow()
+                    .is_some_and(|a| a.contains(&event.position));
+                if !on_button && sigs.close(popup) {
+                    cx.notify();
+                }
+            });
+        }
+    };
+    let (id, side) = (hang.id.clone(), hang.side);
+    let surface = popup_surface(&hang, content, cx)
         .on_mouse_down_out(close)
         .with_animation(
-            ElementId::Name(format!("popup-in-{}-{:?}", picker.sig, picker.kind).into()),
+            ElementId::Name(format!("popup-in-{id}").into()),
             Animation::new(std::time::Duration::from_millis(120)).with_easing(ease_out_quint()),
             |d, t| d.opacity(t).mt(px((1.0 - t) * -4.0)),
         );
-    let right = picker.kind == PickerKind::Menu;
+    let right = side == Side::Right;
     div()
         .absolute()
         .top_full()
@@ -1342,24 +1757,58 @@ fn float(entity: &Entity<Sigs>, sigs: &Sigs, picker: Picker, content: Div, cx: &
                         Anchor::TopLeft
                     })
                     .snap_to_window_with_margin(px(8.0))
-                    .child(surface),
+                    // Measured around the scrolling surface, not inside it: in there the
+                    // probe would scroll away with the choices, and the overlay would stop
+                    // taking clicks on what it left behind.
+                    .child(div().relative().child(surface).child(probe(&sigs.popup))),
             )
             .with_priority(1),
         )
         .into_any_element()
 }
 
-/// Open `picker`, or close it when it is the one open.
+/// Open `popup`, or close it when it is the one open. One the overlay cannot draw itself
+/// goes to a window of its own; the main window's type picker gets its search emptied and
+/// focused.
 fn toggle(
     entity: &Entity<Sigs>,
-    picker: Picker,
+    popup: Popup,
 ) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + use<> {
     let entity = entity.clone();
-    move |_, _, cx| {
-        entity.update(cx, |sigs, cx| {
-            sigs.picker = (sigs.picker != Some(picker)).then_some(picker);
+    move |event, window, cx| {
+        let display = window.display(cx).map(|d| d.id());
+        let search = entity.update(cx, |sigs, cx| {
             cx.notify();
+            if sigs.close(popup) {
+                return None;
+            }
+            sigs.quick.open = popup == Popup::Quick;
+            sigs.picker = match popup {
+                Popup::Picker(picker) => Some(picker),
+                Popup::Quick => None,
+            };
+            if sigs.detached(popup) {
+                cx.emit(Command::Popover {
+                    popup,
+                    x: f32::from(event.position.x),
+                    y: f32::from(event.position.y),
+                    display,
+                });
+                return None;
+            }
+            match popup {
+                Popup::Picker(picker) if picker.kind == PickerKind::Type && !picker.overlay => {
+                    sigs.search.clone()
+                }
+                _ => None,
+            }
         });
+        if let Some(search) = search {
+            search.update(cx, |input, cx| {
+                input.set_value("", window, cx);
+                input.focus(window, cx);
+            });
+        }
     }
 }
 
@@ -1458,19 +1907,32 @@ fn separator(theme: &Theme) -> Div {
     div().my_1().h(px(1.0)).bg(theme.border)
 }
 
-/// The choices for one of a row's cells: what the website's dropdowns offer.
-fn picker(
+/// The choices for one of a row's cells: what the website's dropdowns offer. A type picker
+/// is narrowed by what `search` holds, and shows it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one more than the limit, and each a different thing"
+)]
+pub(crate) fn picker(
     entity: &Entity<Sigs>,
     sigs: &Sigs,
     sig: &Signature,
     connection: Option<&Connection>,
     kind: PickerKind,
     theme: &Theme,
+    search: Option<&Entity<InputState>>,
+    cx: &App,
 ) -> Div {
     let body = div().flex().flex_col();
     match kind {
         PickerKind::Category => category_picker(body, entity, sig, theme),
-        PickerKind::Type => type_picker(body, entity, sigs, sig, theme),
+        PickerKind::Type => {
+            let key = sig.id;
+            let query = search.map_or_default(|s| s.read(cx).value().to_string());
+            let pick = |t| -> PickHandler { Box::new(choose(entity, key, SignatureEdit::Type(t))) };
+            body.children(search.map(|s| div().p_1().child(Input::new(s))))
+                .child(type_picker(sigs, sig, &query, &pick, theme))
+        }
         PickerKind::Menu => menu_picker(body, entity, sig, connection, theme),
         PickerKind::Connection => connection_picker(body, entity, sigs, sig, theme),
     }
@@ -1491,33 +1953,48 @@ fn category_picker(mut body: Div, entity: &Entity<Sigs>, sig: &Signature, theme:
     body
 }
 
-fn type_picker(
-    mut body: Div,
-    entity: &Entity<Sigs>,
+/// What a click on one of a type picker's choices does.
+pub(crate) type PickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+
+/// What the search box of a type picker says before anything is typed. Not "Code, ...":
+/// the website avoids the word for password managers' sake, and the two should read alike.
+pub(crate) const TYPE_SEARCH: &str = "K162, name or where it leads…";
+
+/// The types a signature can be, less what `query` rules out. `pick` makes the handler for
+/// a choice: a type's id, or `None` for unknown.
+pub(crate) fn type_picker(
     sigs: &Sigs,
     sig: &Signature,
+    query: &str,
+    pick: &dyn Fn(Option<i64>) -> PickHandler,
     theme: &Theme,
 ) -> Div {
     let key = sig.id;
-    let sections = sigs.type_sections(sig);
-    if sections.is_empty() {
+    let mut body = div().flex().flex_col();
+    let choices = sigs.type_choices(sig, query);
+    if !choices.category {
         return body.child(heading("Pick a category first.", theme));
+    }
+    if choices.sections.is_empty() && choices.elsewhere.is_empty() {
+        body = body.child(heading("No type matches", theme));
     }
     body = body.child(
         option(format!("pick-{key}-type-none"), theme)
             .when(sig.signature_type_id.is_none(), |d| chosen(d, theme))
             .text_color(theme.muted_foreground)
-            .on_click(choose(entity, key, SignatureEdit::Type(None)))
+            .on_click(pick(None))
             .child("Unknown"),
     );
-    for (label, types) in sections {
+    let elsewhere = (!choices.elsewhere.is_empty())
+        .then_some((Some("Not known to spawn here"), choices.elsewhere));
+    for (label, types) in choices.sections.into_iter().chain(elsewhere) {
         if let Some(label) = label {
             body = body.child(heading(label, theme));
         }
         for t in types {
             let mut chip = option(format!("pick-{key}-type-{}", t.id), theme)
                 .when(sig.signature_type_id == Some(t.id), |d| chosen(d, theme))
-                .on_click(choose(entity, key, SignatureEdit::Type(Some(t.id))));
+                .on_click(pick(Some(t.id)));
             chip = match &t.signature {
                 Some(code) if sig.group == "wormhole" => {
                     let (short, color) = theme::dest_class_meta(t.target_class);
@@ -1657,6 +2134,139 @@ fn connection_picker(
         }
     }
     body
+}
+
+/// What is worth changing without leaving the game: who is mapped from and onto which map,
+/// whether jumps copy their bookmark, and how the overlay shows. It stays open while you
+/// change things; a press anywhere else closes it.
+pub(crate) fn quick_settings(entity: &Entity<Sigs>, sigs: &Sigs, theme: &Theme) -> Div {
+    let quick = &sigs.quick;
+    let mut body = div()
+        .flex()
+        .flex_col()
+        .child(heading("Map from", theme))
+        .child(
+            option("quick-track-any".into(), theme)
+                .when(quick.tracked.is_none(), |d| chosen(d, theme))
+                .on_click(emit(entity, Command::Track(None)))
+                .child("Whoever moved last"),
+        );
+    for (i, name) in quick.characters.iter().enumerate() {
+        let face = rpx(16.0);
+        let portrait = match sigs.portraits.get(name) {
+            Some(portrait) => img(Arc::clone(portrait)).size(face).into_any_element(),
+            None => div()
+                .size(face)
+                .bg(theme.foreground.opacity(0.08))
+                .into_any_element(),
+        };
+        body = body.child(
+            option(format!("quick-track-{i}"), theme)
+                .when(quick.tracked.as_ref() == Some(name), |d| chosen(d, theme))
+                .on_click(emit(entity, Command::Track(Some(name.clone()))))
+                .child(div().flex_none().child(portrait))
+                .child(div().truncate().child(name.clone())),
+        );
+    }
+    if quick.maps.len() > 1 {
+        body = body.child(heading("Map onto", theme));
+        for (id, name) in &quick.maps {
+            body = body.child(
+                option(format!("quick-map-{id}"), theme)
+                    .when(quick.map_id == Some(*id), |d| chosen(d, theme))
+                    .on_click(emit(entity, Command::PickMap(*id)))
+                    .child(div().truncate().child(name.clone())),
+            );
+        }
+    }
+    // Where you are decides the tab; picking one here holds until you move.
+    if let Some(snapshot) = sigs.snapshot.as_ref().filter(|s| s.tabs.len() > 1) {
+        body = body.child(heading("Tab", theme));
+        for tab in &snapshot.tabs {
+            body = body.child(
+                option(format!("quick-tab-{}", tab.id), theme)
+                    .when(snapshot.map.id == tab.id, |d| chosen(d, theme))
+                    .on_click(emit(entity, Command::PickTab(tab.id)))
+                    .child(div().truncate().child(tab.name.clone())),
+            );
+        }
+    }
+    let switch = |id: &'static str, label: &'static str, on: bool, command: Command| {
+        option(id.into(), theme)
+            .when(on, |d| chosen(d, theme))
+            .on_click(emit(entity, command))
+            .child(label)
+    };
+    let focused = sigs.overlay.only_when_focused;
+    body.child(separator(theme))
+        .child(switch(
+            "quick-copy",
+            "Copy the bookmark on every jump",
+            quick.copy_on_jump,
+            Command::ToggleCopyOnJump,
+        ))
+        .child(switch(
+            "quick-focused",
+            "Only while EVE has focus",
+            focused,
+            Command::Overlay(OverlaySetting::OnlyWhenFocused(!focused)),
+        ))
+        .child(heading("Background", theme))
+        .child(choices(
+            entity,
+            "quick-opacity",
+            OPACITIES,
+            sigs.overlay.opacity,
+            OverlaySetting::Opacity,
+            theme,
+        ))
+        .child(heading("Text size", theme))
+        .child(choices(
+            entity,
+            "quick-text",
+            TEXT_SIZES,
+            sigs.overlay.text_size,
+            OverlaySetting::TextSize,
+            theme,
+        ))
+}
+
+/// A row of small buttons for one overlay setting, the current value lit.
+fn choices(
+    entity: &Entity<Sigs>,
+    id: &'static str,
+    values: &[(u8, &'static str)],
+    current: u8,
+    setting: fn(u8) -> OverlaySetting,
+    theme: &Theme,
+) -> Div {
+    let mut row = div().flex().gap(rpx(2.0)).px_1().pb_1();
+    for &(value, label) in values {
+        let lit = value == current;
+        row = row.child(
+            div()
+                .id(ElementId::NamedInteger(id.into(), u64::from(value)))
+                .flex_1()
+                .h(rpx(22.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(3.0))
+                .border_1()
+                .border_color(if lit {
+                    theme.primary.opacity(0.7)
+                } else {
+                    theme.border
+                })
+                .when(lit, |d| d.bg(theme.primary.opacity(0.14)))
+                .text_xs()
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.muted))
+                .on_click(emit(entity, Command::Overlay(setting(value))))
+                .child(label),
+        );
+    }
+    row
 }
 
 /// The question after a jump: which of the origin's signatures was it? One row per option,
@@ -1840,6 +2450,7 @@ mod tests {
     // Not a glob: GPUI has a `test` attribute of its own.
     use super::{
         DateTime, ListView, Signature, SignatureType, Sigs, SortColumn, Utc, classes, leading_to,
+        matches_query,
     };
 
     fn hole(id: i64, code: &str, target_class: i64) -> SignatureType {
@@ -1876,6 +2487,18 @@ mod tests {
         assert_eq!(ids(3), [2, 4, 5]);
         // No K162 names a C2 here, so the group stays.
         assert_eq!(ids(2), [1, 4]);
+    }
+
+    #[test]
+    fn a_search_matches_code_name_note_and_destination_in_any_order() {
+        let mut frigate = hole(1, "Q003", 9);
+        frigate.name = "Wormhole Q003".into();
+        frigate.extra = Some("Frigate".into());
+        assert!(matches_query(&frigate, ""));
+        assert!(matches_query(&frigate, "q0"));
+        assert!(matches_query(&frigate, "frig N"));
+        assert!(matches_query(&frigate, "  wormhole  "));
+        assert!(!matches_query(&frigate, "frig c6"));
     }
 
     fn sig(id: &str, name: Option<&str>) -> Signature {

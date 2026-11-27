@@ -17,16 +17,9 @@ use crate::hotkeys::{self, Action, PICK_MODIFIERS};
 use crate::overlay;
 use crate::sigs;
 use crate::theme::{self, Appearance, HEADING};
-use crate::ui::{self, ButtonState, Kind, rpx};
+use crate::ui::{self, ButtonState, Kind, OPACITIES, TEXT_SIZES, rpx};
 
 const SIDEBAR: f32 = 220.0;
-/// The text size choices, in percent.
-const TEXT_SIZES: &[(u8, &str)] = &[
-    (90, "Small"),
-    (100, "Normal"),
-    (115, "Large"),
-    (130, "Larger"),
-];
 
 /// A page on the website at `server`, which may be typed without its scheme.
 fn website(server: &str, path: &str) -> String {
@@ -794,7 +787,41 @@ impl DesktopApp {
                     .on_click(cx.listener(move |this, _, _, cx| this.pick_map(id, cx))),
                 );
             }
-            panel("Map", theme).child(row)
+            // The map's tabs, when it is split over several.
+            let snapshot = self.sigs.read(cx).snapshot.clone();
+            let tabs = snapshot.filter(|s| s.tabs.len() > 1).map(|snapshot| {
+                let mut tabs = div().flex().flex_wrap().gap_1();
+                for tab in &snapshot.tabs {
+                    let id = tab.id;
+                    let kind = if snapshot.map.id == id {
+                        Kind::Selected
+                    } else {
+                        Kind::Normal
+                    };
+                    tabs = tabs.child(
+                        ui::button(
+                            ElementId::NamedInteger("tab".into(), id.cast_unsigned()),
+                            tab.name.clone(),
+                            kind,
+                            ButtonState::Enabled,
+                            theme,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| this.pick_tab(id, cx))),
+                    );
+                }
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .text_sm()
+                    .child("Tab")
+                    .child(tabs)
+                    .child(muted(
+                        "The app goes to the tab that draws the system you are in. One picked here holds until you move.",
+                        theme,
+                    ))
+            });
+            panel("Map", theme).child(row).children(tabs)
         })
     }
 
@@ -807,15 +834,7 @@ impl DesktopApp {
             ));
         }
         if !self.characters.is_empty() || self.config.tracked.is_some() {
-            // Everyone the logs know, and the tracked one even while logged out.
-            let mut names: Vec<String> =
-                self.characters.iter().map(|(c, _, _)| c.clone()).collect();
-            if let Some(tracked) = &self.config.tracked
-                && !names.contains(tracked)
-            {
-                names.push(tracked.clone());
-                names.sort();
-            }
+            let names = self.trackable();
             let mut chips = div().flex().flex_wrap().gap_1().child(
                 ui::button(
                     "track-any",
@@ -863,10 +882,8 @@ impl DesktopApp {
             "Copy the bookmark back on every jump",
             Switch::new("copy-on-jump")
                 .checked(self.config.copy_on_jump)
-                .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                    this.config.copy_on_jump = *checked;
-                    this.save();
-                    cx.notify();
+                .on_click(cx.listener(|this, _: &bool, _, cx| {
+                    this.toggle_copy_on_jump(cx);
                 }))
                 .into_any_element(),
         ));
@@ -919,7 +936,7 @@ impl DesktopApp {
                 "Background",
                 segmented(
                     "opacity",
-                    &[(60u8, "60%"), (75, "75%"), (85, "85%"), (100, "100%")],
+                    OPACITIES,
                     o.opacity,
                     cx,
                     |this, v, _, cx| this.edit_overlay(cx, |o| o.opacity = v),

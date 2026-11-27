@@ -16,6 +16,8 @@ mod jump;
 mod native;
 mod overlay;
 mod plan;
+#[cfg(target_os = "linux")]
+mod popover;
 mod scan;
 mod sigs;
 mod snap;

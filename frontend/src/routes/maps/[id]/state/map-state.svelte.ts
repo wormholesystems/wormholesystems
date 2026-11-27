@@ -542,6 +542,7 @@ export class MapState {
 	trackerHost(): TrackerHost {
 		return {
 			mapId: () => this.mapId,
+			rootId: () => this.rootId,
 			myCharacters: () => this.characters.mine,
 			systems: () => this.systemsView,
 			connections: () => this.connectionsView,

@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::{
-    AnyWindowHandle, App, AppContext, Context, DisplayEvent, Entity, FocusHandle, Image,
+    AnyWindowHandle, App, AppContext, Context, DisplayEvent, DisplayId, Entity, FocusHandle, Image,
     ImageFormat, KeyDownEvent, Subscription, Task, Window,
 };
 
@@ -22,7 +22,7 @@ use crate::alias;
 use crate::api::NameBookmark;
 use crate::api::{Beat, Client, MapEntry, MapSnapshot, SignatureCatalog, SignatureEdit};
 use crate::chatlog::{self, ChatEvent, Watcher};
-use crate::config::Config;
+use crate::config::{Config, OverlaySetting};
 use crate::focus::{self, Focus};
 use crate::fresh::Freshness;
 use crate::hotkeys::{self, Action, Press, Registry};
@@ -31,8 +31,10 @@ use crate::overlay;
 use crate::plan::{
     JumpContext, LastJump, LoneGhost, Plan, bookmark_for, landed_on, plan_jump, submit,
 };
+#[cfg(target_os = "linux")]
+use crate::popover;
 use crate::scan;
-use crate::sigs::{Ask, Command, Here, Review, Sigs, Tone};
+use crate::sigs::{Ask, Command, Here, PickerKind, Popup, Popups, Quick, Review, Sigs, Tone};
 use crate::theme::{self, Appearance};
 use crate::ui::{self, Mood, Notice};
 
@@ -135,6 +137,7 @@ pub(crate) struct DesktopApp {
     last_bookmark: Option<String>,
     /// The characters the server was last told this app maps jumps for.
     held: Option<Held>,
+    tab: TabChoice,
     /// A jump is being looked into or mapped; the next waits its turn.
     thinking: bool,
     /// Jumps that landed while another was being asked about, oldest first.
@@ -157,6 +160,16 @@ pub(crate) struct DesktopApp {
     /// Held so they keep running.
     tasks: Vec<Task<()>>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// Which tab of the map the next refresh reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TabChoice {
+    /// You have moved since the tab was last checked: the one that draws where you are, if
+    /// the one being worked on does not.
+    Follow,
+    /// The one being worked on.
+    Keep,
 }
 
 /// What the updater is doing.
@@ -187,14 +200,18 @@ impl DesktopApp {
                 .placeholder("Documents/EVE/logs/Chatlogs")
                 .default_value(found.as_ref().map_or_default(|p| p.display().to_string()))
         });
+        let type_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder(crate::sigs::TYPE_SEARCH));
         let sigs = cx.new(|_| Sigs {
+            search: Some(type_search.clone()),
+            popups: Popups::detect(),
             overlay: config.overlay.clone(),
             list: config.list.clone(),
             pick_prefix: hotkeys::pick_prefix(&config.pick_modifiers),
             ..Default::default()
         });
 
-        let subscriptions = Self::subscribe(&chatlog_dir, &sigs, window, cx);
+        let subscriptions = Self::subscribe(&chatlog_dir, &type_search, &sigs, window, cx);
 
         let mut hotkeys = Registry::new();
         let refused = hotkeys.apply(&config.hotkeys);
@@ -224,6 +241,7 @@ impl DesktopApp {
             last: None,
             last_bookmark: None,
             held: None,
+            tab: TabChoice::Follow,
             thinking: false,
             queued: VecDeque::new(),
             alias_window: None,
@@ -243,6 +261,7 @@ impl DesktopApp {
             _subscriptions: subscriptions,
         };
         this.note_problems(config_problem, refused);
+        this.sync_quick(cx);
         if let Some(dir) = found {
             this.watch(dir);
         } else {
@@ -270,6 +289,7 @@ impl DesktopApp {
 
     fn subscribe(
         chatlog_dir: &Entity<InputState>,
+        type_search: &Entity<InputState>,
         sigs: &Entity<Sigs>,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
@@ -295,6 +315,15 @@ impl DesktopApp {
                     this.use_chatlog_dir(cx);
                 }
             }),
+            cx.subscribe_in(
+                type_search,
+                window,
+                |this, _, event: &InputEvent, _, cx| match event {
+                    InputEvent::Change => cx.notify(),
+                    InputEvent::PressEnter { .. } => this.pick_first_type(cx),
+                    _ => {}
+                },
+            ),
             cx.observe(sigs, |_, _, cx| cx.notify()),
             cx.subscribe(sigs, |this, _, command: &Command, cx| {
                 this.command(command.clone(), cx);
@@ -352,6 +381,14 @@ impl DesktopApp {
 
     fn client(&self) -> Option<Client> {
         self.client.clone()
+    }
+
+    /// The id everything on the map is read and written under: the tab being worked on,
+    /// else the map itself.
+    fn target(&self) -> Option<i64> {
+        self.config
+            .map_id
+            .map(|map| self.config.tab_id.unwrap_or(map))
     }
 
     /// A map that came back from a change: newer than any refresh still out.
@@ -422,9 +459,11 @@ impl DesktopApp {
                             .is_none_or(|id| !maps.iter().any(|m| m.id == id))
                         {
                             this.config.map_id = maps.first().map(|m| m.id);
+                            this.config.tab_id = None;
                             this.save();
                         }
                         this.maps = maps;
+                        this.sync_quick(cx);
                         this.heartbeat(cx);
                         if this.page == Page::Settings && this.config.map_id.is_some() {
                             this.page = Page::Signatures;
@@ -454,6 +493,7 @@ impl DesktopApp {
         self.clear_map(cx);
         self.drop_jumps(cx);
         self.heartbeat(cx);
+        self.sync_quick(cx);
         cx.notify();
     }
 
@@ -469,9 +509,15 @@ impl DesktopApp {
     }
 
     fn pick_map(&mut self, id: i64, cx: &mut Context<'_, Self>) {
+        if self.config.map_id == Some(id) {
+            return;
+        }
         self.config.map_id = Some(id);
+        self.config.tab_id = None;
+        self.tab = TabChoice::Follow;
         self.last = None;
         self.save();
+        self.sync_quick(cx);
         self.clear_map(cx);
         self.drop_jumps(cx);
         self.heartbeat(cx);
@@ -480,21 +526,71 @@ impl DesktopApp {
         cx.notify();
     }
 
-    /// Fetch the map and its signatures now.
+    /// Work on another tab of the map.
+    fn pick_tab(&mut self, id: i64, cx: &mut Context<'_, Self>) {
+        if self.target() == Some(id) {
+            return;
+        }
+        // Picked by hand, it stays until you move.
+        self.tab = TabChoice::Keep;
+        self.set_tab(id);
+        self.clear_map(cx);
+        self.drop_jumps(cx);
+        self.refresh(cx);
+        cx.notify();
+    }
+
+    fn set_tab(&mut self, id: i64) {
+        self.config.tab_id = Some(id).filter(|id| Some(*id) != self.config.map_id);
+        self.save();
+    }
+
+    /// No jump is being looked into, asked about or waiting: the tab can change under it.
+    fn settled(&self, cx: &App) -> bool {
+        !self.thinking && self.queued.is_empty() && self.sigs.read(cx).ask.is_none()
+    }
+
+    /// Fetch the map and its signatures now. After a move, from the tab that draws where
+    /// you are.
     fn refresh(&mut self, cx: &mut Context<'_, Self>) {
-        let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
+        let (Some(client), Some(root), Some(tab)) =
+            (self.client(), self.config.map_id, self.target())
+        else {
             return;
         };
         if self.account.is_none() {
             return;
         }
+        let here = self
+            .sigs
+            .read(cx)
+            .here
+            .as_ref()
+            .filter(|_| self.tab == TabChoice::Follow && self.settled(cx))
+            .map(|here| here.system.clone());
+        let following = here.is_some();
         let n = self.fresh.start();
-        let fetch = cx.background_spawn(async move { client.snapshot(map_id) });
+        let fetch = cx.background_spawn(async move { client.follow(root, tab, here.as_deref()) });
         cx.spawn(async move |this, cx| match fetch.await {
-            Ok(snapshot) => {
+            Ok((shown, snapshot)) => {
                 this.update(cx, |this, cx| {
                     if !this.fresh.show(n) {
                         return;
+                    }
+                    if shown != tab {
+                        // A jump came in meanwhile, or the tab was changed by hand: this
+                        // answer is for a question no longer asked.
+                        if this.target() != Some(tab) || !this.settled(cx) {
+                            return;
+                        }
+                        this.set_tab(shown);
+                        this.sigs.update(cx, |sigs, _| sigs.review = None);
+                        if let Some(name) = snapshot.tab_name() {
+                            this.note(Level::Info, format!("Now on the tab {name}"));
+                        }
+                    }
+                    if following {
+                        this.tab = TabChoice::Keep;
                     }
                     let snapshot = Arc::new(snapshot);
                     this.mapped_elsewhere(&snapshot, cx);
@@ -682,6 +778,7 @@ impl DesktopApp {
                             this.characters = seen;
                             if joined {
                                 this.heartbeat(cx);
+                                this.sync_quick(cx);
                             }
                             this.fetch_portraits(cx);
                             cx.notify();
@@ -741,6 +838,7 @@ impl DesktopApp {
         }
         self.config.tracked = character.clone();
         self.save();
+        self.sync_quick(cx);
         if character.is_some() {
             self.active = character;
         }
@@ -748,6 +846,47 @@ impl DesktopApp {
         self.locate(cx);
         self.refresh(cx);
         cx.notify();
+    }
+
+    /// Everyone the logs know, and the tracked one even while logged out.
+    fn trackable(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.characters.iter().map(|(c, _, _)| c.clone()).collect();
+        if let Some(tracked) = &self.config.tracked
+            && !names.contains(tracked)
+        {
+            names.push(tracked.clone());
+            names.sort();
+        }
+        names
+    }
+
+    fn toggle_copy_on_jump(&mut self, cx: &mut Context<'_, Self>) {
+        self.config.copy_on_jump = !self.config.copy_on_jump;
+        self.save();
+        self.sync_quick(cx);
+        cx.notify();
+    }
+
+    /// Hand the overlay's quick settings what they show.
+    fn sync_quick(&mut self, cx: &mut Context<'_, Self>) {
+        let quick = Quick {
+            characters: self.trackable(),
+            tracked: self.config.tracked.clone(),
+            maps: self.maps.iter().map(|m| (m.id, m.name.clone())).collect(),
+            map_id: self.config.map_id,
+            copy_on_jump: self.config.copy_on_jump,
+            open: false,
+        };
+        self.sigs.update(cx, |sigs, cx| {
+            let quick = Quick {
+                open: sigs.quick.open,
+                ..quick
+            };
+            if sigs.quick != quick {
+                sigs.quick = quick;
+                cx.notify();
+            }
+        });
     }
 
     /// Tell the signatures where you are now.
@@ -761,13 +900,18 @@ impl DesktopApp {
                     system: system.clone(),
                 })
         });
-        self.sigs.update(cx, |sigs, cx| {
-            if sigs.here != here {
+        let moved = self.sigs.update(cx, |sigs, cx| {
+            let moved = sigs.here != here;
+            if moved {
                 sigs.here = here;
                 sigs.notice = None;
                 cx.notify();
             }
+            moved
         });
+        if moved {
+            self.tab = TabChoice::Follow;
+        }
     }
 
     // Jumps.
@@ -792,7 +936,7 @@ impl DesktopApp {
         to: String,
         cx: &mut Context<'_, Self>,
     ) {
-        let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
+        let (Some(client), Some(map_id)) = (self.client(), self.target()) else {
             return;
         };
         if self.account.is_none() {
@@ -815,7 +959,9 @@ impl DesktopApp {
                         this.landed(jump, bookmark, Some(what), cx);
                     }
                     Ok(Plan::Ask(ask)) => return this.ask(*ask, cx),
-                    Err(err) => this.note(Level::Problem, format!("Could not map the jump: {err}")),
+                    Err(err) => {
+                        this.tell(Tone::Problem, format!("Could not map the jump: {err}"), cx);
+                    }
                 }
                 this.refresh_changed(cx);
                 this.next_jump(cx);
@@ -907,11 +1053,14 @@ impl DesktopApp {
                         let what = format!("Mapped {} from {}", jump.here, jump.back_to);
                         this.landed(jump, bookmark, Some(what), cx);
                     }
-                    Ok(None) => this.note(
-                        Level::Problem,
+                    Ok(None) => this.tell(
+                        Tone::Problem,
                         "Mapped, but the hole is not on the map now".into(),
+                        cx,
                     ),
-                    Err(err) => this.note(Level::Problem, format!("Could not map the jump: {err}")),
+                    Err(err) => {
+                        this.tell(Tone::Problem, format!("Could not map the jump: {err}"), cx);
+                    }
                 }
                 this.refresh_changed(cx);
                 this.next_jump(cx);
@@ -1152,12 +1301,11 @@ impl DesktopApp {
             );
         }
         let (Some(client), Some(last)) = (self.client(), self.last.clone()) else {
-            self.note(
-                Level::Problem,
+            return self.tell(
+                Tone::Problem,
                 format!("{}: no jump to act on yet", action.label()),
+                cx,
             );
-            cx.notify();
-            return;
         };
         let change = action.change();
         let work = cx.background_spawn(async move {
@@ -1181,9 +1329,11 @@ impl DesktopApp {
                         if let Some(b) = bookmark {
                             this.last_bookmark = Some(b);
                         }
-                        this.note(Level::Done, what);
+                        this.tell(Tone::Done, what, cx);
                     }
-                    Err(err) => this.note(Level::Problem, format!("{}: {err}", action.label())),
+                    Err(err) => {
+                        this.tell(Tone::Problem, format!("{}: {err}", action.label()), cx);
+                    }
                 }
                 this.refresh_changed(cx);
                 cx.notify();
@@ -1268,6 +1418,17 @@ impl DesktopApp {
             Command::HideOverlay => self.close_overlay(cx),
             Command::Pick(index) => self.pick(index, cx),
             Command::SkipJump => self.skip_jump(cx),
+            Command::Popover {
+                popup,
+                x,
+                y,
+                display,
+            } => self.open_popover(popup, (x, y), display, cx),
+            Command::Track(character) => self.track(character, cx),
+            Command::PickMap(id) => self.pick_map(id, cx),
+            Command::PickTab(id) => self.pick_tab(id, cx),
+            Command::ToggleCopyOnJump => self.toggle_copy_on_jump(cx),
+            Command::Overlay(setting) => self.tune_overlay(setting, cx),
             Command::PlaceOverlay {
                 x,
                 y,
@@ -1284,7 +1445,7 @@ impl DesktopApp {
         }
     }
 
-    /// Show the outcome in the panels and the log.
+    /// Show the outcome in the panels' status line and the log.
     fn tell(&mut self, tone: Tone, text: String, cx: &mut Context<'_, Self>) {
         let level = match tone {
             Tone::Info => Level::Info,
@@ -1356,7 +1517,7 @@ impl DesktopApp {
         if self.config.overlay.show_on_paste && self.overlay.is_none() {
             self.open_overlay(cx);
         }
-        let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
+        let (Some(client), Some(map_id)) = (self.client(), self.target()) else {
             return self.tell(Tone::Problem, "Sign in and pick a map first".into(), cx);
         };
         let sigs = self.sigs.read(cx);
@@ -1455,7 +1616,7 @@ impl DesktopApp {
     }
 
     fn delete(&mut self, keys: Vec<i64>, done: String, cx: &mut Context<'_, Self>) {
-        let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
+        let (Some(client), Some(map_id)) = (self.client(), self.target()) else {
             return;
         };
         if self.sigs.read(cx).busy {
@@ -1485,7 +1646,7 @@ impl DesktopApp {
 
     /// Change one signature the way the website's row does, then show the map as it is now.
     fn edit_signature(&mut self, key: i64, edit: SignatureEdit, cx: &mut Context<'_, Self>) {
-        let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
+        let (Some(client), Some(map_id)) = (self.client(), self.target()) else {
             return;
         };
         if self.sigs.read(cx).busy {
@@ -1523,6 +1684,54 @@ impl DesktopApp {
         .detach();
     }
 
+    /// Enter in the main window's type search: the first type listed is the one.
+    fn pick_first_type(&mut self, cx: &mut Context<'_, Self>) {
+        let first = {
+            let sigs = self.sigs.read(cx);
+            let Some(picker) = sigs
+                .picker
+                .filter(|p| p.kind == PickerKind::Type && !p.overlay)
+            else {
+                return;
+            };
+            let query = sigs.search.as_ref().map_or_default(|s| s.read(cx).value());
+            sigs.signature(picker.sig)
+                .and_then(|sig| sigs.type_choices(sig, &query).first())
+                .map(|first| (picker.sig, first))
+        };
+        let Some((key, first)) = first else { return };
+        self.sigs.update(cx, |sigs, cx| {
+            sigs.picker = None;
+            cx.notify();
+        });
+        self.edit_signature(key, SignatureEdit::Type(Some(first)), cx);
+    }
+
+    /// Open one of the overlay's popups in a window of its own. Where that cannot be done,
+    /// the overlay draws them itself from here on.
+    fn open_popover(
+        &mut self,
+        popup: Popup,
+        at: (f32, f32),
+        display: Option<DisplayId>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        // Only Linux has a layer shell to open one on, and only there is one asked for.
+        #[cfg(target_os = "linux")]
+        let opened = popover::open(self.sigs.clone(), popup, at, display, cx).is_ok();
+        #[cfg(not(target_os = "linux"))]
+        let opened = {
+            let _ = (popup, at, display);
+            false
+        };
+        if !opened {
+            self.sigs.update(cx, |sigs, cx| {
+                sigs.popups = Popups::Inline;
+                cx.notify();
+            });
+        }
+    }
+
     /// Copy the bookmark for where a signature's hole goes, the way the website's copy
     /// button does, named by the map's naming strategy. A hole with no name yet gets the
     /// next one in the chain, which the server writes onto its far end.
@@ -1546,7 +1755,7 @@ impl DesktopApp {
                     c.from_system
                 }
             });
-        let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
+        let (Some(client), Some(map_id)) = (self.client(), self.target()) else {
             return;
         };
         let cmd = NameBookmark {
@@ -1623,7 +1832,7 @@ impl DesktopApp {
             .filter(|l| l.here == system.name)
             .map(|l| l.back_to_node);
         let (None, Some(origin), Some(client), Some(map_id)) =
-            (&current, origin, self.client(), self.config.map_id)
+            (&current, origin, self.client(), self.target())
         else {
             return self.show_alias(system.id, system.name, current.unwrap_or_default(), cx);
         };
@@ -1678,7 +1887,7 @@ impl DesktopApp {
         alias: String,
         cx: &mut Context<'_, Self>,
     ) {
-        let (Some(client), Some(map_id)) = (self.client(), self.config.map_id) else {
+        let (Some(client), Some(map_id)) = (self.client(), self.target()) else {
             return;
         };
         let work = cx.background_spawn({
@@ -1736,6 +1945,10 @@ impl DesktopApp {
             cx.spawn(async move |this, cx| {
                 if let Some(portrait) = fetch.await {
                     this.update(cx, |this, cx| {
+                        this.sigs.update(cx, |sigs, cx| {
+                            sigs.portraits.insert(name.clone(), Arc::clone(&portrait));
+                            cx.notify();
+                        });
                         this.portraits.insert(name, Some(portrait));
                         cx.notify();
                     })
@@ -1795,11 +2008,33 @@ impl DesktopApp {
     }
 
     fn remove_overlay(&mut self, cx: &mut Context<'_, Self>) {
+        // Whatever hung open in it goes with it.
+        self.sigs.update(cx, |sigs, cx| {
+            sigs.quick.open = false;
+            if sigs.picker.is_some_and(|p| p.overlay) {
+                sigs.picker = None;
+            }
+            cx.notify();
+        });
         if let Some(handle) = self.overlay.take() {
             handle
                 .update(cx, |_, window, _| window.remove_window())
                 .ok();
         }
+    }
+
+    /// Change an overlay setting from the overlay itself. These are read on every draw, so
+    /// it stays open.
+    fn tune_overlay(&mut self, setting: OverlaySetting, cx: &mut Context<'_, Self>) {
+        self.config.overlay.set(setting);
+        let settings = self.config.overlay.clone();
+        self.sigs.update(cx, |sigs, cx| {
+            sigs.overlay = settings;
+            cx.notify();
+        });
+        self.apply_focus(cx);
+        self.save();
+        cx.notify();
     }
 
     /// Change an overlay setting; an open overlay is reopened to take it.

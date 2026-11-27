@@ -35,7 +35,7 @@
 	const pilots = $derived(map.characters.mine);
 	// Their jumps are the desktop app's to map, so this tab leaves them alone.
 	const onDesktop = $derived(
-		pilots.filter((p) => p.desktop_map_id === map.mapId).map((p) => p.name),
+		pilots.filter((p) => p.desktop_map_id === map.rootId).map((p) => p.name),
 	);
 	const tracked = $derived(
 		new Set(
