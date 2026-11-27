@@ -112,10 +112,9 @@ pub async fn fetch_map(
     Query(share): Query<ShareQuery>,
 ) -> ApiResult<MapView> {
     let reader = read_map_as(&state, &creds, map_id, &share).await?;
-    let mut view =
-        crate::maps::map::read_map(&state.db, reader, crate::maps::map::GetMap { map_id }).await?;
-    view.tabs_enabled = state.tabs.allows(view.root_id);
-    Ok(Json(view))
+    Ok(Json(
+        crate::maps::map::read_map(&state.db, reader, crate::maps::map::GetMap { map_id }).await?,
+    ))
 }
 
 /// `GET /api/share/{token}`: the map a share link leads to, for whoever holds it. A token
@@ -135,9 +134,9 @@ pub async fn fetch_shared_map(
     Path(token): Path<String>,
 ) -> ApiResult<MapView> {
     let actor = session_actor(&state.db, &creds).await?;
-    let mut view = crate::maps::map::read_shared_map(&state.db, &token, actor).await?;
-    view.tabs_enabled = state.tabs.allows(view.root_id);
-    Ok(Json(view))
+    Ok(Json(
+        crate::maps::map::read_shared_map(&state.db, &token, actor).await?,
+    ))
 }
 
 /// `GET /api/maps/{id}/characters`, presence: online characters of users who opted into

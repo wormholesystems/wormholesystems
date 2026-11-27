@@ -557,8 +557,6 @@ pub async fn read_map(
         connections,
         root_id: super::tabs::root_of(pool, cmd.map_id).await?,
         tabs,
-        // The operator's switch, which the routes that serve the view know and this does not.
-        tabs_enabled: false,
         elsewhere,
     })
 }

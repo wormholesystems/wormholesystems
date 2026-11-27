@@ -22,8 +22,7 @@ pub fn routes() -> OpenApiRouter<AppState> {
 
 /// `POST /api/maps/{id}/tabs/create`, add an empty tab at the end of the bar. `{id}` is
 /// the map or any of its tabs. The new tab's `id` is a map id: read it with
-/// `GET /api/maps/{id}` and edit it through the same routes as any map. `Conflict` unless
-/// the operator switched tabs on for the map (`TABS_MAP_IDS`).
+/// `GET /api/maps/{id}` and edit it through the same routes as any map.
 #[utoipa::path(
     post,
     path = "/api/maps/{id}/tabs/create",
@@ -39,15 +38,6 @@ pub async fn create_tab(
     Json(cmd): Json<CreateTab>,
 ) -> ApiResult<MapTab> {
     let actor = acting_on(&state.db, &creds, map_id, cmd.map_id).await?;
-    // The operator's switch. Checked after the actor, so it says nothing about a map to
-    // somebody who could not see it.
-    let root = crate::maps::tabs::root_of(&state.db, cmd.map_id).await?;
-    if !state.tabs.allows(root) {
-        return Err(crate::maps::MapError::Conflict(
-            "tabs are not switched on for this map".into(),
-        )
-        .into());
-    }
     Ok(Json(
         crate::maps::tabs::create_tab(&state.db, actor, cmd).await?,
     ))

@@ -54,7 +54,6 @@ pub(crate) fn state(pool: &PgPool) -> AppState {
         ),
         allowed_logins: AffiliationAllowlist::default(),
         map_creators: AffiliationAllowlist::default(),
-        tabs: wormholesystems::maps::tabs::TabsFor::AllMaps,
         announcement: None,
         eve_scout: Arc::new(wormholesystems::integrations::eve_scout::EveScout::new(
             "http://127.0.0.1:9/unreachable",

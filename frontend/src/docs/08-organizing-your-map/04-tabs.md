@@ -30,8 +30,6 @@ When a system on this tab is also on another one, a small link under the node na
 
 ## Managing tabs
 
-Tabs are switched on per map by whoever runs the site. On a map without them there is no tab bar.
-
-The tabs sit next to the map name. Managers and owners can add a tab with **+**, rename one by double-clicking it, and reorder or delete from the menu on the active tab.
+The tabs sit next to the map name. A map with a single tab shows the bar only to those who can add one. Managers and owners can add a tab with **+**, rename one by double-clicking it, and reorder or delete from the menu on the active tab.
 
 Deleting a tab deletes everything drawn on it, including its history, and cannot be undone. The other tabs are not touched. The first tab is the map itself and cannot be deleted.

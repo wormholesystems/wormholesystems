@@ -220,7 +220,6 @@ fn map_view_round_trips() {
             updated_at: ts(),
         }],
         root_id: 1,
-        tabs_enabled: true,
         tabs: vec![
             wormholesystems::maps::tabs::MapTab {
                 id: 1,
