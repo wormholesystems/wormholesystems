@@ -15,7 +15,6 @@ live pilot locations, for corporations and alliances living in J-space.
 [![CI](https://github.com/wormholesystems/wormholesystems/actions/workflows/ci.yml/badge.svg)](https://github.com/wormholesystems/wormholesystems/actions/workflows/ci.yml)
 [![Images](https://github.com/wormholesystems/wormholesystems/actions/workflows/images.yml/badge.svg)](https://github.com/wormholesystems/wormholesystems/pkgs/container/wormholesystems-api)
 [![wsctl](https://img.shields.io/github/v/release/wormholesystems/wormholesystems?filter=wsctl-*&label=wsctl)](https://github.com/wormholesystems/wormholesystems/releases/latest)
-[![Status](https://img.shields.io/badge/status-beta-f59e0b)](#beta)
 [![License](https://img.shields.io/github/license/wormholesystems/wormholesystems)](LICENSE)
 [![Discord](https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/rpfWCzVJS7)
 
@@ -52,12 +51,6 @@ end-of-life, it is on your screen before they have finished typing.
 - **Script it**: everything the map screen does is in the [API](./docs/api.md), with
   personal access tokens.
 
-## Beta
-
-It is in daily use and updates migrate your data in place, but it is still moving. The
-interface and the API change between updates, so pin what you script against, and expect
-the odd rough edge. `wsctl update` dumps the database before every update; keep those.
-
 ## Run your own
 
 You need Docker, a domain pointed at the machine, and an EVE application from the
@@ -72,11 +65,11 @@ wsctl setup
 stack up. It runs everything itself (Postgres and Caddy included), or uses a Postgres and
 a reverse proxy you already have; `wsctl integrate` then prints what that proxy needs.
 
-| Command | What it does |
-|---|---|
-| `wsctl update` | new code and newer static data, dumping the database first |
-| `wsctl backup` / `wsctl restore` | the same dump, by hand |
-| `wsctl status` | what is running and whether it answers |
+| Command                          | What it does                                               |
+| -------------------------------- | ---------------------------------------------------------- |
+| `wsctl update`                   | new code and newer static data, dumping the database first |
+| `wsctl backup` / `wsctl restore` | the same dump, by hand                                     |
+| `wsctl status`                   | what is running and whether it answers                     |
 
 [docs/deployment.md](./docs/deployment.md) covers the rest.
 

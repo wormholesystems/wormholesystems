@@ -73,21 +73,6 @@
 			<a href="/" class="flex items-center gap-2 text-foreground">
 				<Logo class="size-5" />
 				<span class="font-heading text-sm font-semibold tracking-tight">WormholeSystems</span>
-				<!-- Says what it is before anyone finds out the hard way. -->
-				<Hint
-					text={'Beta: in daily use, still changing. Updates migrate your data.'}
-					focusable={false}
-				>
-					{#snippet child({ props })}
-						<span
-							class="border border-amber-500/40 px-1.5 py-0.5 text-[10px] tracking-wider whitespace-nowrap text-amber-500 uppercase"
-							data-testid="beta"
-							{...props}
-						>
-							Beta
-						</span>
-					{/snippet}
-				</Hint>
 			</a>
 			<!-- Without an account this only leads to the sign-in page, so it is not shown. -->
 			{#if me}
