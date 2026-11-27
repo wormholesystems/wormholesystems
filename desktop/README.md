@@ -41,6 +41,18 @@ you just flew and name the system you are in.
   closes.
 - Hole keys act on the last hole jumped and copy the updated bookmark afterwards, so a
   `{mass}` or `{life}` token in your format stays right.
+- On a map split over tabs, the app works on the tab that draws the system you are in:
+  pastes, signatures and jumps go there. When you move to a system only another tab draws,
+  it goes to that tab. A tab picked by hand (the overlay's quick settings, or Settings)
+  holds until you move. The website leaves a watched character's jumps to the app on every
+  tab of the map.
+- The gear in the overlay's header opens its quick settings: which character is mapped
+  from, the map and tab, whether jumps copy their bookmark, and how the overlay shows.
+- A signature's type is picked with a search, like the website's (`matches_query` in
+  `sigs.rs` ports `matchesTypeQuery`; change both together). Enter picks the first match.
+- The overlay cannot be typed into and only hears clicks that land on it, so on Wayland
+  its popups (the pickers and the quick settings) open in a surface of their own over the
+  screen: a click anywhere else or Esc closes them.
 - The overlay sits in a screen corner and takes clicks, never the keyboard. With more than
   one monitor, Settings picks the one it is on. On Wayland it
   is a layer-shell surface, which compositors keep above everything (GNOME has no layer

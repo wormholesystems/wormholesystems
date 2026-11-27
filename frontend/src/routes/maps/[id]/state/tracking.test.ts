@@ -44,6 +44,7 @@ function fakeHost(over: Partial<TrackerHost> = {}) {
 	let myCharacters: CharacterRef[] = [];
 	const host: TrackerHost = {
 		mapId: () => 1,
+		rootId: () => 1,
 		myCharacters: () => myCharacters,
 		systems: () => [system(1, 100)],
 		connections: () => [],

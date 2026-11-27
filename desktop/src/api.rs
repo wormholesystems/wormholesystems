@@ -90,7 +90,27 @@ pub(crate) struct EndBookmark {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct MapInfo {
+    /// The id this was read under: the map's, or one of its tabs'.
+    #[serde(skip)]
+    pub id: i64,
     pub name: String,
+}
+
+/// One of the canvases a map is split over. Its id is a map id like any other: its systems,
+/// connections and signatures are read and written under it.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct Tab {
+    pub id: i64,
+    pub name: String,
+}
+
+/// What another tab draws.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct TabNetwork {
+    pub tab_id: i64,
+    /// Solar system ids.
+    #[serde(default)]
+    pub systems: Vec<i64>,
 }
 
 /// A placed system. Ghosts (holes nobody has flown yet) are kept apart as [`Ghost`]s:
@@ -256,9 +276,38 @@ pub(crate) struct MapSnapshot {
     pub ghosts: Vec<Ghost>,
     pub connections: Vec<Connection>,
     pub signatures: Vec<Signature>,
+    /// The map's tabs in bar order, this one among them; one or none for a map nobody split.
+    pub tabs: Vec<Tab>,
+    /// What the other tabs draw.
+    pub elsewhere: Vec<TabNetwork>,
 }
 
 impl MapSnapshot {
+    /// The map's name, with this tab's when the map has more than one.
+    pub(crate) fn label(&self) -> String {
+        match self.tab_name() {
+            Some(tab) => format!("{} / {tab}", self.map.name),
+            None => self.map.name.clone(),
+        }
+    }
+
+    /// This tab's name, when the map has more than one.
+    pub(crate) fn tab_name(&self) -> Option<&str> {
+        (self.tabs.len() > 1)
+            .then(|| self.tabs.iter().find(|t| t.id == self.map.id))
+            .flatten()
+            .map(|t| t.name.as_str())
+    }
+
+    /// The first other tab in bar order that draws a solar system.
+    pub(crate) fn tab_drawing(&self, solar_system_id: i64) -> Option<i64> {
+        self.tabs.iter().map(|t| t.id).find(|id| {
+            self.elsewhere
+                .iter()
+                .any(|n| n.tab_id == *id && n.systems.contains(&solar_system_id))
+        })
+    }
+
     /// The placed system called `name`. The game writes names the way the SDE has them, but
     /// compare without case anyway.
     pub(crate) fn system_named(&self, name: &str) -> Option<&PlacedSystem> {
@@ -386,6 +435,11 @@ struct MapView {
     map: MapInfo,
     systems: Vec<serde_json::Value>,
     connections: Vec<Connection>,
+    // A server from before tabs sends neither.
+    #[serde(default)]
+    tabs: Vec<Tab>,
+    #[serde(default)]
+    elsewhere: Vec<TabNetwork>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -532,12 +586,47 @@ impl Client {
         }
         let signatures = self.get(&format!("/api/maps/{map_id}/signatures"))?;
         Ok(MapSnapshot {
-            map: view.map,
+            map: MapInfo {
+                id: map_id,
+                ..view.map
+            },
             systems,
             ghosts,
             connections: view.connections,
             signatures,
+            tabs: view.tabs,
+            elsewhere: view.elsewhere,
         })
+    }
+
+    /// The snapshot to work on, and the tab it is of. That is `tab`, unless `tab` is gone
+    /// (then the map itself, `root`), or `here` names a system `tab` does not draw and
+    /// another tab does: signatures and jumps belong on the tab the system is on.
+    pub(crate) fn follow(
+        &self,
+        root: i64,
+        tab: i64,
+        here: Option<&str>,
+    ) -> Result<(i64, MapSnapshot)> {
+        let snapshot = match self.snapshot(tab) {
+            Ok(snapshot) => snapshot,
+            Err(err) if tab == root => return Err(err),
+            Err(err) => {
+                return match self.snapshot(root) {
+                    Ok(map) if !map.tabs.iter().any(|t| t.id == tab) => Ok((root, map)),
+                    _ => Err(err),
+                };
+            }
+        };
+        let elsewhere = here
+            .filter(|here| snapshot.system_named(here).is_none() && !snapshot.elsewhere.is_empty())
+            // Not finding the system only means staying put.
+            .and_then(|here| self.find_system(here).ok().flatten())
+            .and_then(|hit| snapshot.tab_drawing(hit.id));
+        match elsewhere {
+            Some(other) => Ok((other, self.snapshot(other)?)),
+            None => Ok((tab, snapshot)),
+        }
     }
 
     /// Upsert a scan into a system's signatures. Never deletes: what the scan no longer sees

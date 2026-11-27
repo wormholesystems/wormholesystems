@@ -19,6 +19,8 @@ pub(crate) struct Config {
     pub server: String,
     pub token: String,
     pub map_id: Option<i64>,
+    /// The tab of that map being worked on; `None` for the map itself, its first tab.
+    pub tab_id: Option<i64>,
     /// Overrides the folder found on its own.
     pub chatlog_dir: Option<PathBuf>,
     pub copy_on_jump: bool,
@@ -104,10 +106,26 @@ pub(crate) struct Overlay {
     pub characters: Vec<String>,
 }
 
+/// An overlay setting its own quick settings change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OverlaySetting {
+    Opacity(u8),
+    TextSize(u8),
+    OnlyWhenFocused(bool),
+}
+
 /// Distance from the screen edges of an overlay in its corner.
 pub(crate) const OVERLAY_MARGIN: f32 = 24.0;
 
 impl Overlay {
+    pub(crate) fn set(&mut self, setting: OverlaySetting) {
+        match setting {
+            OverlaySetting::Opacity(percent) => self.opacity = percent,
+            OverlaySetting::TextSize(percent) => self.text_size = percent,
+            OverlaySetting::OnlyWhenFocused(on) => self.only_when_focused = on,
+        }
+    }
+
     /// Width and height in logical pixels.
     pub(crate) fn dimensions(&self) -> (f32, f32) {
         let (w, h) = self.size.dimensions();
@@ -189,6 +207,7 @@ impl Default for Config {
             server: DEFAULT_SERVER.into(),
             token: String::new(),
             map_id: None,
+            tab_id: None,
             chatlog_dir: None,
             copy_on_jump: true,
             hotkeys: Action::defaults(),

@@ -31,9 +31,17 @@ use crate::native;
 use crate::sigs::{self, Command, Sigs};
 use crate::snap;
 
-/// Smallest the panel can be resized to.
-const MIN_W: f32 = 260.0;
-const MIN_H: f32 = 140.0;
+/// Smallest the panel can be resized to at the normal text size: wide enough for the
+/// columns that always show, and tall enough for the header, the buttons and three
+/// signatures between them. All of that is sized in text, so with larger text the least it
+/// can be grows with it: see [`text_scale`].
+const MIN_W: f32 = 300.0;
+const MIN_H: f32 = 210.0;
+
+/// How much bigger than normal the overlay's text is.
+fn text_scale(settings: &Overlay) -> f32 {
+    crate::ui::scaled_font(settings.text_size) / crate::ui::BASE_FONT
+}
 /// Keep this much of it on the screen while dragging.
 const KEEP: f32 = 40.0;
 
@@ -102,7 +110,16 @@ impl OverlayView {
         }
         let (x, y) = settings.origin(screen);
         let (w, h) = settings.dimensions();
-        snap::Rect { x, y, w, h }
+        // Sized before the text was made bigger, it may be narrower than its columns now.
+        let scale = text_scale(settings);
+        let w = w.max(MIN_W * scale).min(screen.0);
+        let h = h.max(MIN_H * scale).min(screen.1);
+        snap::Rect {
+            x: x.min((screen.0 - w).max(0.0)),
+            y: y.min((screen.1 - h).max(0.0)),
+            w,
+            h,
+        }
     }
 
     fn start_drag(&mut self, mode: DragMode, mouse: Point<Pixels>, start: snap::Rect) {
@@ -116,7 +133,7 @@ impl OverlayView {
     }
 
     /// Follow the pointer, then snap to the screen edges.
-    fn update_drag(&mut self, mouse: Point<Pixels>, screen: (f32, f32)) {
+    fn update_drag(&mut self, mouse: Point<Pixels>, screen: (f32, f32), min: (f32, f32)) {
         let Some(drag) = &mut self.drag else { return };
         let dx = f32::from(mouse.x - drag.mouse_start.x);
         let dy = f32::from(mouse.y - drag.mouse_start.y);
@@ -133,8 +150,8 @@ impl OverlayView {
             ),
             DragMode::Resize => snap::snap_resize(
                 snap::Rect {
-                    w: (s.w + dx).clamp(MIN_W, (screen.0 - s.x).max(MIN_W)),
-                    h: (s.h + dy).clamp(MIN_H, (screen.1 - s.y).max(MIN_H)),
+                    w: (s.w + dx).clamp(min.0, (screen.0 - s.x).max(min.0)),
+                    h: (s.h + dy).clamp(min.1, (screen.1 - s.y).max(min.1)),
                     ..s
                 },
                 &[],
@@ -201,10 +218,7 @@ impl OverlayView {
         let input = self.drag.is_some()
             || native::cursor_position(window).is_some_and(|p| {
                 let sigs = self.sigs.read(cx);
-                let popup = sigs
-                    .picker
-                    .filter(|picker| picker.overlay)
-                    .and_then(|_| *sigs.popup.borrow());
+                let popup = sigs.overlay_popup();
                 let panel = if sigs.overlay_hidden {
                     None
                 } else {
@@ -273,6 +287,8 @@ impl OverlayView {
         theme: &Theme,
         cx: &mut Context<'_, Self>,
     ) -> Stateful<Div> {
+        // The columns are sized in text, so how many fit goes by the width in text sizes.
+        let scale = text_scale(&self.sigs.read(cx).overlay);
         let this = cx.entity().downgrade();
         let grab: sigs::Grab = Box::new(move |event, _, cx| {
             this.update(cx, |this, cx| {
@@ -294,6 +310,7 @@ impl OverlayView {
                 &self.sigs,
                 sigs::Place::Overlay,
                 Some(grab),
+                Some(r.w / scale),
                 cx,
             ))
             .child(
@@ -333,8 +350,15 @@ impl Render for OverlayView {
         };
 
         if self.surface == Surface::Panel {
+            let width = settings.dimensions().0 / text_scale(&settings);
             return chrome(div().size_full())
-                .child(sigs::panel(&self.sigs, sigs::Place::Overlay, cx))
+                .child(sigs::panel_with(
+                    &self.sigs,
+                    sigs::Place::Overlay,
+                    None,
+                    Some(width),
+                    cx,
+                ))
                 .into_any_element();
         }
 
@@ -353,15 +377,12 @@ impl Render for OverlayView {
         }
         let screen = (f32::from(viewport.width), f32::from(viewport.height));
         let r = self.rect(&settings, screen);
+        let scale = text_scale(&settings);
+        let min = (MIN_W * scale, MIN_H * scale);
 
         let panel = self.floating(chrome(div()), r, &theme, cx);
 
-        let popup = {
-            let sigs = self.sigs.read(cx);
-            sigs.picker
-                .filter(|p| p.overlay)
-                .and_then(|_| *sigs.popup.borrow())
-        };
+        let popup = self.sigs.read(cx).overlay_popup();
         self.update_input_region(popup, window);
         #[cfg(not(target_os = "linux"))]
         self.sync_native_input(window, cx);
@@ -377,7 +398,7 @@ impl Render for OverlayView {
             .relative()
             .when(self.drag.is_some(), |d| {
                 d.on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
-                    this.update_drag(event.position, screen);
+                    this.update_drag(event.position, screen, min);
                     cx.notify();
                 }))
                 .on_mouse_up(

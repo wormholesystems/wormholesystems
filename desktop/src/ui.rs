@@ -9,9 +9,9 @@ use std::time::Duration;
 use gpui_kit::component::Theme;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    Animation, AnimationExt, AnyElement, Div, ElementId, Image, InteractiveElement, IntoElement,
-    ParentElement, Rems, SharedString, Stateful, StatefulInteractiveElement, Styled, div,
-    ease_out_quint, img, linear_color_stop, linear_gradient, px, rems, svg,
+    Animation, AnimationExt, AnyElement, Div, ElementId, Hsla, Image, InteractiveElement,
+    IntoElement, ParentElement, Rems, SharedString, Stateful, StatefulInteractiveElement, Styled,
+    div, ease_out_quint, img, linear_color_stop, linear_gradient, px, rems, svg,
 };
 
 use crate::theme::{self, HEADING};
@@ -29,6 +29,17 @@ pub(crate) fn scaled_font(percent: u8) -> f32 {
 pub(crate) fn rpx(value: f32) -> Rems {
     rems(value / BASE_FONT)
 }
+
+/// The text size choices, in percent.
+pub(crate) const TEXT_SIZES: &[(u8, &str)] = &[
+    (90, "Small"),
+    (100, "Normal"),
+    (115, "Large"),
+    (130, "Larger"),
+];
+
+/// The overlay's background opacity choices, in percent.
+pub(crate) const OPACITIES: &[(u8, &str)] = &[(60, "60%"), (75, "75%"), (85, "85%"), (100, "100%")];
 
 /// What a button is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,7 +217,7 @@ pub(crate) enum Mood {
     Problem,
 }
 
-/// A short line about what just happened, shown in a header for a few seconds.
+/// A short line about what just happened, shown under the signatures for a few seconds.
 #[derive(Debug, Clone)]
 pub(crate) struct Notice {
     pub mood: Mood,
@@ -229,13 +240,19 @@ impl Notice {
 
 pub(crate) const FADE: Duration = Duration::from_millis(260);
 
-/// The notice: an icon and the line, sliding in from above and fading out when it leaves.
-pub(crate) fn notice(notice: &Notice, theme: &Theme) -> AnyElement {
-    let (icon, color) = match notice.mood {
+/// The icon and color a notice of that mood is shown with.
+pub(crate) fn mood_look(mood: Mood, theme: &Theme) -> (&'static str, Hsla) {
+    match mood {
         Mood::Done => ("icons/circle-check.svg", theme::added()),
         Mood::Info => ("icons/info.svg", theme.primary),
         Mood::Problem => ("icons/circle-alert.svg", theme.danger),
-    };
+    }
+}
+
+/// The notice as a chip: an icon and the line, sliding in from above and fading out when it
+/// leaves.
+pub(crate) fn notice(notice: &Notice, theme: &Theme) -> AnyElement {
+    let (icon, color) = mood_look(notice.mood, theme);
     let chip = div()
         .flex()
         .items_center()

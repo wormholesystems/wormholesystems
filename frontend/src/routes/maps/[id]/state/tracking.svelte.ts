@@ -70,6 +70,8 @@ function statusFromSignature(signature: Signature | null) {
  */
 export interface TrackerHost {
 	mapId(): number;
+	/** The map this is a tab of, which is what a desktop app says it maps onto. */
+	rootId(): number;
 	myCharacters(): CharacterRef[];
 	systems(): MapSystemView[];
 	connections(): MapConnection[];
@@ -130,8 +132,9 @@ export class JumpTracker {
 			seen.set(characterId, next.systemId);
 			const jump = detectJump(prev, next);
 			// A desktop app watching this pilot maps their jumps the moment they happen;
-			// mapping them here too only races it.
-			if (pilot.desktop_map_id === this.map.mapId()) continue;
+			// mapping them here too only races it. It works on whichever tab draws the
+			// system the pilot is in, so that holds on every tab of the map.
+			if (pilot.desktop_map_id === this.map.rootId()) continue;
 			if (jump) jumps.push({ ...jump, pilot: pilot.name });
 		}
 		// A pilot dropped from the set starts over when brought back, rather than arriving

@@ -424,12 +424,15 @@ mod tests {
     fn snapshot() -> MapSnapshot {
         MapSnapshot {
             map: MapInfo {
+                id: MAP,
                 name: "Chain".into(),
             },
             systems: vec![system(10, AMARR, "Amarr", 7, "Domain")],
             ghosts: Vec::new(),
             connections: Vec::new(),
             signatures: Vec::new(),
+            tabs: Vec::new(),
+            elsewhere: Vec::new(),
         }
     }
 
