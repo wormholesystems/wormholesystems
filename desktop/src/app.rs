@@ -31,6 +31,7 @@ use crate::overlay;
 use crate::plan::{
     JumpContext, LastJump, LoneGhost, Plan, bookmark_for, landed_on, plan_jump, submit,
 };
+#[cfg(target_os = "linux")]
 use crate::popover;
 use crate::scan;
 use crate::sigs::{Ask, Command, Here, PickerKind, Popup, Popups, Quick, Review, Sigs, Tone};
@@ -1715,7 +1716,15 @@ impl DesktopApp {
         display: Option<DisplayId>,
         cx: &mut Context<'_, Self>,
     ) {
-        if popover::open(self.sigs.clone(), popup, at, display, cx).is_err() {
+        // Only Linux has a layer shell to open one on, and only there is one asked for.
+        #[cfg(target_os = "linux")]
+        let opened = popover::open(self.sigs.clone(), popup, at, display, cx).is_ok();
+        #[cfg(not(target_os = "linux"))]
+        let opened = {
+            let _ = (popup, at, display);
+            false
+        };
+        if !opened {
             self.sigs.update(cx, |sigs, cx| {
                 sigs.popups = Popups::Inline;
                 cx.notify();

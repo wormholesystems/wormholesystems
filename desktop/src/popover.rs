@@ -8,6 +8,9 @@
 //! What is open stays in [`Sigs`], as it does for the popups drawn in place: the window
 //! shows the same choices, their clicks emit the same commands, and it goes when its popup
 //! is no longer the one open.
+//!
+//! Linux only: nowhere else is there a layer shell, and the overlay draws its popups in
+//! place.
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -175,46 +178,38 @@ pub(crate) fn open(
     display: Option<DisplayId>,
     cx: &mut App,
 ) -> anyhow::Result<AnyWindowHandle> {
-    #[cfg(target_os = "linux")]
-    {
-        use gpui_kit::layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions};
-        let typed = subject(popup).is_some_and(|(_, types)| types);
-        let options = WindowOptions {
-            titlebar: None,
-            // Anchored to every edge, like the overlay: the compositor makes it the size of
-            // the screen, so the overlay's coordinates are this one's.
-            window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-                point(px(0.0), px(0.0)),
-                size(px(0.0), px(0.0)),
-            ))),
-            display_id: display,
-            app_id: Some("wormholesystems-popover".into()),
-            window_background: WindowBackgroundAppearance::Transparent,
-            kind: WindowKind::LayerShell(LayerShellOptions {
-                namespace: "wormholesystems-popover".into(),
-                layer: Layer::Overlay,
-                anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
-                // Only a search is typed into; the rest leave the keys to the game.
-                keyboard_interactivity: if typed {
-                    KeyboardInteractivity::Exclusive
-                } else {
-                    KeyboardInteractivity::None
-                },
-                ..Default::default()
-            }),
-            focus: typed,
+    use gpui_kit::layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions};
+    let typed = subject(popup).is_some_and(|(_, types)| types);
+    let options = WindowOptions {
+        titlebar: None,
+        // Anchored to every edge, like the overlay: the compositor makes it the size of
+        // the screen, so the overlay's coordinates are this one's.
+        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+            point(px(0.0), px(0.0)),
+            size(px(0.0), px(0.0)),
+        ))),
+        display_id: display,
+        app_id: Some("wormholesystems-popover".into()),
+        window_background: WindowBackgroundAppearance::Transparent,
+        kind: WindowKind::LayerShell(LayerShellOptions {
+            namespace: "wormholesystems-popover".into(),
+            layer: Layer::Overlay,
+            anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+            // Only a search is typed into; the rest leave the keys to the game.
+            keyboard_interactivity: if typed {
+                KeyboardInteractivity::Exclusive
+            } else {
+                KeyboardInteractivity::None
+            },
             ..Default::default()
-        };
-        // Opened with GPUI's own `open_window`, as the overlay is: the kit's root would
-        // make the surface bigger than the screen.
-        let handle = cx.open_window(options, move |window, cx| {
-            cx.new(|cx| Popover::new(sigs, popup, at, window, cx))
-        })?;
-        Ok(handle.into())
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (sigs, popup, at, display, cx);
-        anyhow::bail!("no layer shell on this system")
-    }
+        }),
+        focus: typed,
+        ..Default::default()
+    };
+    // Opened with GPUI's own `open_window`, as the overlay is: the kit's root would
+    // make the surface bigger than the screen.
+    let handle = cx.open_window(options, move |window, cx| {
+        cx.new(|cx| Popover::new(sigs, popup, at, window, cx))
+    })?;
+    Ok(handle.into())
 }
