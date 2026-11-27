@@ -53,15 +53,15 @@ signatures, the watchlist, and so on) also take a `share` query parameter and sa
 
 Every error is `{ "error": "..." }` with the matching status:
 
-| Status | Meaning |
-|--------|---------|
+| Status | Meaning                                                                                                                |
+| ------ | ---------------------------------------------------------------------------------------------------------------------- |
 | `400`  | The request does not make sense: a missing field, a value out of range, or a body naming a different map than the URL. |
-| `401`  | Nobody is signed in, or the token is unknown, revoked or expired. |
-| `403`  | Signed in, but the role on this map does not allow it. |
-| `404`  | No such thing, or not one the caller may know about. |
-| `409`  | The change contradicts the map's current state. |
-| `502`  | EVE's API refused or failed (waypoints). |
-| `500`  | Something failed on our side. The body says only that; the detail goes to the server log. |
+| `401`  | Nobody is signed in, or the token is unknown, revoked or expired.                                                      |
+| `403`  | Signed in, but the role on this map does not allow it.                                                                 |
+| `404`  | No such thing, or not one the caller may know about.                                                                   |
+| `409`  | The change contradicts the map's current state.                                                                        |
+| `502`  | EVE's API refused or failed (waypoints).                                                                               |
+| `500`  | Something failed on our side. The body says only that; the detail goes to the server log.                              |
 
 ## Conventions
 
@@ -78,8 +78,6 @@ Live updates go over WebSockets, which OpenAPI cannot describe. They are in
 
 ## Stability
 
-The API is the frontend's, and it changes with the frontend. This is beta software:
-endpoints are renamed and bodies gain and lose fields between updates. The `version` in
-the document's `info` is the server's crate version. Pin what you tested against and
-expect to revisit when it moves. When the beta label comes down, the stability promise
-will be made here, and the document's version is where it will be kept.
+The API is the frontend's, and it changes with the frontend: endpoints are renamed and
+bodies gain and lose fields between updates. The `version` in the document's `info` is the
+server's crate version. Pin what you tested against and expect to revisit when it moves.

@@ -20,7 +20,7 @@ Start with the repo's README, then:
   a change is right before anyone builds it.
 - **Want to fix or build something?** Fork it, make the change, open a pull request.
 
-Because this is still beta, expect the ground to move under a branch that sits open for
+The project moves quickly, so expect the ground to move under a branch that sits open for
 long. Small changes land more easily than large ones.
 
 ## Improving these docs

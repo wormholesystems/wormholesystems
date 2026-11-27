@@ -27,6 +27,6 @@ where the answer is.
 
 ## A word on the state of it
 
-This is beta. Some things are missing, some are half-built, and now and then something
-that worked last week does not today. If something looks broken it might genuinely be broken, and saying so is
+It is in daily use, but some things are still missing, and now and then something that
+worked last week does not today. If something looks broken it might genuinely be broken, and saying so is
 useful.

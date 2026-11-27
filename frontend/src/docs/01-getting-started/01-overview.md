@@ -4,11 +4,6 @@ title: Overview
 
 # Overview
 
-> ## Beta
->
-> It is in daily use and updates keep your maps, but things still change. Expect the odd
-> rough edge, and tell us when something breaks.
-
 A **map** is a shared, real-time picture of a wormhole chain. Systems appear as nodes, and the wormholes between them appear as connections. Everyone with access to the map sees the same picture, updating live as the chain is scanned.
 
 Maps are collaborative. When a corpmate scans a new signature, resolves a wormhole, or marks a connection as end-of-life, the change appears on your screen immediately — no refresh needed.
