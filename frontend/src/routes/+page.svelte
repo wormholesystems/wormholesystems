@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
+	import DownloadIcon from '@lucide/svelte/icons/download';
 	import FlagIcon from '@lucide/svelte/icons/flag';
 	import GitForkIcon from '@lucide/svelte/icons/git-fork';
 	import LayoutGridIcon from '@lucide/svelte/icons/layout-grid';
@@ -14,6 +15,7 @@
 	import Band from './_landing/Band.svelte';
 	import Feature from './_landing/Feature.svelte';
 	import Frame from './_landing/Frame.svelte';
+	import OverlayDemo from './_landing/OverlayDemo.svelte';
 	import Reveal from './_landing/Reveal.svelte';
 	import RunningIt from './_landing/RunningIt.svelte';
 	import SectionLabel from './_landing/SectionLabel.svelte';
@@ -222,11 +224,43 @@
 		</Frame>
 	</Feature>
 
+	<Feature
+		id="desktop"
+		index="06"
+		label="Desktop app"
+		title="Map without leaving the game"
+		body="A companion app for Windows, Linux and macOS. It reads where you are from the game's chat logs and keeps the system's signatures in an overlay above the client, so a scan is a copy and a key press, and a jump maps itself."
+		points={[
+			'Paste the scanner with a key; what the scan no longer sees is one more key from gone',
+			'Jump out of the chain and pick the hole by number: the system is placed, connected and linked',
+			'The bookmark for the way back is on your clipboard when you land',
+			'Follows the tab that draws the system you are in',
+		]}
+		reverse
+	>
+		<OverlayDemo />
+		<div class="mt-8 flex flex-wrap items-center gap-3">
+			<Button
+				href="https://github.com/wormholesystems/wormholesystems/releases?q=Desktop"
+				variant="outline"
+			>
+				<DownloadIcon data-icon="inline-start" />
+				Download
+			</Button>
+			<a
+				href="https://github.com/wormholesystems/wormholesystems/tree/main/desktop#readme"
+				class="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+			>
+				How it works
+			</a>
+		</div>
+	</Feature>
+
 	<!-- The rest, shorter. -->
 	<Band tone="tint" labelledby="more-heading">
 		<Reveal>
 			<div class="max-w-2xl">
-				<SectionLabel index="06" label="And the rest" />
+				<SectionLabel index="07" label="And the rest" />
 				<h2
 					id="more-heading"
 					class="mt-6 font-heading text-3xl font-semibold tracking-tight sm:text-4xl"
@@ -295,7 +329,7 @@
 		</Reveal>
 	</Band>
 
-	<RunningIt index="07" />
+	<RunningIt index="08" />
 
 	<section class="relative isolate border-t border-border bg-muted/40 dark:bg-card/40">
 		<div class="hero-grid cta pointer-events-none absolute inset-0 -z-10" aria-hidden="true"></div>

@@ -51,6 +51,26 @@ end-of-life, it is on your screen before they have finished typing.
 - **Script it**: everything the map screen does is in the [API](./docs/api.md), with
   personal access tokens.
 
+## Desktop app
+
+A companion app for Windows, Linux and macOS keeps mapping out of the browser. It reads
+where you are from the game's chat logs and shows that system's signatures in an overlay
+above the client.
+
+<img src=".github/assets/desktop-overlay.webp" alt="The overlay over the game: a system's signatures after a paste, two new and one gone, and a note that the jump was mapped and its bookmark copied" width="100%">
+
+- Copy the probe scanner and press a key: the scan is on the map, and what it no longer
+  sees is one more key from deleted.
+- Jump out of the chain and pick the hole by number: the system is placed, connected and
+  linked to its signature, and the bookmark for the way back is on your clipboard.
+- Keys mark the hole you just flew as reduced, critical or end of life, and name the
+  system you are in.
+
+Download it from the [releases](https://github.com/wormholesystems/wormholesystems/releases?q=Desktop)
+(a setup exe or portable zip for Windows, a DMG for macOS, an AppImage for Linux). It
+updates itself from there. How it works and how to build it is in
+[`desktop/README.md`](./desktop/README.md).
+
 ## Run your own
 
 You need Docker, a domain pointed at the machine, and an EVE application from the
