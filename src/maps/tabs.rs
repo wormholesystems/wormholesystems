@@ -25,52 +25,6 @@ use crate::realtime::MapEvent;
 pub const MAX_TABS: i64 = 12;
 const MAX_NAME_CHARS: usize = 24;
 
-/// Which maps may be split into tabs: the operator's switch (`TABS_MAP_IDS`) for trying
-/// tabs on a few maps while every other map stays exactly as it was.
-///
-/// It only decides whether a tab can be added. A map that already has tabs keeps them
-/// when it is taken off the list.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum TabsFor {
-    /// The default: nobody is offered tabs.
-    #[default]
-    NoMap,
-    AllMaps,
-    Maps(std::collections::BTreeSet<i64>),
-}
-
-impl TabsFor {
-    /// Read the setting: empty for no map, `all` for every map, or map ids separated by
-    /// commas.
-    pub fn parse(raw: &str) -> std::result::Result<Self, String> {
-        let raw = raw.trim();
-        if raw.is_empty() {
-            return Ok(Self::NoMap);
-        }
-        if raw.eq_ignore_ascii_case("all") {
-            return Ok(Self::AllMaps);
-        }
-        raw.split(',')
-            .map(str::trim)
-            .filter(|id| !id.is_empty())
-            .map(|id| {
-                id.parse::<i64>()
-                    .map_err(|_| format!("`{id}` is not a map id (expected `all` or ids)"))
-            })
-            .collect::<std::result::Result<_, _>>()
-            .map(Self::Maps)
-    }
-
-    /// Whether this map may be given tabs. Asked of the map itself, not of one of its tabs.
-    pub fn allows(&self, root_id: i64) -> bool {
-        match self {
-            Self::NoMap => false,
-            Self::AllMaps => true,
-            Self::Maps(ids) => ids.contains(&root_id),
-        }
-    }
-}
-
 /// One tab of a map. `id` is a map id like any other: it is what the tab's systems and
 /// connections are read and written under.
 #[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS, utoipa::ToSchema)]
@@ -435,19 +389,4 @@ pub async fn delete_tab(pool: &PgPool, actor: Actor, cmd: DeleteTab) -> Result<(
     .await?;
     announce(root);
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::TabsFor;
-
-    #[test]
-    fn the_switch_reads_nothing_all_or_a_list_of_maps() {
-        assert_eq!(TabsFor::parse("  "), Ok(TabsFor::NoMap));
-        assert_eq!(TabsFor::parse("All"), Ok(TabsFor::AllMaps));
-        let some = TabsFor::parse("12, 40,").unwrap();
-        assert!(some.allows(12) && some.allows(40) && !some.allows(13));
-        assert!(TabsFor::AllMaps.allows(1) && !TabsFor::NoMap.allows(1));
-        assert!(TabsFor::parse("12,home").is_err());
-    }
 }

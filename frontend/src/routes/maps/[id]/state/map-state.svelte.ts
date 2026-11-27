@@ -171,8 +171,6 @@ export class MapState {
 	private get elsewhere() {
 		return this.data?.elsewhere ?? [];
 	}
-	/** Whether the operator lets this map be split into tabs. */
-	tabsEnabled = $derived(this.data?.tabs_enabled ?? false);
 	/** The other tabs each solar system is drawn on. Empty on a map with one tab. */
 	tabsBySystem = $derived(tabsBySystem(this.data?.elsewhere ?? [], this.data?.tabs ?? []));
 

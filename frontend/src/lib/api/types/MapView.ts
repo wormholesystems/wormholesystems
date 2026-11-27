@@ -31,11 +31,6 @@ root_id: number,
  */
 tabs: Array<MapTab>, 
 /**
- * Whether the operator lets this map be split into tabs. Off, the client offers no
- * way to add one, and a map nobody has split looks as it always did.
- */
-tabs_enabled: boolean, 
-/**
  * What the other tabs draw, for the routes that run across them and for marking the
  * systems this tab shares with another.
  */

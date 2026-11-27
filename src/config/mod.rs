@@ -40,8 +40,6 @@ pub struct Config {
     pub allowed_logins: AffiliationAllowlist,
     /// Who may create maps. Empty, the default, lets everyone who can log in create one.
     pub map_creators: AffiliationAllowlist,
-    /// Which maps may be split into tabs. Empty, the default, offers tabs on none.
-    pub tabs: crate::maps::tabs::TabsFor,
     /// The banner above every page, when the operator set one.
     pub announcement: Option<Announcement>,
     pub polling: PollingConfig,
@@ -140,10 +138,6 @@ impl Config {
                 .map_or_else(|| std::path::PathBuf::from("data/uploads"), Into::into),
             allowed_logins: allowlist("ALLOWED_AFFILIATION_IDS")?,
             map_creators: allowlist("MAP_CREATOR_AFFILIATION_IDS")?,
-            tabs: crate::maps::tabs::TabsFor::parse(
-                &std::env::var("TABS_MAP_IDS").unwrap_or_default(),
-            )
-            .map_err(|err| ConfigError::Invalid("TABS_MAP_IDS", err))?,
             announcement: announcement_from_env(),
             polling: PollingConfig {
                 server_status: seconds("SERVER_STATUS_POLL_SECS", 60),

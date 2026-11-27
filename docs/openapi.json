@@ -4551,7 +4551,7 @@
         "tags": [
           "tabs"
         ],
-        "summary": "`POST /api/maps/{id}/tabs/create`, add an empty tab at the end of the bar. `{id}` is\nthe map or any of its tabs. The new tab's `id` is a map id: read it with\n`GET /api/maps/{id}` and edit it through the same routes as any map. `Conflict` unless\nthe operator switched tabs on for the map (`TABS_MAP_IDS`).",
+        "summary": "`POST /api/maps/{id}/tabs/create`, add an empty tab at the end of the bar. `{id}` is\nthe map or any of its tabs. The new tab's `id` is a map id: read it with\n`GET /api/maps/{id}` and edit it through the same routes as any map.",
         "operationId": "create_tab",
         "parameters": [
           {
@@ -10001,7 +10001,6 @@
           "connections",
           "root_id",
           "tabs",
-          "tabs_enabled",
           "elsewhere"
         ],
         "properties": {
@@ -10046,10 +10045,6 @@
               "$ref": "#/components/schemas/MapTab"
             },
             "description": "The map's tabs in bar order, this one among them. Never empty."
-          },
-          "tabs_enabled": {
-            "type": "boolean",
-            "description": "Whether the operator lets this map be split into tabs. Off, the client offers no\nway to add one, and a map nobody has split looks as it always did."
           }
         }
       },

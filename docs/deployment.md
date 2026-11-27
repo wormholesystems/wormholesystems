@@ -511,18 +511,6 @@ no create or import buttons, and the API answers 403. Maps that already exist ar
 affected, and anyone given a role on one works on it as before. Empty, the default, lets
 everyone who can log in create maps.
 
-### Tabs
-
-Splitting a map into tabs is off unless you name the map:
-
-```sh
-TABS_MAP_IDS=12,40   # or `all`
-```
-
-The id is the number at the end of the map's address. A map that is not listed has no
-tab bar and behaves exactly as it did before tabs existed. Taking a map off the list only
-stops new tabs: the ones it has stay, and can still be renamed, reordered and deleted.
-
 ## Announcements
 
 A banner above every page, the landing page included, for planned downtime, a move to a new

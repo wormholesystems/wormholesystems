@@ -420,16 +420,11 @@ What the tabs of one map share:
 Nothing else crosses: signatures, the ghosts they raise and aliases are each tab's own,
 even for a system two tabs both draw.
 
-`get_map` also returns `root_id`, `tabs` (`id`, `name`, `is_root`, in bar order) and
-`tabs_enabled`.
+`get_map` also returns `root_id` and `tabs` (`id`, `name`, `is_root`, in bar order).
 
 ### `create_tab` / `rename_tab` / `reorder_tabs` / `delete_tab`
 
 - **Auth:** `Manager` on the map.
-- **Switch:** tabs are off unless the operator names the map in `TABS_MAP_IDS` (map ids,
-  comma separated, or `all`). Off, `create_tab` answers `Conflict` and `get_map` returns
-  `tabs_enabled: false`, on which the client shows no way to add a tab. The switch only
-  gates adding: a map that already has tabs keeps and manages them.
 - **Validation:** a name of 1 to 24 characters; at most 12 tabs; `reorder_tabs` names
   each tab exactly once.
 - **Effect:** `create_tab` adds an empty tab with the map's settings. `delete_tab`

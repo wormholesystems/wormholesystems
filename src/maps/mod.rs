@@ -313,9 +313,6 @@ pub struct MapView {
     pub root_id: i64,
     /// The map's tabs in bar order, this one among them. Never empty.
     pub tabs: Vec<tabs::MapTab>,
-    /// Whether the operator lets this map be split into tabs. Off, the client offers no
-    /// way to add one, and a map nobody has split looks as it always did.
-    pub tabs_enabled: bool,
     /// What the other tabs draw, for the routes that run across them and for marking the
     /// systems this tab shares with another.
     pub elsewhere: Vec<tabs::TabNetwork>,

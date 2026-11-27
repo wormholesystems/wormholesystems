@@ -24,10 +24,8 @@
 
 	const tabs = $derived(map.tabs.all);
 	const canManage = $derived(map.canManage);
-	// The operator's switch: off, no tab can be added, and a map nobody has split shows
-	// no bar at all.
-	const canAdd = $derived(canManage && map.tabsEnabled);
-	const visible = $derived(tabs.length > 1 || canAdd);
+	// A map nobody has split shows no bar to those who could not split it.
+	const visible = $derived(tabs.length > 1 || canManage);
 
 	// The name being typed: for a new tab, or for the one being renamed.
 	let naming = $state<{ tabId: number | null; value: string } | null>(null);
@@ -164,9 +162,9 @@
 			</div>
 		{/each}
 
-		{#if canAdd && naming?.tabId === null}
+		{#if canManage && naming?.tabId === null}
 			{@render nameInput()}
-		{:else if canAdd && tabs.length < MAX_TABS}
+		{:else if canManage && tabs.length < MAX_TABS}
 			<Hint text="Add a tab" label>
 				{#snippet child({ props })}
 					<button
